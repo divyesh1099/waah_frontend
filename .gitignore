@@ -1,0 +1,8 @@
+﻿# Flutter/Dart
+.dart_tool/
+build/
+.packages
+.pub-cache/
+ios/Pods/
+android/.gradle/
+windows/flutter/ephemeral/
