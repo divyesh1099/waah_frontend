@@ -1,6 +1,7 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'nav_items.dart';
+import 'package:waah_frontend/features/sync/sync_action.dart';
 
 class AppShell extends StatelessWidget {
   final Widget child;
@@ -9,7 +10,12 @@ class AppShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('WAAH POS')),
+      appBar: AppBar(
+          title: const Text('Waah'),
+          actions: const [
+            SyncOnlineAction(), // <-- adds the Sync button everywhere inside Shell
+          ],
+      ),
       drawer: const _AppDrawer(), // no selection highlight yet (version-safe)
       body: child,
     );

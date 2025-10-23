@@ -1,63 +1,108 @@
-﻿import 'dart:async';
-import 'package:sqflite/sqflite.dart';
+﻿// lib/data/repo/catalog_repo.dart
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../app/providers.dart';
-import '../local/collections.dart';
+import 'package:waah_frontend/app/providers.dart'; // apiClientProvider
+import 'package:waah_frontend/data/api_client.dart';
+import 'package:waah_frontend/data/models.dart';
 
 class CatalogRepo {
-  final Database db;
-  CatalogRepo(this.db);
+  CatalogRepo(this._client);
+  final ApiClient _client;
 
-  Future<List<MenuCategoryCol>> getCategories() async {
-    final rows = await db.query(
-      'menu_category',
-      orderBy: 'position ASC, name ASC',
+  // ------------------ Categories ------------------
+  Future<List<MenuCategory>> loadCategories({String? tenantId, String? branchId}) =>
+      _client.fetchCategories(tenantId: tenantId ?? '', branchId: branchId ?? '');
+
+  Future<MenuCategory> createCategory(MenuCategory data) {
+    return _client.createCategory(data);
+  }
+
+  Future<MenuCategory> updateCategory(String id, MenuCategory data) {
+    return _client.updateCategory(id, data);
+  }
+
+  Future<void> deleteCategory(String id) {
+    return _client.deleteCategory(id);
+  }
+
+  /// Legacy shim kept for UI compatibility. Returns the same as `loadCategories`.
+  Future<List<MenuCategory>> watchCategories({String? tenantId, String? branchId}) =>
+      loadCategories(tenantId: tenantId, branchId: branchId);
+
+  /// Convenience helper used by UI: builds and creates a category from just a name.
+  Future<MenuCategory> addCategory(
+      String name, {
+        String? tenantId,
+        String? branchId,
+        int position = 0,
+      }) {
+    final c = MenuCategory(
+      id: null, // backend assigns
+      tenantId: tenantId ?? '',
+      branchId: branchId ?? '',
+      name: name,
+      position: position,
+      createdAt: null,
+      updatedAt: null,
     );
-    return rows.map((r) => MenuCategoryCol(
-      id: r['id'] as int?,
-      name: r['name'] as String,
-      rid: r['rid'] as String?,
-      position: (r['position'] as int?) ?? 0,
-    )).toList();
+    return createCategory(c);
   }
 
-  // ✅ Replaces the old Isar watch stream (uses polling)
-  Stream<List<MenuCategoryCol>> watchCategories({Duration interval = const Duration(seconds: 1)}) async* {
-    while (true) {
-      yield await getCategories();
-      await Future.delayed(interval);
-    }
+  // ------------------ Items ------------------
+  Future<List<MenuItem>> loadItems({
+    String? categoryId,
+    String? tenantId,
+  }) {
+    return _client.fetchItems(categoryId: categoryId, tenantId: tenantId);
   }
 
-  // ✅ Simple insert; also assigns next position
-  Future<int> addCategory(String name, {String? rid}) async {
-    final maxPosRow = await db.rawQuery('SELECT COALESCE(MAX(position),0) AS maxp FROM menu_category');
-    final nextPos = (maxPosRow.first['maxp'] as int) + 1;
-    return await db.insert('menu_category', {
-      'name': name,
-      'rid': rid,
-      'position': nextPos,
-    });
+  Future<MenuItem> createItem(MenuItem data) {
+    return _client.createItem(data);
   }
 
-  Future<List<MenuItemCol>> getItemsByCategory(int categoryId) async {
-    final rows = await db.query(
-      'menu_item',
-      where: 'category_id=?',
-      whereArgs: [categoryId],
-      orderBy: 'name ASC',
+  Future<MenuItem> updateItem(String id, MenuItem data) {
+    return _client.updateItem(id, data);
+  }
+
+  Future<void> deleteItem(String id) {
+    return _client.deleteItem(id);
+  }
+
+  Future<void> updateItemTax(
+      String itemId, {
+        required double gstRate,
+        required bool taxInclusive,
+      }) {
+    return _client.updateItemTax(
+      itemId,
+      gstRate: gstRate,
+      taxInclusive: taxInclusive,
     );
-    return rows.map((r) => MenuItemCol(
-      id: r['id'] as int?,
-      categoryId: r['category_id'] as int,
-      name: r['name'] as String,
-      price: (r['price'] as num).toDouble(),
-      rid: r['rid'] as String?,
-    )).toList();
+  }
+
+  // ------------------ Variants ------------------
+  Future<List<ItemVariant>> loadVariants(String itemId) {
+    return _client.fetchVariants(itemId);
+  }
+
+  Future<ItemVariant> createVariant(String itemId, ItemVariant data) {
+    return _client.createVariant(itemId, data);
+  }
+
+  // ------------------ Modifiers ------------------
+  Future<ModifierGroup> createModifierGroup(ModifierGroup g) {
+    return _client.createModifierGroup(g);
+  }
+
+  Future<Modifier> createModifier(Modifier m) {
+    return _client.createModifier(m);
+  }
+
+  Future<void> linkItemModifierGroup(String itemId, String groupId) {
+    return _client.linkItemModifierGroup(itemId, groupId);
   }
 }
 
 final catalogRepoProvider = Provider<CatalogRepo>((ref) {
-  final db = ref.watch(databaseProvider);
-  return CatalogRepo(db);
+  final client = ref.watch(apiClientProvider);
+  return CatalogRepo(client);
 });
