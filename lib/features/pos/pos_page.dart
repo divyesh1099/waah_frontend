@@ -14,11 +14,13 @@ final selectedCategoryIdProvider = StateProvider<String?>((ref) => null);
 final posCategoriesProvider =
 FutureProvider.autoDispose<List<MenuCategory>>((ref) async {
   final client = ref.watch(apiClientProvider);
+
   // backend wants tenant_id & branch_id, but we've been passing "" for now
   final cats = await client.fetchCategories(
     tenantId: "",
     branchId: "",
   );
+
   // sort nicely by position
   cats.sort((a, b) => a.position.compareTo(b.position));
   return cats;
@@ -36,8 +38,7 @@ FutureProvider.autoDispose<List<MenuItem>>((ref) async {
   );
 
   // Only active / not stock_out, just to keep POS clean.
-  final filtered =
-  items.where((i) => i.isActive && !i.stockOut).toList();
+  final filtered = items.where((i) => i.isActive && !i.stockOut).toList();
 
   // sort by name for predictable grid
   filtered.sort(
@@ -194,8 +195,7 @@ class PosCartNotifier extends Notifier<PosCartState> {
 }
 
 final posCartProvider =
-NotifierProvider<PosCartNotifier, PosCartState>(
-    PosCartNotifier.new);
+NotifierProvider<PosCartNotifier, PosCartState>(PosCartNotifier.new);
 
 /// ------------------------------------------------------------
 /// POS PAGE
@@ -231,20 +231,16 @@ class PosPage extends ConsumerWidget {
                     }
                   ],
                 );
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content: Text('Sync pushed ✅')),
-                  );
-                }
+
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Sync pushed ✅')),
+                );
               } catch (e) {
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                        content: Text(
-                            'Sync failed: $e')),
-                  );
-                }
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Sync failed: $e')),
+                );
               }
             },
           ),
@@ -265,17 +261,14 @@ class PosPage extends ConsumerWidget {
             data: (cats) => _CategoryBar(categories: cats),
             loading: () => const SizedBox(
               height: 56,
-              child: Center(
-                child: CircularProgressIndicator(),
-              ),
+              child: Center(child: CircularProgressIndicator()),
             ),
             error: (e, st) => SizedBox(
               height: 56,
               child: Center(
                 child: Text(
                   'Categories error: $e',
-                  style:
-                  const TextStyle(color: Colors.red),
+                  style: const TextStyle(color: Colors.red),
                 ),
               ),
             ),
@@ -289,8 +282,7 @@ class PosPage extends ConsumerWidget {
               data: (items) {
                 if (items.isEmpty) {
                   return const Center(
-                    child:
-                    Text('No items in this category'),
+                    child: Text('No items in this category'),
                   );
                 }
                 // Grid of tappable menu items
@@ -310,50 +302,36 @@ class PosPage extends ConsumerWidget {
                       item: it,
                       onTap: () async {
                         // Add to cart (async will also fetch variants/price)
-                        await ref
-                            .read(posCartProvider.notifier)
-                            .addItem(it);
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context)
-                              .showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                  '${it.name} added to cart'),
-                              duration: const Duration(
-                                milliseconds: 800,
-                              ),
-                            ),
-                          );
-                        }
+                        await ref.read(posCartProvider.notifier).addItem(it);
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('${it.name} added to cart'),
+                            duration: const Duration(milliseconds: 800),
+                          ),
+                        );
                       },
                     );
                   },
                 );
               },
-              loading: () => const Center(
-                child: CircularProgressIndicator(),
-              ),
+              loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, st) => Center(
                 child: Padding(
-                  padding:
-                  const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(16),
                   child: Column(
-                    mainAxisSize:
-                    MainAxisSize.min,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
                         'Failed to load items:\n$e',
-                        textAlign:
-                        TextAlign.center,
+                        textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 8),
                       FilledButton(
                         onPressed: () {
-                          ref.invalidate(
-                              posItemsProvider);
+                          ref.invalidate(posItemsProvider);
                         },
-                        child:
-                        const Text('Retry'),
+                        child: const Text('Retry'),
                       ),
                     ],
                   ),
@@ -386,45 +364,31 @@ class _CategoryBar extends ConsumerWidget {
     return SizedBox(
       height: 56,
       child: ListView.separated(
-        padding: const EdgeInsets.symmetric(
-            horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         scrollDirection: Axis.horizontal,
         itemCount: categories.length + 1, // + All chip
-        separatorBuilder: (_, __) =>
-        const SizedBox(width: 8),
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (context, i) {
           if (i == 0) {
-            final bool active =
-            (sel == null);
+            final bool active = (sel == null);
             return ChoiceChip(
               label: const Text('All'),
               selected: active,
               onSelected: (_) {
-                ref
-                    .read(
-                    selectedCategoryIdProvider
-                        .notifier)
-                    .state = null;
-                ref.invalidate(
-                    posItemsProvider);
+                ref.read(selectedCategoryIdProvider.notifier).state = null;
+                ref.invalidate(posItemsProvider);
               },
             );
           }
 
           final c = categories[i - 1];
-          final bool active =
-          (sel == c.id);
+          final bool active = (sel == c.id);
           return ChoiceChip(
             label: Text(c.name),
             selected: active,
             onSelected: (_) {
-              ref
-                  .read(
-                  selectedCategoryIdProvider
-                      .notifier)
-                  .state = c.id;
-              ref.invalidate(
-                  posItemsProvider);
+              ref.read(selectedCategoryIdProvider.notifier).state = c.id;
+              ref.invalidate(posItemsProvider);
             },
           );
         },
@@ -435,8 +399,7 @@ class _CategoryBar extends ConsumerWidget {
 
 /// One menu item card in the grid
 class _ItemCard extends StatelessWidget {
-  const _ItemCard(
-      {required this.item, required this.onTap});
+  const _ItemCard({required this.item, required this.onTap});
   final MenuItem item;
   final VoidCallback onTap;
 
@@ -451,10 +414,8 @@ class _ItemCard extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(
-            mainAxisAlignment:
-            MainAxisAlignment.spaceBetween,
-            crossAxisAlignment:
-            CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 item.name,
@@ -462,50 +423,33 @@ class _ItemCard extends StatelessWidget {
                   fontWeight: FontWeight.w600,
                 ),
                 maxLines: 2,
-                overflow:
-                TextOverflow.ellipsis,
+                overflow: TextOverflow.ellipsis,
               ),
               if (item.description != null &&
-                  item.description!
-                      .trim()
-                      .isNotEmpty)
+                  item.description!.trim().isNotEmpty)
                 Text(
                   item.description!,
                   maxLines: 2,
-                  overflow: TextOverflow
-                      .ellipsis,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 12,
-                    color: Colors
-                        .grey.shade700,
+                    color: Colors.grey.shade700,
                   ),
                 ),
               Align(
-                alignment:
-                Alignment.bottomRight,
+                alignment: Alignment.bottomRight,
                 child: Container(
                   padding:
-                  const EdgeInsets
-                      .symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration:
-                  BoxDecoration(
-                    color: Colors
-                        .brown.shade200,
-                    borderRadius:
-                    BorderRadius
-                        .circular(
-                        4),
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.brown.shade200,
+                    borderRadius: BorderRadius.circular(4),
                   ),
                   child: const Text(
                     'Add +',
                     style: TextStyle(
                       color: Colors.white,
-                      fontWeight:
-                      FontWeight
-                          .w600,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
@@ -518,19 +462,307 @@ class _ItemCard extends StatelessWidget {
   }
 }
 
+/// Info we collect before we open the order on the backend
+class _CheckoutRequest {
+  final OrderChannel channel;
+  final int? pax;
+  const _CheckoutRequest({
+    required this.channel,
+    this.pax,
+  });
+}
+
 /// Bottom cart: shows lines, lets you +/-, shows total, and checkout
 class _CartSummary extends ConsumerStatefulWidget {
   const _CartSummary({required this.cart});
   final PosCartState cart;
 
   @override
-  ConsumerState<_CartSummary> createState() =>
-      _CartSummaryState();
+  ConsumerState<_CartSummary> createState() => _CartSummaryState();
 }
 
-class _CartSummaryState
-    extends ConsumerState<_CartSummary> {
+class _CartSummaryState extends ConsumerState<_CartSummary> {
   bool _busy = false;
+
+  // --- helper: guess pax from qty total
+  int _paxGuess(PosCartState cart) {
+    return cart.lines.fold<int>(
+      0,
+          (sum, l) => sum + l.qty.round(),
+    );
+  }
+
+  // --- dialog to choose DINE_IN / TAKEAWAY / DELIVERY and pax
+  Future<_CheckoutRequest?> _askCheckoutInfo(PosCartState cart) async {
+    OrderChannel chosenChannel = OrderChannel.TAKEAWAY;
+    final paxCtl = TextEditingController(
+      text: _paxGuess(cart).toString(),
+    );
+
+    return showDialog<_CheckoutRequest>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocalState) {
+            return AlertDialog(
+              title: const Text('Checkout details'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'Channel',
+                    style: TextStyle(fontSize: 12, color: Colors.black54),
+                  ),
+                  DropdownButton<OrderChannel>(
+                    value: chosenChannel,
+                    isExpanded: true,
+                    onChanged: (val) {
+                      if (val != null) {
+                        setLocalState(() {
+                          chosenChannel = val;
+                        });
+                      }
+                    },
+                    items: OrderChannel.values.map((ch) {
+                      return DropdownMenuItem<OrderChannel>(
+                        value: ch,
+                        child: Text(
+                          ch.name.replaceAll('_', ' '),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: paxCtl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Pax / Guests',
+                    ),
+                  ),
+                  // Future: table selector (for DINE_IN), address for DELIVERY, etc.
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    final paxVal = int.tryParse(paxCtl.text.trim());
+                    Navigator.pop(
+                      ctx,
+                      _CheckoutRequest(
+                        channel: chosenChannel,
+                        pax: paxVal,
+                      ),
+                    );
+                  },
+                  child: const Text('Continue'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // --- the real checkout logic
+  Future<void> _performCheckout(_CheckoutRequest info) async {
+    final cart = widget.cart;
+    final client = ref.read(apiClientProvider);
+
+    // 1. generate offline-friendly order number
+    final orderNo = 'POS1-${DateTime.now().millisecondsSinceEpoch}';
+
+    // fallback pax if dialog left it blank
+    final paxFromCart = _paxGuess(cart);
+    final int? paxToSend = (info.pax != null && info.pax! > 0)
+        ? info.pax
+        : (paxFromCart == 0 ? null : paxFromCart);
+
+    // 2. create order on backend using chosen channel
+    final draftOrder = Order(
+      id: null,
+      tenantId: '',
+      branchId: '',
+      orderNo: orderNo,
+      channel: info.channel, // cashier choice
+      provider: null, // null is fine for non-online orders
+      status: OrderStatus.OPEN,
+      tableId: null, // TODO: table for DINE_IN
+      customerId: null, // TODO: customer/delivery phone
+      openedByUserId: null,
+      closedByUserId: null,
+      pax: paxToSend,
+      sourceDeviceId: 'flutter-pos',
+      note: null,
+      openedAt: DateTime.now(),
+      closedAt: null,
+    );
+
+    late final Order opened;
+    try {
+      opened = await client.createOrder(draftOrder);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to create order: $e')),
+        );
+      }
+      return;
+    }
+
+    final orderId = opened.id ?? '';
+    if (orderId.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No order ID from backend')),
+        );
+      }
+      return;
+    }
+
+    // 3. add each cart line
+    for (final line in cart.lines) {
+      final itemId = line.item.id;
+      if (itemId == null) continue;
+
+      final orderItem = OrderItem(
+        id: null,
+        orderId: orderId,
+        itemId: itemId,
+        variantId: line.variant?.id,
+        parentLineId: null,
+        qty: line.qty,
+        unitPrice: line.unitPrice,
+        lineDiscount: 0,
+        gstRate: line.item.gstRate,
+        cgst: 0,
+        sgst: 0,
+        igst: 0,
+        taxableValue: 0,
+      );
+
+      try {
+        await client.addOrderItem(orderId, orderItem);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to add line item: $e')),
+          );
+        }
+        return;
+      }
+    }
+
+    // 4. fetch totals (to know how much to collect)
+    late final OrderDetail detail;
+    try {
+      detail = await client.getOrderDetail(orderId);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load totals: $e')),
+        );
+      }
+      return;
+    }
+
+    final amountDue = detail.totals.due;
+
+    // 5. pay in full CASH
+    try {
+      await client.pay(orderId, PayMode.CASH, amountDue);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Payment failed: $e')),
+        );
+      }
+      return;
+    }
+
+    // 6. create invoice (DB row + invoice number)
+    Map<String, dynamic> invoiceResp = {};
+    try {
+      invoiceResp = await client.createInvoice(orderId);
+    } catch (e) {
+      // non-blocking
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Invoice issue: $e')),
+        );
+      }
+    }
+
+    // 7. print invoice if we got an invoice_id
+    final invoiceId = invoiceResp['invoice_id']?.toString();
+    if (invoiceId != null && invoiceId.isNotEmpty) {
+      try {
+        await client.printInvoice(invoiceId);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Print issue: $e'),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    }
+
+    // 8. pop cash drawer
+    try {
+      await client.openDrawer();
+    } catch (_) {
+      // drawer might not be configured; ignore
+    }
+
+    // 9. clear cart now that we are done
+    ref.read(posCartProvider.notifier).clear();
+
+    // 10. success toast
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Paid ₹${amountDue.toStringAsFixed(2)} • Order $orderNo (${info.channel.name}) ✅',
+          ),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  Future<void> _startCheckout() async {
+    if (_busy) return;
+
+    setState(() {
+      _busy = true;
+    });
+
+    // collect channel/pax first
+    final req = await _askCheckoutInfo(widget.cart);
+
+    // after await, we MUST bail if widget disposed
+    if (!mounted) return;
+
+    if (req != null) {
+      await _performCheckout(req);
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -541,116 +773,83 @@ class _CartSummaryState
       elevation: 8,
       color: Colors.brown.shade50,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(
-            12, 12, 12, 20),
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Line items (scroll if long)
+            // Cart lines list
             if (lines.isNotEmpty)
               ConstrainedBox(
-                constraints:
-                const BoxConstraints(
-                  maxHeight: 200,
-                ),
+                constraints: const BoxConstraints(maxHeight: 200),
                 child: ListView.separated(
                   shrinkWrap: true,
                   itemCount: lines.length,
-                  separatorBuilder:
-                      (_, __) =>
-                  const Divider(
-                      height:
-                      8),
-                  itemBuilder:
-                      (context, i) {
-                    final ln =
-                    lines[i];
+                  separatorBuilder: (_, __) => const Divider(height: 8),
+                  itemBuilder: (context, i) {
+                    final ln = lines[i];
                     return Row(
-                      crossAxisAlignment:
-                      CrossAxisAlignment
-                          .start,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
                           child: Column(
-                            crossAxisAlignment:
-                            CrossAxisAlignment
-                                .start,
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
                                 ln.displayName,
-                                style:
-                                const TextStyle(
-                                  fontWeight:
-                                  FontWeight
-                                      .w600,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                               Text(
                                 '₹ ${ln.unitPrice.toStringAsFixed(2)}',
-                                style:
-                                TextStyle(
-                                  fontSize:
-                                  12,
-                                  color: Colors
-                                      .grey
-                                      .shade700,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade700,
                                 ),
                               ),
                             ],
                           ),
                         ),
                         Row(
-                          mainAxisSize:
-                          MainAxisSize
-                              .min,
+                          mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
-                              icon:
-                              const Icon(Icons.remove_circle_outline),
+                              icon: const Icon(
+                                Icons.remove_circle_outline,
+                              ),
                               onPressed: _busy
                                   ? null
                                   : () {
                                 ref
                                     .read(posCartProvider.notifier)
-                                    .decQty(
-                                    i);
+                                    .decQty(i);
                               },
                             ),
                             Text(
-                              ln.qty
-                                  .toStringAsFixed(
-                                  0),
-                              style:
-                              const TextStyle(
-                                fontWeight:
-                                FontWeight
-                                    .w600,
+                              ln.qty.toStringAsFixed(0),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
                             IconButton(
-                              icon:
-                              const Icon(Icons.add_circle_outline),
+                              icon: const Icon(
+                                Icons.add_circle_outline,
+                              ),
                               onPressed: _busy
                                   ? null
                                   : () {
                                 ref
                                     .read(posCartProvider.notifier)
-                                    .incQty(
-                                    i);
+                                    .incQty(i);
                               },
                             ),
                           ],
                         ),
-                        const SizedBox(
-                            width:
-                            8),
+                        const SizedBox(width: 8),
                         Text(
                           '₹ ${ln.lineTotal.toStringAsFixed(2)}',
-                          style:
-                          const TextStyle(
-                            fontWeight:
-                            FontWeight
-                                .w600,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ],
@@ -662,9 +861,7 @@ class _CartSummaryState
               const Text(
                 'Cart is empty',
                 style: TextStyle(
-                  fontStyle:
-                  FontStyle
-                      .italic,
+                  fontStyle: FontStyle.italic,
                 ),
               ),
 
@@ -672,26 +869,21 @@ class _CartSummaryState
             const Divider(),
             const SizedBox(height: 8),
 
-            // total row
+            // subtotal row
             Row(
               children: [
                 const Expanded(
                   child: Text(
                     'Subtotal',
                     style: TextStyle(
-                      fontWeight:
-                      FontWeight
-                          .w500,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
                 ),
                 Text(
                   '₹ ${total.toStringAsFixed(2)}',
-                  style:
-                  const TextStyle(
-                    fontWeight:
-                    FontWeight
-                        .w600,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
@@ -701,220 +893,34 @@ class _CartSummaryState
 
             Row(
               children: [
+                // CLEAR CART
                 Expanded(
                   child: FilledButton.icon(
-                    icon: const Icon(
-                        Icons.delete),
-                    label: const Text(
-                        'Clear'),
-                    style: FilledButton
-                        .styleFrom(
-                      backgroundColor:
-                      Colors.brown
-                          .shade200,
+                    icon: const Icon(Icons.delete),
+                    label: const Text('Clear'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.brown.shade200,
                     ),
                     onPressed: lines.isEmpty || _busy
                         ? null
-                        : () async {
-                      setState(() {
-                        _busy = true;
-                      });
-
-                      final client = ref.read(apiClientProvider);
-
-                      try {
-                        // 1. generate offline-friendly order number
-                        final orderNo = 'POS1-${DateTime.now().millisecondsSinceEpoch}';
-
-                        // pax guess = sum(qty) so reports aren't null
-                        final paxGuess = widget.cart.lines.fold<int>(
-                          0,
-                              (sum, l) => sum + l.qty.round(),
-                        );
-
-                        // 2. open order on backend
-                        final createdOrder = Order(
-                          id: null,
-                          tenantId: '',
-                          branchId: '',
-                          orderNo: orderNo,
-                          channel: OrderChannel.TAKEAWAY,
-                          provider: null, // <-- null is fine now
-                          status: OrderStatus.OPEN,
-                          tableId: null,
-                          customerId: null,
-                          openedByUserId: null,
-                          closedByUserId: null,
-                          pax: paxGuess == 0 ? null : paxGuess,
-                          sourceDeviceId: 'flutter-pos',
-                          note: null,
-                          openedAt: DateTime.now(),
-                          closedAt: null,
-                        );
-
-                        late final Order opened;
-                        try {
-                          opened = await client.createOrder(createdOrder);
-                        } catch (e) {
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Failed to create order: $e')),
-                          );
-                          return;
-                        }
-
-                        final orderId = opened.id ?? '';
-                        if (orderId.isEmpty) {
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('No order ID from backend')),
-                          );
-                          return;
-                        }
-
-                        // 3. add each cart line
-                        for (final line in widget.cart.lines) {
-                          final itemId = line.item.id;
-                          if (itemId == null) continue;
-
-                          final orderItem = OrderItem(
-                            id: null,
-                            orderId: orderId,
-                            itemId: itemId,
-                            variantId: line.variant?.id,
-                            parentLineId: null,
-                            qty: line.qty,
-                            unitPrice: line.unitPrice,
-                            lineDiscount: 0,
-                            gstRate: line.item.gstRate,
-                            cgst: 0,
-                            sgst: 0,
-                            igst: 0,
-                            taxableValue: 0,
-                          );
-
-                          try {
-                            await client.addOrderItem(orderId, orderItem);
-                          } catch (e) {
-                            if (!mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Failed to add line item: $e')),
-                            );
-                            return;
-                          }
-                        }
-
-                        // 4. fetch totals to know how much to collect
-                        late final OrderDetail detail;
-                        try {
-                          detail = await client.getOrderDetail(orderId);
-                        } catch (e) {
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Failed to load totals: $e')),
-                          );
-                          return;
-                        }
-
-                        final amountDue = detail.totals.due;
-
-                        // 5. pay full due in CASH
-                        try {
-                          await client.pay(orderId, PayMode.CASH, amountDue);
-                        } catch (e) {
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Payment failed: $e')),
-                          );
-                          return;
-                        }
-
-                        // 6. create invoice (this allocates invoice_no, stores in DB)
-                        Map<String, dynamic> invoiceResp = {};
-                        try {
-                          invoiceResp = await client.createInvoice(orderId);
-                        } catch (e) {
-                          // not fatal — we can still proceed
-                          invoiceResp = {};
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Invoice issue: $e')),
-                            );
-                          }
-                        }
-
-                        // 7. print invoice (if we got one)
-                        final invoiceId = invoiceResp['invoice_id']?.toString();
-                        if (invoiceId != null && invoiceId.isNotEmpty) {
-                          try {
-                            await client.printInvoice(invoiceId);
-                          } catch (e) {
-                            // printing failed, continue
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Print issue: $e'),
-                                  duration: Duration(seconds: 2),
-                                ),
-                              );
-                            }
-                          }
-                        }
-
-                        // 8. pop cash drawer
-                        try {
-                          await client.openDrawer();
-                        } catch (_) {
-                          // drawer failure is not fatal: some setups won't have drawer wired
-                        }
-
-                        // 9. clear cart
-                        ref.read(posCartProvider.notifier).clear();
-
-                        // 10. success toast
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                'Paid ₹${amountDue.toStringAsFixed(2)} • Order $orderNo done ✅',
-                              ),
-                              duration: const Duration(seconds: 3),
-                            ),
-                          );
-                        }
-                      } catch (e) {
-                        if (!mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('Checkout failed: $e'),
-                          ),
-                        );
-                      } finally {
-                        if (mounted) {
-                          setState(() {
-                            _busy = false;
-                          });
-                        }
-                      }
+                        : () {
+                      ref.read(posCartProvider.notifier).clear();
                     },
                   ),
                 ),
-                const SizedBox(
-                    width: 12),
+
+                const SizedBox(width: 12),
+
+                // CHECKOUT
                 Expanded(
                   flex: 2,
-                  child:
-                  FilledButton.icon(
+                  child: FilledButton.icon(
                     icon: _busy
                         ? const SizedBox(
-                      width:
-                      16,
-                      height:
-                      16,
-                      child:
-                      CircularProgressIndicator(
-                        strokeWidth:
-                        2,
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
                       ),
                     )
                         : const Icon(Icons.point_of_sale),
@@ -923,128 +929,8 @@ class _CartSummaryState
                           ? 'Processing...'
                           : 'Checkout ₹ ${total.toStringAsFixed(2)}',
                     ),
-                    onPressed: lines
-                        .isEmpty ||
-                        _busy
-                        ? null
-                        : () async {
-                      setState(() {
-                        _busy =
-                        true;
-                      });
-
-                      final client =
-                      ref.read(apiClientProvider);
-
-                      try {
-                        // 1. open order with offline-safe order_no
-                        final orderNo =
-                            'POS1-${DateTime.now().millisecondsSinceEpoch}';
-
-                        // pax guess = sum of qty
-                        final paxGuess = widget
-                            .cart
-                            .lines
-                            .fold<int>(
-                          0,
-                              (sum, l) =>
-                          sum +
-                              l.qty.round(),
-                        );
-
-                        final opened =
-                        await client.openOrderOffline(
-                          tenantId:
-                          '',
-                          branchId:
-                          '',
-                          orderNo:
-                          orderNo,
-                          channel:
-                          'DINE_IN',
-                          pax: paxGuess ==
-                              0
-                              ? null
-                              : paxGuess,
-                        );
-
-                        final orderId =
-                            opened['id']?.toString() ??
-                                '';
-
-                        // 2. add each cart line
-                        for (final line
-                        in widget.cart.lines) {
-                          await client
-                              .addItemToOrderPrimitive(
-                            orderId:
-                            orderId,
-                            itemId: line.item.id ??
-                                '',
-                            variantId:
-                            line.variant?.id,
-                            qty: line.qty,
-                            unitPrice:
-                            line.unitPrice,
-                          );
-                        }
-
-                        // 3. pay full cash
-                        await client
-                            .payOrderPrimitive(
-                          orderId:
-                          orderId,
-                          amount: widget.cart.subTotal,
-                          mode:
-                          'CASH',
-                          refNo:
-                          null,
-                        );
-
-                        // 4. invoice
-                        await client
-                            .invoiceOrderPrimitive(
-                            orderId);
-
-                        // 5. clear cart and toast
-                        ref
-                            .read(posCartProvider.notifier)
-                            .clear();
-                        if (mounted) {
-                          ScaffoldMessenger.of(
-                              context)
-                              .showSnackBar(
-                            SnackBar(
-                              content:
-                              Text(
-                                'Order $orderId complete ✅',
-                              ),
-                            ),
-                          );
-                        }
-                      } catch (e) {
-                        if (mounted) {
-                          ScaffoldMessenger.of(
-                              context)
-                              .showSnackBar(
-                            SnackBar(
-                              content:
-                              Text(
-                                'Checkout failed: $e',
-                              ),
-                            ),
-                          );
-                        }
-                      } finally {
-                        if (mounted) {
-                          setState(
-                                  () {
-                                _busy =
-                                false;
-                              });
-                        }
-                      }
-                    },
+                    onPressed:
+                    lines.isEmpty || _busy ? null : _startCheckout,
                   ),
                 ),
               ],

@@ -1,16 +1,25 @@
-﻿// lib/features/menu/menu_page.dart
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:waah_frontend/data/models.dart';
 import 'package:waah_frontend/data/repo/catalog_repo.dart';
+import 'package:waah_frontend/features/menu/category_items_page.dart';
 
-/// Loads categories once via HTTP (no local DB stream anymore).
+/// Loads all categories via HTTP.
+/// We currently pass '' for tenant/branch because that's how the rest
+/// of the app is talking to the backend.
 final categoriesProvider = FutureProvider<List<MenuCategory>>((ref) async {
   final repo = ref.watch(catalogRepoProvider);
-  final list = await repo.loadCategories();
-  // Keep UI stable: sort by position if present.
-  list.sort((a, b) => (a.position ?? 0).compareTo(b.position ?? 0));
-  return list;
+
+  // actually hit backend
+  final cats = await repo.loadCategories(
+    tenantId: '',
+    branchId: '',
+  );
+
+  // keep UI stable: sort by position
+  cats.sort((a, b) => a.position.compareTo(b.position));
+
+  return cats;
 });
 
 class MenuPage extends ConsumerWidget {
@@ -22,17 +31,33 @@ class MenuPage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Menu'),
+        title: const Text('Menu Setup'),
         actions: [
           IconButton(
             tooltip: 'Add category',
             icon: const Icon(Icons.add),
             onPressed: () async {
-              final name = await _promptForName(context, title: 'New category');
+              final name =
+              await _promptForName(context, title: 'New category');
               if (name == null || name.trim().isEmpty) return;
 
-              await ref.read(catalogRepoProvider).addCategory(name.trim());
-              ref.invalidate(categoriesProvider); // refresh the list
+              try {
+                await ref.read(catalogRepoProvider).addCategory(
+                  name.trim(),
+                  tenantId: '',
+                  branchId: '',
+                  position: 0,
+                );
+
+                // refresh list after creating
+                ref.invalidate(categoriesProvider);
+              } catch (e) {
+                // show failure
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Failed to add: $e')),
+                );
+              }
             },
           ),
         ],
@@ -54,19 +79,56 @@ class MenuPage extends ConsumerWidget {
               final c = cats[i];
               return ListTile(
                 title: Text(c.name),
-                subtitle: Text('Position ${c.position ?? 0}'),
+                subtitle: Text('Position ${c.position}'),
                 trailing: IconButton(
                   icon: const Icon(Icons.delete_outline),
                   onPressed: () async {
-                    final ok = await _confirm(context, 'Delete "${c.name}"?');
+                    final ok = await _confirm(
+                      context,
+                      'Delete "${c.name}"?',
+                    );
                     if (!ok) return;
                     if (c.id == null) return;
-                    await ref.read(catalogRepoProvider).deleteCategory(c.id!);
-                    ref.invalidate(categoriesProvider);
+
+                    try {
+                      await ref
+                          .read(catalogRepoProvider)
+                          .deleteCategory(c.id!);
+
+                      ref.invalidate(categoriesProvider);
+
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content:
+                          Text('Deleted category "${c.name}"'),
+                          duration:
+                          const Duration(milliseconds: 900),
+                        ),
+                      );
+                    } catch (e) {
+                      // e.g. backend refuses because category still has items
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Could not delete "${c.name}": $e',
+                          ),
+                          duration:
+                          const Duration(seconds: 2),
+                        ),
+                      );
+                    }
                   },
                 ),
                 onTap: () {
-                  // TODO: navigate to items in this category
+                  // drill into items for this category
+                  if (c.id == null) return;
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => CategoryItemsPage(category: c),
+                    ),
+                  );
                 },
               );
             },
@@ -77,7 +139,11 @@ class MenuPage extends ConsumerWidget {
   }
 }
 
-Future<String?> _promptForName(BuildContext context, {required String title}) async {
+/// Ask user for a category name
+Future<String?> _promptForName(
+    BuildContext context, {
+      required String title,
+    }) async {
   final ctl = TextEditingController();
   return showDialog<String>(
     context: context,
@@ -89,21 +155,35 @@ Future<String?> _promptForName(BuildContext context, {required String title}) as
         autofocus: true,
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        FilledButton(onPressed: () => Navigator.pop(context, ctl.text.trim()), child: const Text('Save')),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () =>
+              Navigator.pop(context, ctl.text.trim()),
+          child: const Text('Save'),
+        ),
       ],
     ),
   );
 }
 
+/// simple yes/no confirm dialog
 Future<bool> _confirm(BuildContext context, String message) async {
   final res = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
       content: Text(message),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('No')),
-        FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Yes')),
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('No'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Yes'),
+        ),
       ],
     ),
   );
