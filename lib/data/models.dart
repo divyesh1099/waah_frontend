@@ -846,58 +846,6 @@ class OrderItemModifier {
   };
 }
 
-class KitchenTicket {
-  final String? id;
-  final String orderId;
-  final int ticketNo;
-  final String? targetStation;
-  final KOTStatus status;
-  final DateTime? printedAt;
-  final int reprintCount;
-  final String? cancelReason;
-  final DateTime? createdAt;
-  final DateTime? updatedAt;
-
-  KitchenTicket({
-    this.id,
-    required this.orderId,
-    required this.ticketNo,
-    this.targetStation,
-    this.status = KOTStatus.NEW,
-    this.printedAt,
-    this.reprintCount = 0,
-    this.cancelReason,
-    this.createdAt,
-    this.updatedAt,
-  });
-
-  factory KitchenTicket.fromJson(Map<String, dynamic> j) => KitchenTicket(
-    id: _str(j['id']),
-    orderId: _str(j['order_id']) ?? '',
-    ticketNo: _numToInt(j['ticket_no']) ?? 0,
-    targetStation: _str(j['target_station']),
-    status: _enum<KOTStatus>(_str(j['status']), KOTStatus.values, (e) => e.name, orElse: KOTStatus.NEW),
-    printedAt: _dt(j['printed_at']),
-    reprintCount: _numToInt(j['reprint_count']) ?? 0,
-    cancelReason: _str(j['cancel_reason']),
-    createdAt: _dt(j['created_at']),
-    updatedAt: _dt(j['updated_at']),
-  );
-
-  Map<String, dynamic> toJson() => {
-    'id': id,
-    'order_id': orderId,
-    'ticket_no': ticketNo,
-    'target_station': targetStation,
-    'status': status.name,
-    'printed_at': printedAt?.toIso8601String(),
-    'reprint_count': reprintCount,
-    'cancel_reason': cancelReason,
-    'created_at': createdAt?.toIso8601String(),
-    'updated_at': updatedAt?.toIso8601String(),
-  };
-}
-
 class Payment {
   final String? id;
   final String orderId;
@@ -972,16 +920,43 @@ class Ingredient {
   final String name;
   final String uom;
   final double minLevel;
-  Ingredient({this.id, required this.tenantId, required this.name, required this.uom, this.minLevel = 0});
-  factory Ingredient.fromJson(Map<String, dynamic> j) => Ingredient(
-    id: _str(j['id']),
-    tenantId: _str(j['tenant_id']) ?? '',
-    name: _str(j['name']) ?? '',
-    uom: _str(j['uom']) ?? '',
-    minLevel: _numToDouble(j['min_level']) ?? 0,
-  );
-  Map<String, dynamic> toJson() =>
-      {'id': id, 'tenant_id': tenantId, 'name': name, 'uom': uom, 'min_level': minLevel};
+  final double? qtyOnHand;
+
+  Ingredient({
+    required this.id,
+    required this.tenantId,
+    required this.name,
+    required this.uom,
+    required this.minLevel,
+    required this.qtyOnHand,
+  });
+
+  factory Ingredient.fromJson(Map<String, dynamic> json) {
+    double _asDouble(dynamic v) {
+      if (v == null) return 0;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString()) ?? 0;
+    }
+
+    return Ingredient(
+      id: json['id'] as String?,
+      tenantId: (json['tenant_id'] ?? '') as String,
+      name: (json['name'] ?? '') as String,
+      uom: (json['uom'] ?? '') as String,
+      minLevel: _asDouble(json['min_level']),
+      qtyOnHand: json['qty_on_hand'] == null
+          ? null
+          : _asDouble(json['qty_on_hand']),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'tenant_id': tenantId,
+    'name': name,
+    'uom': uom,
+    'min_level': minLevel,
+  };
 }
 
 class Purchase {
@@ -1175,3 +1150,288 @@ class OrderDetail {
   OrderDetail({required this.order, required this.totals});
 }
 
+class KitchenTicket {
+  final String? id;
+  final String orderId;
+  final int ticketNo;
+  final String? targetStation;
+  final String? stationName;
+  final KOTStatus status;
+  final DateTime? printedAt;
+  final int reprintCount;
+
+  // Extra decorations for UI
+  final String? tableCode;
+  final String? waiterName;
+  final String? orderNo;
+  final String? orderNote;
+
+  KitchenTicket({
+    required this.id,
+    required this.orderId,
+    required this.ticketNo,
+    required this.targetStation,
+    required this.stationName,
+    required this.status,
+    required this.printedAt,
+    required this.reprintCount,
+    required this.tableCode,
+    required this.waiterName,
+    required this.orderNo,
+    required this.orderNote,
+  });
+
+  factory KitchenTicket.fromJson(Map<String, dynamic> json) {
+    // parse status
+    final statusStr = (json['status'] ?? 'NEW') as String;
+    final st = KOTStatus.values.firstWhere(
+          (e) => e.name == statusStr,
+      orElse: () => KOTStatus.NEW,
+    );
+
+    return KitchenTicket(
+      id: json['id'] as String?,
+      orderId: json['order_id'] as String,
+      ticketNo: json['ticket_no'] is int
+          ? json['ticket_no'] as int
+          : int.tryParse(json['ticket_no'].toString()) ?? 0,
+      targetStation: json['target_station'] as String?,
+      stationName: json['station_name'] as String?,
+      status: st,
+      printedAt: json['printed_at'] != null && (json['printed_at'] as String).isNotEmpty
+          ? DateTime.tryParse(json['printed_at'] as String)
+          : null,
+      reprintCount: json['reprint_count'] is int
+          ? (json['reprint_count'] as int)
+          : int.tryParse('${json['reprint_count'] ?? "0"}') ?? 0,
+      tableCode: json['table_code'] as String?,
+      waiterName: json['waiter_name'] as String?,
+      orderNo: json['order_no'] as String?,
+      orderNote: json['order_note'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'order_id': orderId,
+      'ticket_no': ticketNo,
+      'target_station': targetStation,
+      'station_name': stationName,
+      'status': status.name,
+      'printed_at': printedAt?.toIso8601String(),
+      'reprint_count': reprintCount,
+      'table_code': tableCode,
+      'waiter_name': waiterName,
+      'order_no': orderNo,
+      'order_note': orderNote,
+    };
+  }
+}
+
+/// ---------------------------------------------------------------------------
+/// RBAC helper models
+/// ---------------------------------------------------------------------------
+
+/// Data returned by GET /auth/me
+class MeInfo {
+  final String id;
+  final String tenantId;
+  final String name;
+  final String? mobile;
+  final String? email;
+  final bool active;
+  final List<String> roles;
+  final List<String> permissions;
+
+  MeInfo({
+    required this.id,
+    required this.tenantId,
+    required this.name,
+    this.mobile,
+    this.email,
+    required this.active,
+    required this.roles,
+    required this.permissions,
+  });
+
+  factory MeInfo.fromJson(Map<String, dynamic> j) {
+    final rawRoles = (j['roles'] as List<dynamic>? ?? const []);
+    final rawPerms = (j['permissions'] as List<dynamic>? ?? const []);
+
+    return MeInfo(
+      id: _str(j['id']) ?? '',
+      tenantId: _str(j['tenant_id']) ?? '',
+      name: _str(j['name']) ?? '',
+      mobile: _str(j['mobile']),
+      email: _str(j['email']),
+      active: (j['active'] as bool?) ?? false,
+      roles: rawRoles.map((e) => e.toString()).toList(),
+      permissions: rawPerms.map((e) => e.toString()).toList(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'tenant_id': tenantId,
+    'name': name,
+    'mobile': mobile,
+    'email': email,
+    'active': active,
+    'roles': roles,
+    'permissions': permissions,
+  };
+
+  /// Convenience so UI can do:
+  ///   if (authState.me?.hasPerm('SETTINGS_EDIT') ?? false) { ... }
+  bool hasPerm(String code) => permissions.contains(code);
+
+  bool hasRole(String code) => roles.contains(code);
+}
+
+/// Row returned by GET /users/ (list of all staff for a tenant).
+class UserWithRoles {
+  final String id;
+  final String tenantId;
+  final String name;
+  final String? mobile;
+  final String? email;
+  final bool active;
+  final List<String> roles;
+
+  UserWithRoles({
+    required this.id,
+    required this.tenantId,
+    required this.name,
+    this.mobile,
+    this.email,
+    required this.active,
+    required this.roles,
+  });
+
+  factory UserWithRoles.fromJson(Map<String, dynamic> j) {
+    final rawRoles = (j['roles'] as List<dynamic>? ?? const []);
+
+    return UserWithRoles(
+      id: _str(j['id']) ?? '',
+      tenantId: _str(j['tenant_id']) ?? '',
+      name: _str(j['name']) ?? '',
+      mobile: _str(j['mobile']),
+      email: _str(j['email']),
+      active: (j['active'] as bool?) ?? false,
+      roles: rawRoles.map((e) => e.toString()).toList(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'tenant_id': tenantId,
+    'name': name,
+    'mobile': mobile,
+    'email': email,
+    'active': active,
+    'roles': roles,
+  };
+}
+/// Shape of each row from GET /users/
+/// (your backend returns: id, tenant_id, name, mobile, email, active, roles[])
+class UserSummary {
+  final String id;
+  final String tenantId;
+  final String name;
+  final String? mobile;
+  final String? email;
+  final bool active;
+  final List<String> roles;
+
+  UserSummary({
+    required this.id,
+    required this.tenantId,
+    required this.name,
+    this.mobile,
+    this.email,
+    required this.active,
+    required this.roles,
+  });
+
+  factory UserSummary.fromJson(Map<String, dynamic> j) => UserSummary(
+    id: _str(j['id']) ?? '',
+    tenantId: _str(j['tenant_id']) ?? '',
+    name: _str(j['name']) ?? '',
+    mobile: _str(j['mobile']),
+    email: _str(j['email']),
+    active: (j['active'] as bool?) ?? true,
+    roles: (j['roles'] as List? ?? const [])
+        .map((e) => e.toString())
+        .toList(),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'tenant_id': tenantId,
+    'name': name,
+    'mobile': mobile,
+    'email': email,
+    'active': active,
+    'roles': roles,
+  };
+}
+
+// --- roles -----------------------------------------------------------------
+
+class RoleInfo {
+  final String id;
+  final String tenantId;
+  final String code;
+  final List<String> permissions; // may be empty in list view
+
+  RoleInfo({
+    required this.id,
+    required this.tenantId,
+    required this.code,
+    required this.permissions,
+  });
+
+  // for GET /users/roles/{role_id} with permissions[]:
+  factory RoleInfo.fromJson(Map<String, dynamic> j) {
+    return RoleInfo(
+      id: j['id']?.toString() ?? '',
+      tenantId: j['tenant_id']?.toString() ?? '',
+      code: j['code']?.toString() ?? '',
+      permissions: (j['permissions'] as List<dynamic>? ?? const [])
+          .map((e) => e.toString())
+          .toList(),
+    );
+  }
+
+  // for GET /users/roles (no permissions field returned there)
+  factory RoleInfo.fromListJson(Map<String, dynamic> j) {
+    return RoleInfo(
+      id: j['id']?.toString() ?? '',
+      tenantId: j['tenant_id']?.toString() ?? '',
+      code: j['code']?.toString() ?? '',
+      permissions: const [],
+    );
+  }
+}
+
+// --- permissions -----------------------------------------------------------
+
+class PermissionInfo {
+  final String id;
+  final String code;
+  final String? description;
+  PermissionInfo({
+    required this.id,
+    required this.code,
+    this.description,
+  });
+
+  factory PermissionInfo.fromJson(Map<String, dynamic> j) {
+    return PermissionInfo(
+      id: j['id']?.toString() ?? '',
+      code: j['code']?.toString() ?? '',
+      description: j['description']?.toString(),
+    );
+  }
+}

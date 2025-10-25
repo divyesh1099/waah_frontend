@@ -76,6 +76,27 @@ class OrdersPage extends ConsumerWidget {
             icon: const Icon(Icons.refresh),
             onPressed: () => ref.invalidate(ordersFutureProvider),
           ),
+          IconButton(
+            tooltip: 'Open Drawer',
+            icon: const Icon(Icons.point_of_sale),
+            onPressed: () async {
+              final client = ref.read(apiClientProvider);
+              try {
+                await client.openDrawer(); // you can pass tenant/branch later
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Drawer opened 💸')),
+                  );
+                }
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Drawer failed: $e')),
+                  );
+                }
+              }
+            },
+          ),
         ],
       ),
       body: Column(

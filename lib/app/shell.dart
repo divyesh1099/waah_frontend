@@ -48,6 +48,14 @@ class AppShell extends ConsumerWidget {
               onTap: () => context.go('/shift'),
             ),
             ListTile(
+              title: const Text('Users'),
+              onTap: () => context.go('/users'),
+            ),
+            ListTile(
+              title: const Text('Roles / Permissions'),
+              onTap: () => context.go('/roles'),
+            ),
+            ListTile(
               title: const Text('Settings'),
               onTap: () => context.go('/settings'),
             ),

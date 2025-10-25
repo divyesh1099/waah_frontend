@@ -128,13 +128,23 @@ class MenuPage extends ConsumerWidget {
                         onPressed: () async {
                           final created = await showDialog<bool>(
                             context: context,
-                            builder: (_) => _AddItemDialog(
-                              category: cat,
-                            ),
+                            builder: (_) => _AddItemDialog(category: cat),
                           );
                           if (created == true) {
-                            ref.invalidate(
-                                categoryItemsProvider(catId));
+                            ref.invalidate(categoryItemsProvider(catId));
+                          }
+                        },
+                      ),
+                      IconButton(
+                        tooltip: 'Edit Category',
+                        icon: const Icon(Icons.edit),
+                        onPressed: () async {
+                          final updated = await showDialog<bool>(
+                            context: context,
+                            builder: (_) => _EditCategoryDialog(category: cat),
+                          );
+                          if (updated == true) {
+                            ref.invalidate(menuCategoriesProvider);
                           }
                         },
                       ),
@@ -144,22 +154,18 @@ class MenuPage extends ConsumerWidget {
                         onPressed: cat.id == null
                             ? null
                             : () async {
-                          final ok =
-                          await _confirmYesNo(context,
+                          final ok = await _confirmYesNo(
+                              context,
                               'Delete "${cat.name}" and all its items?');
                           if (ok != true) return;
 
                           try {
-                            final repo = ref.read(
-                                catalogRepoProvider);
+                            final repo = ref.read(catalogRepoProvider);
                             await repo.deleteCategory(cat.id!);
-
-                            ref.invalidate(
-                                menuCategoriesProvider);
+                            ref.invalidate(menuCategoriesProvider);
                           } catch (e) {
                             if (context.mounted) {
-                              ScaffoldMessenger.of(context)
-                                  .showSnackBar(
+                              ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
                                   content: Text(
                                       'Could not delete "${cat.name}": $e'),
@@ -379,17 +385,18 @@ class MenuPage extends ConsumerWidget {
 Future<bool?> _confirmYesNo(BuildContext context, String msg) {
   return showDialog<bool>(
     context: context,
-    builder: (_) {
+    builder: (dialogCtx) {
       return AlertDialog(
         title: const Text('Are you sure?'),
         content: Text(msg),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            // POP THE DIALOG, not the page
+            onPressed: () => Navigator.of(dialogCtx).pop(false),
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(context, true),
+            onPressed: () => Navigator.of(dialogCtx).pop(true),
             child: const Text('Delete'),
           ),
         ],
@@ -508,6 +515,115 @@ class _AddCategoryDialogState
             child: CircularProgressIndicator(
               strokeWidth: 2,
             ),
+          )
+              : const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+class _EditCategoryDialog extends ConsumerStatefulWidget {
+  const _EditCategoryDialog({required this.category});
+  final MenuCategory category;
+
+  @override
+  ConsumerState<_EditCategoryDialog> createState() =>
+      _EditCategoryDialogState();
+}
+
+class _EditCategoryDialogState
+    extends ConsumerState<_EditCategoryDialog> {
+  late TextEditingController _nameCtl;
+  late TextEditingController _posCtl;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtl = TextEditingController(text: widget.category.name);
+    _posCtl = TextEditingController(
+      text: widget.category.position.toString(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _nameCtl.dispose();
+    _posCtl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _nameCtl.text.trim();
+    final pos = int.tryParse(_posCtl.text.trim()) ?? 0;
+    if (name.isEmpty) return;
+
+    setState(() => _busy = true);
+
+    try {
+      final repo = ref.read(catalogRepoProvider);
+      await repo.editCategory(
+        widget.category.id!,
+        name: name,
+        position: pos,
+        tenantId: widget.category.tenantId,
+        branchId: widget.category.branchId,
+      );
+      if (mounted) {
+        Navigator.pop(context, true);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update category: $e'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Edit Category'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _nameCtl,
+            decoration: const InputDecoration(
+              labelText: 'Category name',
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _posCtl,
+            keyboardType: const TextInputType.numberWithOptions(
+              signed: false,
+              decimal: false,
+            ),
+            decoration: const InputDecoration(
+              labelText: 'Display position',
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed:
+          _busy ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _busy ? null : _save,
+          child: _busy
+              ? const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
           )
               : const Text('Save'),
         ),
@@ -775,10 +891,8 @@ class _ManageVariantsSheetState
 
   Future<void> _addVariant() async {
     final label = _labelCtl.text.trim();
-    final price =
-        double.tryParse(_priceCtl.text.trim()) ?? 0.0;
-    final mrp =
-    double.tryParse(_mrpCtl.text.trim());
+    final price = double.tryParse(_priceCtl.text.trim()) ?? 0.0;
+    final mrp = double.tryParse(_mrpCtl.text.trim());
 
     setState(() => _saving = true);
 
@@ -802,10 +916,8 @@ class _ManageVariantsSheetState
       _mrpCtl.clear();
       _isDefault = false;
 
-      // refresh provider
-      ref.invalidate(
-        itemVariantsProvider(widget.itemId),
-      );
+      // refresh list
+      ref.invalidate(itemVariantsProvider(widget.itemId));
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -820,8 +932,7 @@ class _ManageVariantsSheetState
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content:
-            Text('Failed to add variant: $e'),
+            content: Text('Failed to add variant: $e'),
           ),
         );
       }
@@ -829,6 +940,175 @@ class _ManageVariantsSheetState
       if (mounted) {
         setState(() => _saving = false);
       }
+    }
+  }
+
+  Future<void> _editVariantDialog(ItemVariant v) async {
+    final lblCtl = TextEditingController(text: v.label);
+    final priceCtl =
+    TextEditingController(text: v.basePrice.toStringAsFixed(2));
+    final mrpCtl = TextEditingController(
+      text: v.mrp?.toStringAsFixed(2) ?? '',
+    );
+    bool isDef = v.isDefault;
+    bool savingLocal = false;
+
+    final changed = await showDialog<bool>(
+      context: context,
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (ctx, setSt) {
+            Future<void> save() async {
+              setSt(() => savingLocal = true);
+              try {
+                final repo = ref.read(catalogRepoProvider);
+
+                final parsedPrice =
+                    double.tryParse(priceCtl.text.trim()) ?? 0.0;
+                final parsedMrp = double.tryParse(mrpCtl.text.trim());
+
+                final updated = ItemVariant(
+                  id: v.id,
+                  itemId: v.itemId,
+                  label: lblCtl.text.trim(),
+                  mrp: parsedMrp ?? parsedPrice,
+                  basePrice: parsedPrice,
+                  isDefault: isDef,
+                );
+
+                await repo.updateVariant(updated);
+
+                // refresh main list
+                ref.invalidate(
+                  itemVariantsProvider(widget.itemId),
+                );
+
+                if (ctx.mounted) Navigator.pop(ctx, true);
+              } catch (e) {
+                if (ctx.mounted) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    SnackBar(
+                      content: Text('Update failed: $e'),
+                    ),
+                  );
+                }
+              } finally {
+                if (ctx.mounted) {
+                  setSt(() => savingLocal = false);
+                }
+              }
+            }
+
+            return AlertDialog(
+              title: Text('Edit "${v.label}"'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment:
+                  CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: lblCtl,
+                      decoration: const InputDecoration(
+                        labelText: 'Variant label',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: priceCtl,
+                      keyboardType:
+                      const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Base price (₹)',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: mrpCtl,
+                      keyboardType:
+                      const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'MRP (optional)',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Checkbox(
+                          value: isDef,
+                          onChanged: (val) {
+                            setSt(() {
+                              isDef = val ?? false;
+                            });
+                          },
+                        ),
+                        const Text('Default variant'),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: savingLocal
+                      ? null
+                      : () => Navigator.pop(ctx, false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: savingLocal ? null : save,
+                  child: savingLocal
+                      ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                    ),
+                  )
+                      : const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (changed == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Variant updated')),
+      );
+    }
+  }
+
+  Future<void> _deleteVariant(ItemVariant v) async {
+    final ok = await _confirmYesNo(
+      context,
+      'Delete variant "${v.label}"?',
+    );
+    if (ok != true) return;
+
+    try {
+      await ref.read(catalogRepoProvider).deleteVariant(v.id!);
+      ref.invalidate(itemVariantsProvider(widget.itemId));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Deleted ${v.label}'),
+          ),
+        );
+      }
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Delete failed: $err'),
+        ),
+      );
     }
   }
 
@@ -843,8 +1123,8 @@ class _ManageVariantsSheetState
           left: 16,
           right: 16,
           top: 16,
-          bottom: MediaQuery.of(context).viewInsets.bottom +
-              16,
+          bottom:
+          MediaQuery.of(context).viewInsets.bottom + 16,
         ),
         child: SingleChildScrollView(
           child: Column(
@@ -876,7 +1156,11 @@ class _ManageVariantsSheetState
                     children: vars.map((v) {
                       final price =
                       v.basePrice.toStringAsFixed(2);
-                      final mrp = v.mrp?.toStringAsFixed(2);
+                      final mrp =
+                      v.mrp?.toStringAsFixed(2);
+                      final txt = v.isDefault
+                          ? '₹$price (default)'
+                          : '₹$price${mrp != null ? ' MRP ₹$mrp' : ''}';
                       return ListTile(
                         dense: true,
                         contentPadding:
@@ -890,18 +1174,39 @@ class _ManageVariantsSheetState
                             FontWeight.w600,
                           ),
                         ),
-                        subtitle: Text(
-                          v.isDefault
-                              ? '₹$price (default)'
-                              : '₹$price${mrp != null ? ' MRP ₹$mrp' : ''}',
+                        subtitle: Text(txt),
+                        trailing: Row(
+                          mainAxisSize:
+                          MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(
+                                  Icons.edit),
+                              tooltip: 'Edit',
+                              onPressed: () =>
+                                  _editVariantDialog(
+                                      v),
+                            ),
+                            IconButton(
+                              icon: const Icon(
+                                Icons
+                                    .delete_outline,
+                                color:
+                                Colors.red,
+                              ),
+                              tooltip: 'Delete',
+                              onPressed: () =>
+                                  _deleteVariant(v),
+                            ),
+                          ],
                         ),
                       );
                     }).toList(),
                   );
                 },
                 loading: () => const Padding(
-                  padding: EdgeInsets.symmetric(
-                      vertical: 8),
+                  padding:
+                  EdgeInsets.symmetric(vertical: 8),
                   child: Center(
                     child:
                     CircularProgressIndicator(),
@@ -948,7 +1253,8 @@ class _ManageVariantsSheetState
                     .numberWithOptions(
                   decimal: true,
                 ),
-                decoration: const InputDecoration(
+                decoration:
+                const InputDecoration(
                   labelText: 'Base price (₹)',
                 ),
               ),
@@ -961,7 +1267,8 @@ class _ManageVariantsSheetState
                     .numberWithOptions(
                   decimal: true,
                 ),
-                decoration: const InputDecoration(
+                decoration:
+                const InputDecoration(
                   labelText: 'MRP (optional)',
                 ),
               ),
@@ -973,7 +1280,8 @@ class _ManageVariantsSheetState
                     value: _isDefault,
                     onChanged: (val) {
                       setState(() {
-                        _isDefault = val ?? false;
+                        _isDefault =
+                            val ?? false;
                       });
                     },
                   ),
@@ -991,7 +1299,8 @@ class _ManageVariantsSheetState
                           ? null
                           : () {
                         Navigator.pop(
-                            context, true);
+                            context,
+                            true);
                       },
                       child: const Text('Done'),
                     ),

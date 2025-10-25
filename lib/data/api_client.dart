@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:http/http.dart' as _http;
 import 'package:dio/dio.dart';
 
 import 'models.dart';
@@ -227,24 +226,35 @@ class ApiClient {
   Future<String> login({
     required String mobile,
     required String password,
+    String? pin,
   }) async {
+    // Build query params dynamically so we only send pin if it's provided
+    final qp = <String, String>{
+      'mobile': mobile,
+      'password': password,
+    };
+    if (pin != null && pin.isNotEmpty) {
+      qp['pin'] = pin;
+    }
+
     final uri = Uri.parse('$baseUrl/auth/login').replace(
-      queryParameters: {
-        'mobile': mobile,
-        'password': password,
-      },
+      queryParameters: qp,
     );
+
     final r = await http.post(uri, headers: _headers());
     final data = _decodeOrThrow(r);
+
     if (data is Map) {
-      for (final k
-      in ['access_token', 'token', 'jwt', 'id_token']) {
+      for (final k in ['access_token', 'token', 'jwt', 'id_token']) {
         final v = data[k];
         if (v is String && v.isNotEmpty) return v;
       }
     }
+
     throw ApiException(
-        'Token not found in login response', r.statusCode);
+      'Token not found in login response',
+      r.statusCode,
+    );
   }
 
   Future<dynamic> healthz() => _get('/healthz');
@@ -374,13 +384,6 @@ class ApiClient {
 
   // ---------- Settings / Printers / Stations ----------
 
-  Future<Printer> createPrinter(Printer p) =>
-      createOne<Printer>(
-        path: '/settings/printers',
-        body: p.toJson(),
-        fromJson: Printer.fromJson,
-      );
-
   Future<KitchenStation> createStation(
       KitchenStation s) =>
       createOne<KitchenStation>(
@@ -438,9 +441,6 @@ class ApiClient {
         fromJson: MenuCategory.fromJson,
       );
 
-  Future<void> deleteCategory(String id) =>
-      _delete('/menu/categories/$id');
-
   Future<List<MenuItem>> fetchItems({
     String? categoryId,
     String? tenantId,
@@ -458,14 +458,6 @@ class ApiClient {
   Future<MenuItem> createItem(MenuItem data) =>
       createOne<MenuItem>(
         path: '/menu/items',
-        body: data.toJson(),
-        fromJson: MenuItem.fromJson,
-      );
-
-  Future<MenuItem> updateItem(
-      String id, MenuItem data) =>
-      updateOne<MenuItem>(
-        path: '/menu/items/$id',
         body: data.toJson(),
         fromJson: MenuItem.fromJson,
       );
@@ -492,7 +484,7 @@ class ApiClient {
     // build URL like: /menu/items/<id>/modifiers_full
     final uri = Uri.parse('$baseUrl/menu/items/$itemId/modifiers_full');
 
-    final res = await _http.get(
+    final res = await http.get(
       uri,
       headers: _headers(), // same auth/json headers you use elsewhere
     );
@@ -504,21 +496,7 @@ class ApiClient {
     }
 
     final decoded = jsonDecode(res.body);
-    // backend returns a JSON array:
-    // [
-    //   {
-    //     "group_id": "...",
-    //     "name": "...",
-    //     "required": false,
-    //     "min_sel": 0,
-    //     "max_sel": 3,
-    //     "modifiers": [
-    //        {"id":"...","name":"Extra Cheese","price_delta":20.0},
-    //        ...
-    //     ]
-    //   },
-    //   ...
-    // ]
+    // backend returns an array of groups with their modifiers
     if (decoded is List) {
       return decoded;
     }
@@ -885,73 +863,6 @@ class ApiClient {
     );
   }
 
-  Future<void> openDrawer() async =>
-      _post('/print/open_drawer');
-
-  // ---------- Kitchen Tickets (KOT) ----------
-
-  Future<List<KitchenTicket>> fetchKitchenTickets({
-    KOTStatus? status,
-  }) {
-    return listAll<KitchenTicket>(
-      path: '/kot/tickets',
-      params: {'status': status?.name}
-        ..removeWhere((k, v) => v == null),
-      fromJson: KitchenTicket.fromJson,
-    );
-  }
-
-  Future<KitchenTicket> createKitchenTicket({
-    required String orderId,
-    required int ticketNo,
-    String? targetStation,
-  }) async {
-    final r = await _post(
-      '/kot/tickets',
-      params: {
-        'order_id': orderId,
-        'ticket_no': ticketNo,
-        'target_station': targetStation,
-      }..removeWhere((k, v) => v == null),
-    );
-    return KitchenTicket.fromJson(
-      Map<String, dynamic>.from(r as Map),
-    );
-  }
-
-  Future<void> reprintKitchenTicket(
-      String ticketId, {
-        String? reason,
-      }) async {
-    await _post(
-      '/kot/$ticketId/reprint',
-      params: {'reason': reason},
-    );
-  }
-
-  Future<void> cancelKitchenTicket(
-      String ticketId, {
-        String? reason,
-      }) async {
-    await _post(
-      '/kot/$ticketId/cancel',
-      params: {'reason': reason},
-    );
-  }
-
-  Future<KitchenTicket> patchKitchenTicketStatus(
-      String id,
-      KOTStatus status,
-      ) async {
-    final r = await _patch(
-      '/kot/$id',
-      body: {'status': status.name},
-    );
-    return KitchenTicket.fromJson(
-      Map<String, dynamic>.from(r as Map),
-    );
-  }
-
   // ---------- Inventory ----------
 
   Future<Ingredient> createIngredient(Ingredient i) =>
@@ -1061,34 +972,156 @@ class ApiClient {
     return <Map<String, dynamic>>[];
   }
 
-  // ---------- Users / Roles ----------
+  // ---------- Auth / Me ----------
 
-  Future<User> createUser(
-      User u, {
-        String? password,
-        String? pin,
-        List<String>? roles,
-      }) =>
-      createOne<User>(
-        path: '/users/',
-        body: {
-          ...u.toJson(),
-          if (password != null) 'password': password,
-          if (pin != null) 'pin': pin,
-          if (roles != null) 'roles': roles,
-        },
-        fromJson: User.fromJson,
-      );
+  Future<MeInfo> fetchMe() async {
+    // GET /auth/me
+    final r = await _get('/auth/me');
+    final map = Map<String, dynamic>.from(r as Map);
+    return MeInfo.fromJson(map);
+  }
 
-  Future<List<Role>> listRoles({
+  // ---------- Users / Roles / Permissions ----------
+
+  /// List all users in this tenant (id, name, mobile, active, roles[])
+  Future<List<UserSummary>> listUsers({String? tenantId}) async {
+    final r = await _get(
+      '/users/',
+      params: {
+        if (tenantId != null && tenantId.isNotEmpty)
+          'tenant_id': tenantId,
+      },
+    );
+
+    if (r is List) {
+      return r
+          .map(
+            (row) => UserSummary.fromJson(
+          Map<String, dynamic>.from(row as Map),
+        ),
+      )
+          .toList();
+    }
+
+    return <UserSummary>[];
+  }
+
+  /// Create a user (optionally with password, pin, and initial roles).
+  /// Returns new user id.
+  Future<String> createUser({
     required String tenantId,
-  }) =>
-      listAll<Role>(
-        path: '/users/roles',
-        params: {'tenant_id': tenantId},
-        fromJson: Role.fromJson,
-      );
+    required String name,
+    String? mobile,
+    String? email,
+    String? password,
+    String? pin,
+    List<String>? roles,
+  }) async {
+    final body = <String, dynamic>{
+      'tenant_id': tenantId,
+      'name': name,
+      if (mobile != null && mobile.isNotEmpty) 'mobile': mobile,
+      if (email != null && email.isNotEmpty) 'email': email,
+      if (password != null && password.isNotEmpty) 'password': password,
+      if (pin != null && pin.isNotEmpty) 'pin': pin,
+      if (roles != null && roles.isNotEmpty) 'roles': roles,
+    };
 
+    final resp = await _post('/users/', body: body);
+    final map = Map<String, dynamic>.from(resp as Map);
+    return map['id']?.toString() ?? '';
+  }
+
+  /// Optional helper if you later want to rename / deactivate a user
+  Future<void> updateUserBasic(
+      String userId, {
+        String? name,
+        String? mobile,
+        String? email,
+        bool? active,
+      }) async {
+    await _patch(
+      '/users/$userId',
+      body: {
+        if (name != null) 'name': name,
+        if (mobile != null) 'mobile': mobile,
+        if (email != null) 'email': email,
+        if (active != null) 'active': active,
+      },
+    );
+  }
+
+  /// Give this user 1+ role codes (["CASHIER","WAITER"])
+  Future<void> assignUserRoles(
+      String userId,
+      List<String> roles,
+      ) async {
+    await _post(
+      '/users/$userId/roles',
+      body: {
+        'roles': roles,
+      },
+    );
+  }
+
+  /// Remove a role code from a user
+  Future<void> removeUserRole(String userId, String roleCode) async {
+    await _delete('/users/$userId/roles/$roleCode');
+  }
+
+  /// List roles for a tenant
+  Future<List<Role>> listRoles({required String tenantId}) async {
+    final r = await _get(
+      '/users/roles',
+      params: {
+        'tenant_id': tenantId,
+      },
+    );
+    if (r is List) {
+      return r
+          .map(
+            (row) => Role.fromJson(
+          Map<String, dynamic>.from(row as Map),
+        ),
+      )
+          .toList();
+    }
+    return <Role>[];
+  }
+
+  /// Create a role code in a tenant, returns new role id
+  Future<String> createRole({
+    required String tenantId,
+    required String code,
+  }) async {
+    final resp = await _post(
+      '/users/roles',
+      body: {
+        'tenant_id': tenantId,
+        'code': code,
+      },
+    );
+    final map = Map<String, dynamic>.from(resp as Map);
+    return map['id']?.toString() ?? '';
+  }
+
+  /// List all possible permissions in the system
+  Future<List<PermissionInfo>> listPermissions() async {
+    final r = await _get('/users/permissions');
+    if (r is List) {
+      return r
+          .map(
+            (row) => PermissionInfo.fromJson(
+          Map<String, dynamic>.from(row as Map),
+        ),
+      )
+          .toList();
+    }
+    return <PermissionInfo>[];
+  }
+
+  /// Grant permissions to a role
+  /// POST /users/roles/{role_id}/grant { "permissions": ["SETTINGS_EDIT", ...] }
   Future<void> grantRolePermissions(
       String roleId,
       List<String> permissions,
@@ -1097,6 +1130,15 @@ class ApiClient {
       '/users/roles/$roleId/grant',
       body: {'permissions': permissions},
     );
+  }
+
+  /// Revoke a single permission from a role
+  /// DELETE /users/roles/{role_id}/revoke/{perm_code}
+  Future<void> revokeRolePermission(
+      String roleId,
+      String permCode,
+      ) async {
+    await _delete('/users/roles/$roleId/revoke/$permCode');
   }
 
   // ---------- Sync ----------
@@ -1175,5 +1217,230 @@ class ApiClient {
     );
 
     return out;
+  }
+
+  // GET /settings/restaurant?tenant_id=...&branch_id=...
+  Future<Map<String, dynamic>> fetchRestaurantSettings({
+    required String tenantId,
+    required String branchId,
+  }) async {
+    final r = await _get(
+      '/settings/restaurant',
+      params: {
+        'tenant_id': tenantId,
+        'branch_id': branchId,
+      },
+    );
+    if (r == null) return {};
+    return Map<String, dynamic>.from(r as Map);
+  }
+
+  // POST /settings/restaurant  (upsert)
+  Future<void> saveRestaurantSettings(Map<String, dynamic> body) async {
+    await _post('/settings/restaurant', body: body);
+  }
+
+  // POST /settings/printers
+  Future<String> createPrinter({
+    required String tenantId,
+    required String branchId,
+    required String name,
+    required String type,          // "BILLING" or "KITCHEN"
+    required String connectionUrl, // e.g. http://192.168.0.50:9100/print
+    bool cashDrawerEnabled = false,
+    String? cashDrawerCode,
+  }) async {
+    final r = await _post(
+      '/settings/printers',
+      body: {
+        'tenant_id': tenantId,
+        'branch_id': branchId,
+        'name': name,
+        'type': type,
+        'connection_url': connectionUrl,
+        'is_default': type == 'BILLING', // first billing printer? feel free
+        'cash_drawer_enabled': cashDrawerEnabled,
+        'cash_drawer_code': cashDrawerCode,
+      }..removeWhere((k, v) => v == null),
+    );
+    final map = Map<String, dynamic>.from(r as Map);
+    return map['id'] as String;
+  }
+
+  // PATCH /settings/printers/{printer_id}
+  Future<void> updatePrinter(
+      String printerId, {
+        String? name,
+        String? connectionUrl,
+        bool? isDefault,
+        String? type,
+        bool? cashDrawerEnabled,
+        String? cashDrawerCode,
+      }) async {
+    final body = <String, dynamic>{
+      if (name != null) 'name': name,
+      if (connectionUrl != null) 'connection_url': connectionUrl,
+      if (isDefault != null) 'is_default': isDefault,
+      if (type != null) 'type': type,
+      if (cashDrawerEnabled != null)
+        'cash_drawer_enabled': cashDrawerEnabled,
+      if (cashDrawerCode != null) 'cash_drawer_code': cashDrawerCode,
+    };
+    await _patch('/settings/printers/$printerId', body: body);
+  }
+
+  Future<void> openDrawer({
+    String? tenantId,
+    String? branchId,
+  }) async {
+    await _post(
+      '/print/open_drawer',
+      params: {
+        if (tenantId != null) 'tenant_id': tenantId,
+        if (branchId != null) 'branch_id': branchId,
+      },
+    );
+  }
+
+  /// Print a GST invoice for an already-created invoice record.
+  /// POST /print/invoice/{invoice_id}
+  Future<void> printInvoiceById(String invoiceId, {String? reason}) async {
+    await _post(
+      '/print/invoice/$invoiceId',
+      body: {
+        if (reason != null) 'reason': reason,
+      },
+    );
+  }
+
+  Future<List<KitchenTicket>> fetchKitchenTickets({
+    KOTStatus? status,
+  }) {
+    return listAll<KitchenTicket>(
+      path: '/kot/tickets',
+      params: {'status': status?.name}
+        ..removeWhere((k, v) => v == null),
+      fromJson: KitchenTicket.fromJson,
+    );
+  }
+
+  Future<KitchenTicket> createKitchenTicket({
+    required String orderId,
+    required int ticketNo,
+    String? targetStation,
+  }) async {
+    final r = await _post(
+      '/kot/tickets',
+      params: {
+        'order_id': orderId,
+        'ticket_no': ticketNo,
+        'target_station': targetStation,
+      }..removeWhere((k, v) => v == null),
+    );
+    return KitchenTicket.fromJson(
+      Map<String, dynamic>.from(r as Map),
+    );
+  }
+
+  Future<void> reprintKitchenTicket(
+      String ticketId, {
+        String? reason,
+      }) async {
+    await _post(
+      '/kot/$ticketId/reprint',
+      params: {'reason': reason},
+    );
+  }
+
+  Future<void> cancelKitchenTicket(
+      String ticketId, {
+        String? reason,
+      }) async {
+    await _post(
+      '/kot/$ticketId/cancel',
+      params: {'reason': reason},
+    );
+  }
+
+  Future<KitchenTicket> patchKitchenTicketStatus(
+      String id,
+      KOTStatus status,
+      ) async {
+    final r = await _patch(
+      '/kot/$id',
+      body: {'status': status.name},
+    );
+    return KitchenTicket.fromJson(
+      Map<String, dynamic>.from(r as Map),
+    );
+  }
+
+  // ---------- Menu (extra helpers we now support) ----------
+
+  Future<MenuCategory> patchCategory(String id, MenuCategory data) async {
+    final r = await _patch(
+      '/menu/categories/$id',
+      body: data.toJson(),
+    );
+    return MenuCategory.fromJson(Map<String, dynamic>.from(r as Map));
+  }
+
+  Future<void> deleteCategory(String id) async {
+    await _delete('/menu/categories/$id');
+  }
+
+  Future<MenuItem> updateItem(String id, MenuItem data) async {
+    final r = await _patch(
+      '/menu/items/$id',
+      body: data.toJson(),
+    );
+    return MenuItem.fromJson(Map<String, dynamic>.from(r as Map));
+  }
+
+  // variants update/delete
+  Future<ItemVariant> updateVariant(
+      String variantId,
+      ItemVariant data,
+      ) async {
+    final r = await _patch(
+      '/menu/variants/$variantId',
+      body: data.toJson(),
+    );
+    return ItemVariant.fromJson(Map<String, dynamic>.from(r as Map));
+  }
+
+  Future<void> deleteVariant(String variantId) async {
+    await _delete('/menu/variants/$variantId');
+  }
+
+  // ---------- Inventory ----------
+
+  Future<List<Ingredient>> fetchIngredients({
+    String? tenantId,
+  }) {
+    return listAll<Ingredient>(
+      path: '/inventory/ingredients',
+      params: {
+        'tenant_id': tenantId,
+      }..removeWhere((k, v) => v == null),
+      fromJson: Ingredient.fromJson,
+    );
+  }
+
+  Future<Ingredient> updateIngredient(
+      String ingredientId, {
+        String? name,
+        String? uom,
+        double? minLevel,
+      }) async {
+    final r = await _patch(
+      '/inventory/ingredients/$ingredientId',
+      body: {
+        if (name != null) 'name': name,
+        if (uom != null) 'uom': uom,
+        if (minLevel != null) 'min_level': minLevel,
+      },
+    );
+    return Ingredient.fromJson(Map<String, dynamic>.from(r as Map));
   }
 }

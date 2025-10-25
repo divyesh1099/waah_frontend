@@ -4,6 +4,34 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:waah_frontend/data/models.dart';
 import 'package:waah_frontend/data/repo/catalog_repo.dart';
 
+extension MenuItemCopy on MenuItem {
+  MenuItem copyWith({
+    String? name,
+    String? description,
+    bool? isActive,
+    bool? stockOut,
+    bool? taxInclusive,
+    double? gstRate,
+  }) {
+    return MenuItem(
+      id: id,
+      tenantId: tenantId,
+      name: name ?? this.name,
+      description: description ?? this.description,
+      categoryId: categoryId,
+      sku: sku,
+      hsn: hsn,
+      isActive: isActive ?? this.isActive,
+      stockOut: stockOut ?? this.stockOut,
+      taxInclusive: taxInclusive ?? this.taxInclusive,
+      gstRate: gstRate ?? this.gstRate,
+      kitchenStationId: kitchenStationId,
+      createdAt: createdAt,
+      updatedAt: updatedAt,
+    );
+  }
+}
+
 class MenuItemDetailPage extends ConsumerStatefulWidget {
   const MenuItemDetailPage({
     super.key,
@@ -13,36 +41,53 @@ class MenuItemDetailPage extends ConsumerStatefulWidget {
   final MenuItem item;
 
   @override
-  ConsumerState<MenuItemDetailPage> createState() => _MenuItemDetailPageState();
+  ConsumerState<MenuItemDetailPage> createState() =>
+      _MenuItemDetailPageState();
 }
 
-class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
+class _MenuItemDetailPageState
+    extends ConsumerState<MenuItemDetailPage> {
+  late TextEditingController _nameCtl;
+  late TextEditingController _descCtl;
   late TextEditingController _gstCtl;
+
+  late bool _isActive;
+  late bool _stockOut;
   late bool _taxInclusive;
+
   bool _saving = false;
 
   @override
   void initState() {
     super.initState();
+
+    _nameCtl = TextEditingController(text: widget.item.name);
+    _descCtl =
+        TextEditingController(text: widget.item.description ?? '');
     _gstCtl = TextEditingController(
       text: widget.item.gstRate.toStringAsFixed(2),
     );
+
+    _isActive = widget.item.isActive;
+    _stockOut = widget.item.stockOut;
     _taxInclusive = widget.item.taxInclusive;
   }
 
   @override
   void dispose() {
+    _nameCtl.dispose();
+    _descCtl.dispose();
     _gstCtl.dispose();
     super.dispose();
   }
 
-  Future<void> _saveTax() async {
+  Future<void> _saveItem() async {
     if (_saving) return;
     final id = widget.item.id;
     if (id == null) return;
 
-    final parsed = double.tryParse(_gstCtl.text.trim());
-    if (parsed == null) {
+    final gstParsed = double.tryParse(_gstCtl.text.trim());
+    if (gstParsed == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Invalid GST rate')),
@@ -55,17 +100,26 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
     });
 
     try {
-      await ref.read(catalogRepoProvider).updateItemTax(
-        id,
-        gstRate: parsed,
+      final repo = ref.read(catalogRepoProvider);
+
+      final updatedDraft = widget.item.copyWith(
+        name: _nameCtl.text.trim(),
+        description: _descCtl.text.trim().isEmpty
+            ? null
+            : _descCtl.text.trim(),
+        isActive: _isActive,
+        stockOut: _stockOut,
         taxInclusive: _taxInclusive,
+        gstRate: gstParsed,
       );
+
+      // IMPORTANT: pass id + draft, to match CatalogRepo.updateItem(String id, MenuItem data)
+      await repo.updateItem(id, updatedDraft);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Saved ✅')),
         );
-        // pop back, signal change = true so list can refresh
         Navigator.of(context).pop(true);
       }
     } catch (err) {
@@ -102,9 +156,10 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Deleted ${widget.item.name}')),
+          SnackBar(
+            content: Text('Deleted ${widget.item.name}'),
+          ),
         );
-        // pop back, signal change so parent can refresh
         Navigator.of(context).pop(true);
       }
     } catch (err) {
@@ -140,34 +195,68 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // Basic info preview
-          Text(
-            it.name,
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          const SizedBox(height: 4),
-          if (it.description != null && it.description!.trim().isNotEmpty)
-            Text(
-              it.description!.trim(),
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-          const SizedBox(height: 8),
-          Text(
-            it.stockOut ? 'OUT OF STOCK' : 'In stock',
-            style: TextStyle(
-              color: it.stockOut ? Colors.red : Colors.green,
-              fontWeight: FontWeight.w600,
+          // Item name
+          TextField(
+            controller: _nameCtl,
+            enabled: !_saving,
+            decoration: const InputDecoration(
+              labelText: 'Item name',
+              border: OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 16),
-          const Divider(),
+
+          // Description
+          TextField(
+            controller: _descCtl,
+            enabled: !_saving,
+            maxLines: 2,
+            decoration: const InputDecoration(
+              labelText: 'Description',
+              border: OutlineInputBorder(),
+            ),
+          ),
           const SizedBox(height: 16),
+
+          // Active / Stock Out toggles
+          SwitchListTile.adaptive(
+            title: const Text('Active in menu'),
+            subtitle:
+            const Text('If OFF, POS should hide this item'),
+            value: _isActive,
+            onChanged: _saving
+                ? null
+                : (val) {
+              setState(() {
+                _isActive = val;
+                // If inactive -> force stockOut true for clarity
+                if (!_isActive) _stockOut = true;
+              });
+            },
+          ),
+          SwitchListTile.adaptive(
+            title: const Text('Out of stock'),
+            subtitle: const Text(
+              'If ON, POS should block ordering',
+            ),
+            value: _stockOut,
+            onChanged: _saving
+                ? null
+                : (val) {
+              setState(() {
+                _stockOut = val;
+                // If NOT out of stock -> force active true
+                if (!_stockOut) _isActive = true;
+              });
+            },
+          ),
+          const Divider(height: 32),
 
           // Tax Inclusive toggle
           SwitchListTile.adaptive(
             title: const Text('Tax inclusive price'),
-            subtitle:
-            const Text('If ON, your menu price is GST-inclusive'),
+            subtitle: const Text(
+                'If ON, menu price is GST-inclusive'),
             value: _taxInclusive,
             onChanged: _saving
                 ? null
@@ -177,14 +266,13 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
               });
             },
           ),
-
           const SizedBox(height: 12),
 
           // GST rate field
           TextField(
             controller: _gstCtl,
             enabled: !_saving,
-            keyboardType: TextInputType.numberWithOptions(
+            keyboardType: const TextInputType.numberWithOptions(
               decimal: true,
               signed: false,
             ),
@@ -207,8 +295,8 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
               ),
             )
                 : const Icon(Icons.save),
-            label: Text(_saving ? 'Saving...' : 'Save Tax'),
-            onPressed: _saving ? null : _saveTax,
+            label: Text(_saving ? 'Saving...' : 'Save Item'),
+            onPressed: _saving ? null : _saveItem,
           ),
         ],
       ),
