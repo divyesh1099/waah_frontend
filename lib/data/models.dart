@@ -648,8 +648,13 @@ class Order {
     orderNo: _numToInt(j['order_no']) ?? 0,
     channel: _enum<OrderChannel>(_str(j['channel']), OrderChannel.values, (e) => e.name,
         orElse: OrderChannel.DINE_IN),
-    provider:
-    _enum<OnlineProvider>(_str(j['provider']), OnlineProvider.values, (e) => e.name, orElse: null),
+    provider: j['provider'] == null
+        ? null
+        : _enum<OnlineProvider>(
+      _str(j['provider']),
+      OnlineProvider.values,
+          (e) => e.name,
+    ),
     status: _enum<OrderStatus>(_str(j['status']), OrderStatus.values, (e) => e.name,
         orElse: OrderStatus.OPEN),
     tableId: _str(j['table_id']),
@@ -1061,3 +1066,50 @@ class BackupConfig {
     'schedule_cron': scheduleCron,
   };
 }
+
+/// ---------- Order detail view (frontend only helper) ----------
+
+class OrderTotals {
+  final double subtotal;
+  final double tax;
+  final double total;
+  final double paid;
+  final double due;
+
+  OrderTotals({
+    required this.subtotal,
+    required this.tax,
+    required this.total,
+    required this.paid,
+    required this.due,
+  });
+
+  factory OrderTotals.fromJson(Map<String, dynamic> j) => OrderTotals(
+    // backend compute_bill may use slightly different keys, so we’re defensive
+    subtotal: _numToDouble(j['subtotal']) ??
+        _numToDouble(j['sub_total']) ??
+        _numToDouble(j['subTotal']) ??
+        0,
+    tax: _numToDouble(j['tax']) ??
+        _numToDouble(j['tax_total']) ??
+        _numToDouble(j['taxTotal']) ??
+        0,
+    total: _numToDouble(j['total']) ??
+        _numToDouble(j['grand_total']) ??
+        _numToDouble(j['grandTotal']) ??
+        0,
+    paid: _numToDouble(j['paid']) ?? 0,
+    due: _numToDouble(j['due']) ??
+        _numToDouble(j['total_due']) ??
+        _numToDouble(j['totalDue']) ??
+        0,
+  );
+}
+
+/// Wrapper for detail screen: high-level order + its totals
+class OrderDetail {
+  final Order order;
+  final OrderTotals totals;
+  OrderDetail({required this.order, required this.totals});
+}
+

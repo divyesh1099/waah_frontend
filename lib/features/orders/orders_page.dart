@@ -1,3 +1,4 @@
+// lib/features/orders/orders_page.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -6,14 +7,24 @@ import '../../data/api_client.dart';
 import '../../data/models.dart';
 
 /// ---- Filters ----
+/// null = show all
 final orderStatusFilterProvider = StateProvider<OrderStatus?>((_) => null);
 
-/// ---- Data (loads a single page for now) ----
-final ordersFutureProvider = FutureProvider.autoDispose<List<Order>>((ref) async {
+/// ---- Orders list (one page for now) ----
+final ordersFutureProvider =
+FutureProvider.autoDispose<List<Order>>((ref) async {
   final client = ref.watch(apiClientProvider);
   final status = ref.watch(orderStatusFilterProvider);
-  final page = await client.fetchOrders(status: status); // returns PageResult<Order>
+  final page = await client.fetchOrders(status: status);
   return page.items;
+});
+
+/// ---- Single order detail (with totals) ----
+/// We'll fetch this when user taps an order row.
+final orderDetailFutureProvider = FutureProvider.autoDispose
+    .family<OrderDetail, String>((ref, orderId) async {
+  final client = ref.watch(apiClientProvider);
+  return client.getOrderDetail(orderId);
 });
 
 class OrdersPage extends ConsumerWidget {
@@ -29,7 +40,40 @@ class OrdersPage extends ConsumerWidget {
         title: const Text('Orders'),
         actions: [
           IconButton(
-            tooltip: 'Refresh',
+            tooltip: 'Sync Online',
+            icon: const Icon(Icons.sync),
+            onPressed: () async {
+              // super barebones sync tap:
+              final client = ref.read(apiClientProvider);
+              try {
+                // push a dummy sync event like our test script does
+                await client.syncPush(
+                  deviceId: 'flutter-demo',
+                  ops: const [
+                    {
+                      'entity': 'ping',
+                      'entity_id': 'flutter-demo',
+                      'op': 'UPSERT',
+                      'payload': {'hello': 'world'}
+                    }
+                  ],
+                );
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Sync pushed ✅')),
+                  );
+                }
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Sync failed: $e')),
+                  );
+                }
+              }
+            },
+          ),
+          IconButton(
+            tooltip: 'Refresh list',
             icon: const Icon(Icons.refresh),
             onPressed: () => ref.invalidate(ordersFutureProvider),
           ),
@@ -39,7 +83,8 @@ class OrdersPage extends ConsumerWidget {
         children: [
           _FilterBar(
             status: status,
-            onChanged: (s) => ref.read(orderStatusFilterProvider.notifier).state = s,
+            onChanged: (s) =>
+            ref.read(orderStatusFilterProvider.notifier).state = s,
           ),
           const Divider(height: 0),
           Expanded(
@@ -49,16 +94,33 @@ class OrdersPage extends ConsumerWidget {
                   return const _Empty();
                 }
                 return RefreshIndicator(
-                  onRefresh: () async => ref.invalidate(ordersFutureProvider),
+                  onRefresh: () async =>
+                      ref.invalidate(ordersFutureProvider),
                   child: ListView.separated(
                     itemCount: orders.length,
-                    separatorBuilder: (_, __) => const Divider(height: 0),
-                    itemBuilder: (context, i) => _OrderTile(order: orders[i]),
+                    separatorBuilder: (_, __) =>
+                    const Divider(height: 0),
+                    itemBuilder: (context, i) => _OrderTile(
+                      order: orders[i],
+                      onTap: () {
+                        showModalBottomSheet(
+                          context: context,
+                          isScrollControlled: true,
+                          builder: (ctx) => OrderDetailSheet(
+                            orderId: orders[i].id!,
+                          ),
+                        );
+                      },
+                    ),
                   ),
                 );
               },
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, st) => _Error(e: e, onRetry: () => ref.invalidate(ordersFutureProvider)),
+              loading: () =>
+              const Center(child: CircularProgressIndicator()),
+              error: (e, st) => _Error(
+                e: e,
+                onRetry: () => ref.invalidate(ordersFutureProvider),
+              ),
             ),
           ),
         ],
@@ -67,18 +129,27 @@ class OrdersPage extends ConsumerWidget {
   }
 }
 
+/// Top bar with status dropdown etc.
 class _FilterBar extends StatelessWidget {
-  const _FilterBar({required this.status, required this.onChanged});
+  const _FilterBar({
+    required this.status,
+    required this.onChanged,
+  });
+
   final OrderStatus? status;
   final void Function(OrderStatus?) onChanged;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      padding:
+      const EdgeInsets.fromLTRB(12, 8, 12, 8),
       child: Row(
         children: [
-          const Text('Status:', style: TextStyle(fontWeight: FontWeight.w500)),
+          const Text(
+            'Status:',
+            style: TextStyle(fontWeight: FontWeight.w500),
+          ),
           const SizedBox(width: 12),
           DropdownButton<OrderStatus?>(
             value: status,
@@ -97,40 +168,49 @@ class _FilterBar extends StatelessWidget {
             ],
           ),
           const Spacer(),
-          // Room for future: search box, date filter, etc.
+          // room for future: search/date filters
         ],
       ),
     );
   }
 }
 
+/// One row in the list
 class _OrderTile extends StatelessWidget {
-  const _OrderTile({required this.order});
+  const _OrderTile({
+    required this.order,
+    required this.onTap,
+  });
+
   final Order order;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final opened = order.openedAt?.toLocal();
     final openedStr = opened == null
         ? '—'
-        : '${opened.year}-${_2(opened.month)}-${_2(opened.day)} '
-        '${_2(opened.hour)}:${_2(opened.minute)}';
+        : '${opened.year}-${_two(opened.month)}-${_two(opened.day)} '
+        '${_two(opened.hour)}:${_two(opened.minute)}';
 
     return ListTile(
-      title: Text('#${order.orderNo} • ${order.channel.name}'),
-      subtitle: Text('Opened: $openedStr'
-          '${order.tableId != null ? '  |  Table: ${order.tableId}' : ''}'),
+      title: Text(
+        '#${order.orderNo} • ${order.channel.name}',
+        style: const TextStyle(fontWeight: FontWeight.w600),
+      ),
+      subtitle: Text(
+        'Opened: $openedStr'
+            '${order.tableId != null ? '  |  Table: ${order.tableId}' : ''}',
+      ),
       trailing: _StatusChip(status: order.status),
-      onTap: () {
-        // TODO: push to order details when we add that page
-        // context.push('/orders/${order.id}');
-      },
+      onTap: onTap,
     );
   }
 
-  String _2(int v) => v.toString().padLeft(2, '0');
+  String _two(int v) => v.toString().padLeft(2, '0');
 }
 
+/// Colored chip for status
 class _StatusChip extends StatelessWidget {
   const _StatusChip({required this.status});
   final OrderStatus status;
@@ -158,15 +238,262 @@ class _StatusChip extends StatelessWidget {
         bg = Colors.red.shade100;
         break;
     }
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding:
+      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(999),
       ),
-      child: Text(status.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+      child: Text(
+        status.name,
+        style:
+        const TextStyle(fontWeight: FontWeight.w600),
+      ),
     );
   }
+}
+
+/// Bottom sheet with order totals
+class OrderDetailSheet extends ConsumerWidget {
+  const OrderDetailSheet({super.key, required this.orderId});
+  final String orderId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final detailAsync =
+    ref.watch(orderDetailFutureProvider(orderId));
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+            16, 16, 16, 24),
+        child: detailAsync.when(
+          data: (detail) {
+            final o = detail.order;
+            final t = detail.totals;
+
+            return SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment:
+                CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        'Order #${o.orderNo}',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      _StatusChip(status: o.status),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () =>
+                            Navigator.of(context).pop(),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Channel: ${o.channel.name}'
+                        '${o.tableId != null ? ' | Table: ${o.tableId}' : ''}',
+                  ),
+                  if (o.pax != null)
+                    Text('PAX: ${o.pax}'),
+                  if (o.note != null &&
+                      o.note!.trim().isNotEmpty)
+                    Text(
+                      'Note: ${o.note}',
+                      style: const TextStyle(
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  const SizedBox(height: 16),
+                  const Divider(),
+                  const SizedBox(height: 8),
+                  _TotalRow(
+                      label: 'Subtotal',
+                      value: t.subtotal),
+                  _TotalRow(
+                      label: 'Tax',
+                      value: t.tax),
+                  const Divider(),
+                  _TotalRow(
+                    label: 'Total',
+                    value: t.total,
+                    isBold: true,
+                  ),
+                  const SizedBox(height: 8),
+                  _TotalRow(
+                    label: 'Paid',
+                    value: t.paid,
+                  ),
+                  _TotalRow(
+                    label: 'Due',
+                    value: t.due,
+                    isBold: true,
+                    highlight: t.due > 0.01,
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          icon: const Icon(
+                              Icons.receipt_long),
+                          label: const Text(
+                              'Invoice'),
+                          onPressed: () async {
+                            final client = ref
+                                .read(apiClientProvider);
+                            try {
+                              await client
+                                  .createInvoice(
+                                  orderId);
+                              if (context
+                                  .mounted) {
+                                ScaffoldMessenger.of(
+                                    context)
+                                    .showSnackBar(
+                                  const SnackBar(
+                                      content: Text(
+                                          'Invoice requested')),
+                                );
+                              }
+                            } catch (e) {
+                              if (context
+                                  .mounted) {
+                                ScaffoldMessenger.of(
+                                    context)
+                                    .showSnackBar(
+                                  SnackBar(
+                                      content: Text(
+                                          'Invoice failed: $e')),
+                                );
+                              }
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton.icon(
+                          icon: const Icon(
+                              Icons.print),
+                          label: const Text(
+                              'Print Bill'),
+                          onPressed: () async {
+                            // optional hook for /print/invoice etc.
+                            if (context
+                                .mounted) {
+                              ScaffoldMessenger.of(
+                                  context)
+                                  .showSnackBar(
+                                const SnackBar(
+                                    content: Text(
+                                        'TODO: send print to billing printer')),
+                              );
+                            }
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+          loading: () => const SizedBox(
+            height: 200,
+            child: Center(
+              child: CircularProgressIndicator(),
+            ),
+          ),
+          error: (e, st) => SizedBox(
+            height: 200,
+            child: Center(
+              child: Padding(
+                padding:
+                const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisSize:
+                  MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Failed to load order:\n$e',
+                      textAlign:
+                      TextAlign.center,
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton(
+                      onPressed: () => ref
+                          .invalidate(
+                          orderDetailFutureProvider(
+                              orderId)),
+                      child: const Text(
+                          'Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// row like  "Subtotal .... 123.45"
+class _TotalRow extends StatelessWidget {
+  const _TotalRow({
+    required this.label,
+    required this.value,
+    this.isBold = false,
+    this.highlight = false,
+  });
+
+  final String label;
+  final double value;
+  final bool isBold;
+  final bool highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    final txtStyle = TextStyle(
+      fontWeight: isBold ? FontWeight.w600 : null,
+      color: highlight ? Colors.red.shade700 : null,
+    );
+
+    return Padding(
+      padding:
+      const EdgeInsets.symmetric(
+          vertical: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: txtStyle,
+            ),
+          ),
+          Text(
+            _money(value),
+            style: txtStyle,
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _money(double v) =>
+      v.toStringAsFixed(2);
 }
 
 class _Empty extends StatelessWidget {
@@ -184,7 +511,11 @@ class _Empty extends StatelessWidget {
 }
 
 class _Error extends StatelessWidget {
-  const _Error({required this.e, required this.onRetry});
+  const _Error({
+    required this.e,
+    required this.onRetry,
+  });
+
   final Object e;
   final VoidCallback onRetry;
 
@@ -192,13 +523,21 @@ class _Error extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(24),
+        padding:
+        const EdgeInsets.all(24),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisSize:
+          MainAxisSize.min,
           children: [
-            Text('Failed to load orders:\n$e', textAlign: TextAlign.center),
+            Text(
+              'Failed to load orders:\n$e',
+              textAlign: TextAlign.center,
+            ),
             const SizedBox(height: 12),
-            FilledButton(onPressed: onRetry, child: const Text('Retry')),
+            FilledButton(
+              onPressed: onRetry,
+              child: const Text('Retry'),
+            ),
           ],
         ),
       ),

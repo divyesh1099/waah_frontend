@@ -4,9 +4,23 @@ import 'package:http/http.dart' as http;
 
 import 'models.dart';
 
+class UnauthorizedException implements Exception {
+  final String message;
+  UnauthorizedException([this.message = 'Unauthorized']);
+  @override
+  String toString() => 'UnauthorizedException: $message';
+}
+
+
 class ApiClient {
-  ApiClient({required this.baseUrl});
+  ApiClient({
+    required this.baseUrl,
+    void Function()? onUnauthorized,
+  }) : _onUnauthorized = onUnauthorized;
+
   final String baseUrl;
+  final void Function()? _onUnauthorized;
+
   String? _token;
 
   void setToken(String? t) => _token = t;
@@ -34,26 +48,54 @@ class ApiClient {
   // Decode + error handling for raw http calls (useful for endpoints
   // that don't fit your existing generic helpers)
   dynamic _decodeOrThrow(http.Response r) {
-    final ok = r.statusCode >= 200 && r.statusCode < 300;
     final ct = r.headers['content-type'] ?? '';
     final body = ct.startsWith('application/json')
-        ? json.decode(r.body)
+        ? (r.body.isEmpty ? null : json.decode(r.body))
         : r.body;
-    if (!ok) {
-      throw ApiException(
-        body is Map && body['message'] is String ? body['message'] : r.body,
-        r.statusCode,
-      );
+
+    // tell app if token is dead
+    if (r.statusCode == 401) {
+      _onUnauthorized?.call();
     }
+
+    final ok = r.statusCode >= 200 && r.statusCode < 300;
+    if (!ok) {
+      // FastAPI-style error bodies often have "detail"
+      String msg;
+      if (body is Map && body['detail'] != null) {
+        msg = body['detail'].toString();
+      } else if (body is Map && body['message'] is String) {
+        msg = body['message'] as String;
+      } else {
+        msg = r.body;
+      }
+      throw ApiException(msg, r.statusCode);
+    }
+
     return body;
+  }
+
+  double _toDouble(dynamic v) {
+    if (v == null) return 0;
+    if (v is num) return v.toDouble();
+    if (v is String) {
+      final parsed = double.tryParse(v);
+      if (parsed != null) return parsed;
+    }
+    return 0;
   }
 
   Future<dynamic> _parse(http.Response r) async {
     final ct = r.headers['content-type'] ?? '';
-    final ok = r.statusCode >= 200 && r.statusCode < 300;
     final body = ct.startsWith('application/json')
         ? (r.body.isEmpty ? null : json.decode(r.body))
         : r.body;
+
+    if (r.statusCode == 401) {
+      _onUnauthorized?.call();
+    }
+
+    final ok = r.statusCode >= 200 && r.statusCode < 300;
     if (!ok) {
       throw Exception('HTTP ${r.statusCode}: $body');
     }
@@ -303,14 +345,14 @@ class ApiClient {
   // -------- Menu --------
   // Always send tenant_id & branch_id (empty string if unknown)
   Future<List<MenuCategory>> fetchCategories({
-    String? tenantId,
-    String? branchId,
+    required String tenantId,
+    required String branchId,
   }) {
     return listAll<MenuCategory>(
       path: '/menu/categories',
-      params: <String, dynamic>{
-        'tenant_id': tenantId ?? '',
-        'branch_id': branchId ?? '',
+      params: {
+        'tenant_id': tenantId,
+        'branch_id': branchId,
       },
       fromJson: MenuCategory.fromJson,
     );
@@ -332,11 +374,16 @@ class ApiClient {
 
   Future<void> deleteCategory(String id) => _delete('/menu/categories/$id');
 
-  Future<List<MenuItem>> fetchItems({String? categoryId, String? tenantId}) => listAll<MenuItem>(
-    path: '/menu/items',
-    params: {'category_id': categoryId, 'tenant_id': tenantId}..removeWhere((k, v) => v == null),
-    fromJson: MenuItem.fromJson,
-  );
+  Future<List<MenuItem>> fetchItems({String? categoryId, String? tenantId}) {
+    return listAll<MenuItem>(
+      path: '/menu/items',
+      params: {
+        'category_id': categoryId,
+        'tenant_id': tenantId,
+      }..removeWhere((k, v) => v == null),
+      fromJson: MenuItem.fromJson,
+    );
+  }
 
   Future<MenuItem> createItem(MenuItem data) => createOne<MenuItem>(
     path: '/menu/items',
@@ -425,9 +472,53 @@ class ApiClient {
     );
   }
 
-  Future<Order> getOrder(String id) async {
+  /// Fetch full order detail from /orders/{id}
+  /// Backend returns:
+  /// {
+  ///   id, tenant_id, ..., order_no, channel, status, pax, ...
+  ///   totals: { subtotal, tax, total, paid, due, ... }
+  /// }
+  Future<OrderDetail> getOrderDetail(String id) async {
     final r = await _get('/orders/$id');
-    return Order.fromJson(Map<String, dynamic>.from(r as Map));
+    final map = Map<String, dynamic>.from(r as Map);
+
+    // Parse the base order using existing Order.fromJson (it will ignore unknown keys like 'totals')
+    final ord = Order.fromJson(map);
+
+    // Parse totals block if present
+    OrderTotals totals;
+    final t = map['totals'];
+    if (t is Map) {
+      final tMap = Map<String, dynamic>.from(t);
+      totals = OrderTotals(
+        subtotal: _toDouble(
+            tMap['subtotal'] ?? tMap['sub_total'] ?? tMap['subTotal']),
+        tax: _toDouble(
+            tMap['tax'] ?? tMap['tax_total'] ?? tMap['taxTotal']),
+        total: _toDouble(
+            tMap['total'] ?? tMap['grand_total'] ?? tMap['grandTotal']),
+        paid: _toDouble(tMap['paid']),
+        due: _toDouble(
+            tMap['due'] ?? tMap['total_due'] ?? tMap['totalDue']),
+      );
+    } else {
+      totals = OrderTotals(
+        subtotal: 0,
+        tax: 0,
+        total: 0,
+        paid: 0,
+        due: 0,
+      );
+    }
+
+    return OrderDetail(order: ord, totals: totals);
+  }
+
+  /// Backwards-compat shim: if code elsewhere still calls getOrder(),
+  /// just return the Order part.
+  Future<Order> getOrder(String id) async {
+    final d = await getOrderDetail(id);
+    return d.order;
   }
 
   Future<Order> createOrder(Order data) {

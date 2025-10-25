@@ -1,66 +1,68 @@
-﻿import 'package:flutter/material.dart';
+﻿// lib/app/shell.dart
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'nav_items.dart';
-import 'package:waah_frontend/features/sync/sync_action.dart';
 
-class AppShell extends StatelessWidget {
+import 'package:waah_frontend/app/providers.dart';
+
+class AppShell extends ConsumerWidget {
   final Widget child;
   const AppShell({super.key, required this.child});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final authed = ref.watch(isAuthedProvider);
+
+    // if token got nuked (401 -> logout), kick user to /login
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!context.mounted) return;
+      if (!authed) {
+        context.go('/login');
+      }
+    });
+
     return Scaffold(
       appBar: AppBar(
-          title: const Text('Waah'),
-          actions: const [
-            SyncOnlineAction(), // <-- adds the Sync button everywhere inside Shell
-          ],
+        title: const Text('Waah'),
       ),
-      drawer: const _AppDrawer(), // no selection highlight yet (version-safe)
-      body: child,
-    );
-  }
-}
-
-class _AppDrawer extends StatelessWidget {
-  const _AppDrawer();
-
-  @override
-  Widget build(BuildContext context) {
-    return Drawer(
-      child: SafeArea(
-        child: Column(
+      drawer: Drawer(
+        child: ListView(
           children: [
-            DrawerHeader(
-              margin: EdgeInsets.zero,
-              child: Row(
-                children: [
-                  Image.asset('assets/images/logo.png', width: 56, height: 56),
-                  const SizedBox(width: 12),
-                  const Text('WAAH POS',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
-                ],
-              ),
+            const DrawerHeader(
+              child: Text('Waah POS'),
             ),
-            Expanded(
-              child: ListView.builder(
-                itemCount: navItems.length,
-                itemBuilder: (context, i) {
-                  final n = navItems[i];
-                  return ListTile(
-                    leading: Icon(n.icon),
-                    title: Text(n.title),
-                    onTap: () {
-                      Navigator.of(context).pop(); // close drawer
-                      context.go(n.route);
-                    },
-                  );
-                },
-              ),
+            ListTile(
+              title: const Text('Menu'),
+              onTap: () => context.go('/menu'),
+            ),
+            ListTile(
+              title: const Text('POS'),
+              onTap: () => context.go('/pos'),
+            ),
+            ListTile(
+              title: const Text('Orders'),
+              onTap: () => context.go('/orders'),
+            ),
+            ListTile(
+              title: const Text('Shift'),
+              onTap: () => context.go('/shift'),
+            ),
+            ListTile(
+              title: const Text('Settings'),
+              onTap: () => context.go('/settings'),
+            ),
+            const Divider(),
+            ListTile(
+              title: const Text('Logout'),
+              onTap: () {
+                ref.read(authControllerProvider.notifier).logout();
+                context.go('/login');
+              },
             ),
           ],
         ),
       ),
+      body: child,
     );
   }
 }

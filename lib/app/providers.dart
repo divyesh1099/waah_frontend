@@ -36,9 +36,24 @@ final isAuthedProvider = Provider<bool>(
 
 /// Authed ApiClient that carries the latest token (one-way dep on auth state)
 final apiClientProvider = Provider<ApiClient>((ref) {
-  final token = ref.watch(authControllerProvider.select((s) => s.token));
-  final client = ApiClient(baseUrl: kBaseUrl);
-  // If you added updateAuthToken(String?) to ApiClient, keep this line:
+  // watch current token so ApiClient rebuilds if it changes
+  final token = ref.watch(
+    authControllerProvider.select((s) => s.token),
+  );
+
+  // we also need the notifier so we can force logout
+  final authNotifier = ref.read(authControllerProvider.notifier);
+
+  final client = ApiClient(
+    baseUrl: kBaseUrl,
+    onUnauthorized: () {
+      // 1. wipe token from state + prefs
+      authNotifier.logout();
+      // after logout(), isAuthedProvider becomes false.
+      // AppShell will see that and push /login (see step 4).
+    },
+  );
+
   client.updateAuthToken(token);
   return client;
 });
