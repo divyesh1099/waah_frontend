@@ -1,5 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:http/http.dart' as _http;
+import 'package:dio/dio.dart';
 
 import 'models.dart';
 
@@ -19,11 +21,11 @@ class ApiException implements Exception {
 }
 
 class ApiClient {
-  ApiClient({
+  ApiClient(this._dio, {
     required this.baseUrl,
     void Function()? onUnauthorized,
   }) : _onUnauthorized = onUnauthorized;
-
+  final Dio _dio;
   final String baseUrl;
   final void Function()? _onUnauthorized;
 
@@ -485,6 +487,48 @@ class ApiClient {
     );
   }
 
+  // GET /menu/items/{item_id}/modifiers_full
+  Future<List<dynamic>> fetchItemModifierGroups(String itemId) async {
+    // build URL like: /menu/items/<id>/modifiers_full
+    final uri = Uri.parse('$baseUrl/menu/items/$itemId/modifiers_full');
+
+    final res = await _http.get(
+      uri,
+      headers: _headers(), // same auth/json headers you use elsewhere
+    );
+
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception(
+        'HTTP ${res.statusCode}: ${res.body}',
+      );
+    }
+
+    final decoded = jsonDecode(res.body);
+    // backend returns a JSON array:
+    // [
+    //   {
+    //     "group_id": "...",
+    //     "name": "...",
+    //     "required": false,
+    //     "min_sel": 0,
+    //     "max_sel": 3,
+    //     "modifiers": [
+    //        {"id":"...","name":"Extra Cheese","price_delta":20.0},
+    //        ...
+    //     ]
+    //   },
+    //   ...
+    // ]
+    if (decoded is List) {
+      return decoded;
+    }
+    return <dynamic>[];
+  }
+
+  // (optional future work)
+  // POST /orders/{order_id}/items/{order_item_id}/modifiers
+  // Future<void> addOrderItemModifiers(String orderId, String orderItemId, List<Modifier> mods)
+
   Future<List<ItemVariant>> fetchVariants(
       String itemId) {
     return listAll<ItemVariant>(
@@ -831,6 +875,16 @@ class ApiClient {
     );
   }
 
+  Future<void> printBill(
+      String orderId, {
+        String? reason,
+      }) async {
+    await _post(
+      '/print/bill/$orderId',
+      params: {'reason': reason},
+    );
+  }
+
   Future<void> openDrawer() async =>
       _post('/print/open_drawer');
 
@@ -1072,5 +1126,54 @@ class ApiClient {
       },
     );
     return Map<String, dynamic>.from(r as Map);
+  }
+
+  /// Get dining tables for a branch.
+  /// Frontend currently calls with branchId: ''.
+  ///
+  /// Backend: GET /dining/tables?branch_id=<branchId>
+  /// Response: [
+  ///   {
+  ///     "id": "...",
+  ///     "branch_id": "...",
+  ///     "code": "T1",
+  ///     "zone": "Patio",
+  ///     "seats": 4
+  ///   },
+  ///   ...
+  /// ]
+  Future<List<DiningTable>> fetchDiningTables({
+    required String branchId,
+  }) async {
+    final resp = await _dio.get(
+      '/dining/tables',
+      queryParameters: {
+        'branch_id': branchId,
+      },
+    );
+
+    final data = resp.data;
+    final out = <DiningTable>[];
+
+    if (data is List) {
+      for (final row in data) {
+        if (row is Map<String, dynamic>) {
+          out.add(DiningTable.fromJson(row));
+        } else {
+          out.add(
+            DiningTable.fromJson(
+              Map<String, dynamic>.from(row as Map),
+            ),
+          );
+        }
+      }
+    }
+
+    // stable sort by table code so UI looks nice
+    out.sort(
+          (a, b) => a.code.toLowerCase().compareTo(b.code.toLowerCase()),
+    );
+
+    return out;
   }
 }

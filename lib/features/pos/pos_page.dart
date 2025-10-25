@@ -4,7 +4,7 @@ import 'package:waah_frontend/app/providers.dart';
 import 'package:waah_frontend/data/models.dart';
 
 /// ------------------------------------------------------------
-/// CATEGORY + ITEM DATA
+/// PROVIDERS: categories, items, tables, cart
 /// ------------------------------------------------------------
 
 /// Which category is currently selected in POS? null means "All".
@@ -22,7 +22,7 @@ FutureProvider.autoDispose<List<MenuCategory>>((ref) async {
   );
 
   // sort nicely by position
-  cats.sort((a, b) => a.position.compareTo(b.position));
+  cats.sort((a, b) => (a.position).compareTo(b.position));
   return cats;
 });
 
@@ -47,6 +47,24 @@ FutureProvider.autoDispose<List<MenuItem>>((ref) async {
   return filtered;
 });
 
+/// Load dining tables for branch '' right now.
+/// Later you'll pass the real branchId from auth/session.
+final diningTablesProvider =
+FutureProvider<List<DiningTable>>((ref) async {
+  final client = ref.watch(apiClientProvider);
+
+  // '' placeholder: matches what you're doing for tenant/branch elsewhere
+  final tables = await client.fetchDiningTables(branchId: '');
+
+  // local defensive sort by code just in case
+  final sorted = [...tables]
+    ..sort(
+          (a, b) => a.code.toLowerCase().compareTo(b.code.toLowerCase()),
+    );
+
+  return sorted;
+});
+
 /// ------------------------------------------------------------
 /// CART STATE
 /// ------------------------------------------------------------
@@ -55,12 +73,14 @@ FutureProvider.autoDispose<List<MenuItem>>((ref) async {
 class CartLine {
   final MenuItem item;
   final ItemVariant? variant;
-  final double unitPrice;
+  final List<Modifier> modifiers;
+  final double unitPrice; // includes variant base + modifiers deltas
   final double qty;
 
   CartLine({
     required this.item,
     required this.variant,
+    required this.modifiers,
     required this.unitPrice,
     required this.qty,
   });
@@ -68,12 +88,14 @@ class CartLine {
   CartLine copyWith({
     MenuItem? item,
     ItemVariant? variant,
+    List<Modifier>? modifiers,
     double? unitPrice,
     double? qty,
   }) {
     return CartLine(
       item: item ?? this.item,
       variant: variant ?? this.variant,
+      modifiers: modifiers ?? this.modifiers,
       unitPrice: unitPrice ?? this.unitPrice,
       qty: qty ?? this.qty,
     );
@@ -84,6 +106,16 @@ class CartLine {
       return '${item.name} (${variant!.label})';
     }
     return item.name;
+  }
+
+  /// Human-friendly list of modifiers, e.g. "Extra Cheese (+₹20), No Onion"
+  String get modifiersSummary {
+    if (modifiers.isEmpty) return '';
+    return modifiers.map((m) {
+      final delta = m.priceDelta;
+      if (delta == 0) return m.name;
+      return '${m.name} (+₹${delta.toStringAsFixed(2)})';
+    }).join(', ');
   }
 
   double get lineTotal => unitPrice * qty;
@@ -109,52 +141,60 @@ class PosCartNotifier extends Notifier<PosCartState> {
   @override
   PosCartState build() => const PosCartState();
 
-  /// Internal helper: find matching line (item+variant).
-  int _findLineIndex(MenuItem item, ItemVariant? variant) {
+  bool _sameMods(List<Modifier> a, List<Modifier> b) {
+    if (a.length != b.length) return false;
+    final setA = a.map((m) => m.id ?? m.name).toSet();
+    final setB = b.map((m) => m.id ?? m.name).toSet();
+    return setA.length == setB.length && setA.containsAll(setB);
+  }
+
+  /// Internal helper: find matching line (item+variant+same modifiers).
+  int _findLineIndex(
+      MenuItem item,
+      ItemVariant? variant,
+      List<Modifier> mods,
+      ) {
     for (var i = 0; i < state.lines.length; i++) {
       final ln = state.lines[i];
       if (ln.item.id == item.id &&
-          (ln.variant?.id ?? '') == (variant?.id ?? '')) {
+          (ln.variant?.id ?? '') == (variant?.id ?? '') &&
+          _sameMods(ln.modifiers, mods)) {
         return i;
       }
     }
     return -1;
   }
 
-  /// Add 1 qty of this item.
-  /// We fetch variants to get price.
-  Future<void> addItem(MenuItem item) async {
-    final client = ref.read(apiClientProvider);
-
-    // Fetch variants so we can figure out which variant/price to add.
-    // We'll pick default=true first, else first, else price=0.
-    final variants = await client.fetchVariants(item.id!);
-    ItemVariant? chosen;
-    double price = 0;
-
-    if (variants.isNotEmpty) {
-      // prefer the variant marked isDefault
-      chosen = variants.firstWhere(
-            (v) => v.isDefault,
-        orElse: () => variants.first,
-      );
-      price = chosen.basePrice;
+  /// Add `qty` of this item with specific variant + modifiers.
+  ///
+  /// Per-unit price = variant.basePrice + sum(selected modifier priceDelta)
+  void addItem({
+    required MenuItem item,
+    ItemVariant? variant,
+    required List<Modifier> modifiers,
+    double qty = 1,
+  }) {
+    double price = variant?.basePrice ?? 0;
+    for (final m in modifiers) {
+      price += m.priceDelta;
     }
 
-    // See if this (item+that variant) is already in cart
-    final idx = _findLineIndex(item, chosen);
+    final idx = _findLineIndex(item, variant, modifiers);
     if (idx >= 0) {
+      // already in cart → bump qty
       final old = state.lines[idx];
-      final updated = old.copyWith(qty: old.qty + 1);
+      final updated = old.copyWith(qty: old.qty + qty);
       final newLines = [...state.lines];
       newLines[idx] = updated;
       state = PosCartState(lines: newLines);
     } else {
+      // new cart line
       final newLine = CartLine(
         item: item,
-        variant: chosen,
+        variant: variant,
+        modifiers: modifiers,
         unitPrice: price,
-        qty: 1,
+        qty: qty,
       );
       state = PosCartState(lines: [...state.lines, newLine]);
     }
@@ -198,6 +238,101 @@ final posCartProvider =
 NotifierProvider<PosCartNotifier, PosCartState>(PosCartNotifier.new);
 
 /// ------------------------------------------------------------
+/// INTERNAL DATA CLASSES FOR SHEETS / DIALOGS
+/// ------------------------------------------------------------
+
+/// One modifier group + all its modifiers (parsed from backend /modifiers_full).
+///
+/// Backend response shape for each group:
+/// {
+///   "group_id": "...",
+///   "name": "Toppings",
+///   "required": false,
+///   "min_sel": 0,
+///   "max_sel": 3,
+///   "modifiers": [
+///     {"id":"...","name":"Extra Cheese","price_delta":20.0},
+///     ...
+///   ]
+/// }
+class _ItemModifierGroupData {
+  final String groupId;
+  final String name;
+  final bool requiredGroup;
+  final int minSel;
+  final int? maxSel;
+  final List<Modifier> modifiers;
+
+  _ItemModifierGroupData({
+    required this.groupId,
+    required this.name,
+    required this.requiredGroup,
+    required this.minSel,
+    required this.maxSel,
+    required this.modifiers,
+  });
+
+  factory _ItemModifierGroupData.fromRaw(Map<String, dynamic> j) {
+    final modsRaw = (j['modifiers'] as List<dynamic>? ?? []);
+    final mods = modsRaw.map((m) {
+      return Modifier.fromJson({
+        'id': m['id'],
+        'group_id': j['group_id'],
+        'name': m['name'],
+        'price_delta': m['price_delta'],
+      });
+    }).toList();
+
+    int toInt(dynamic v, [int fallback = 0]) {
+      if (v == null) return fallback;
+      if (v is int) return v;
+      final s = v.toString();
+      return int.tryParse(s) ?? fallback;
+    }
+
+    int? toIntOrNull(dynamic v) {
+      if (v == null) return null;
+      if (v is int) return v;
+      final s = v.toString();
+      return int.tryParse(s);
+    }
+
+    return _ItemModifierGroupData(
+      groupId: j['group_id']?.toString() ?? '',
+      name: j['name']?.toString() ?? '',
+      requiredGroup: (j['required'] as bool?) ?? false,
+      minSel: toInt(j['min_sel'], 0),
+      maxSel: toIntOrNull(j['max_sel']),
+      modifiers: mods,
+    );
+  }
+}
+
+/// Result of the "add to cart" bottom sheet.
+class _AddResult {
+  final ItemVariant? variant;
+  final int qty;
+  final List<Modifier> modifiers;
+  _AddResult({
+    required this.variant,
+    required this.qty,
+    required this.modifiers,
+  });
+}
+
+/// Info we gather before sending checkout to backend (channel, pax, table).
+class _CheckoutRequest {
+  final OrderChannel channel;
+  final int? pax;
+  final String? tableId;
+  _CheckoutRequest({
+    required this.channel,
+    this.pax,
+    this.tableId,
+  });
+}
+
+/// ------------------------------------------------------------
 /// POS PAGE
 /// ------------------------------------------------------------
 
@@ -231,16 +366,17 @@ class PosPage extends ConsumerWidget {
                     }
                   ],
                 );
-
-                if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Sync pushed ✅')),
-                );
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Sync pushed ✅')),
+                  );
+                }
               } catch (e) {
-                if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Sync failed: $e')),
-                );
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Sync failed: $e')),
+                  );
+                }
               }
             },
           ),
@@ -261,7 +397,9 @@ class PosPage extends ConsumerWidget {
             data: (cats) => _CategoryBar(categories: cats),
             loading: () => const SizedBox(
               height: 56,
-              child: Center(child: CircularProgressIndicator()),
+              child: Center(
+                child: CircularProgressIndicator(),
+              ),
             ),
             error: (e, st) => SizedBox(
               height: 56,
@@ -285,6 +423,7 @@ class PosPage extends ConsumerWidget {
                     child: Text('No items in this category'),
                   );
                 }
+
                 // Grid of tappable menu items
                 return GridView.builder(
                   padding: const EdgeInsets.all(12),
@@ -301,21 +440,68 @@ class PosPage extends ConsumerWidget {
                     return _ItemCard(
                       item: it,
                       onTap: () async {
-                        // Add to cart (async will also fetch variants/price)
-                        await ref.read(posCartProvider.notifier).addItem(it);
+                        final client = ref.read(apiClientProvider);
+
+                        // 1. fetch variants
+                        final variants =
+                        await client.fetchVariants(it.id ?? '');
+
+                        // 2. fetch modifier groups (+mods) from backend
+                        // ApiClient should expose fetchItemModifierGroups(itemId)
+                        final rawGroups =
+                        await client.fetchItemModifierGroups(
+                          it.id ?? '',
+                        );
+                        final modifierGroups = rawGroups
+                            .map<_ItemModifierGroupData>(
+                              (g) => _ItemModifierGroupData.fromRaw(
+                            Map<String, dynamic>.from(g),
+                          ),
+                        )
+                            .toList();
+
+                        // 3. open bottom sheet (variant + modifiers + qty)
                         if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('${it.name} added to cart'),
-                            duration: const Duration(milliseconds: 800),
+                        final res =
+                        await showModalBottomSheet<_AddResult>(
+                          context: context,
+                          isScrollControlled: true,
+                          builder: (_) => _AddToCartSheet(
+                            item: it,
+                            variants: variants,
+                            modifierGroups: modifierGroups,
                           ),
                         );
+                        if (res == null) return;
+
+                        // 4. add to cart (price calc happens in Notifier)
+                        ref.read(posCartProvider.notifier).addItem(
+                          item: it,
+                          variant: res.variant,
+                          modifiers: res.modifiers,
+                          qty: res.qty.toDouble(),
+                        );
+
+                        // 5. toast
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                  '${it.name} x${res.qty} added to cart'),
+                              duration: const Duration(
+                                milliseconds: 800,
+                              ),
+                            ),
+                          );
+                        }
                       },
                     );
                   },
                 );
               },
-              loading: () => const Center(child: CircularProgressIndicator()),
+              loading: () => const Center(
+                child: CircularProgressIndicator(),
+              ),
               error: (e, st) => Center(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
@@ -439,8 +625,10 @@ class _ItemCard extends StatelessWidget {
               Align(
                 alignment: Alignment.bottomRight,
                 child: Container(
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.brown.shade200,
                     borderRadius: BorderRadius.circular(4),
@@ -462,17 +650,354 @@ class _ItemCard extends StatelessWidget {
   }
 }
 
-/// Info we collect before we open the order on the backend
-class _CheckoutRequest {
-  final OrderChannel channel;
-  final int? pax;
-  const _CheckoutRequest({
-    required this.channel,
-    this.pax,
+/// Bottom sheet to pick variant + modifiers + qty before adding to cart
+class _AddToCartSheet extends StatefulWidget {
+  final MenuItem item;
+  final List<ItemVariant> variants;
+  final List<_ItemModifierGroupData> modifierGroups;
+  const _AddToCartSheet({
+    required this.item,
+    required this.variants,
+    required this.modifierGroups,
   });
+
+  @override
+  State<_AddToCartSheet> createState() => _AddToCartSheetState();
 }
 
-/// Bottom cart: shows lines, lets you +/-, shows total, and checkout
+class _AddToCartSheetState extends State<_AddToCartSheet> {
+  ItemVariant? _selectedVariant;
+  int _qty = 1;
+
+  /// per groupId -> set of selected modifier ids
+  final Map<String, Set<String>> _selModsByGroup = {};
+
+  @override
+  void initState() {
+    super.initState();
+
+    // pick default variant if available
+    if (widget.variants.isNotEmpty) {
+      try {
+        _selectedVariant =
+            widget.variants.firstWhere((v) => v.isDefault, orElse: () {
+              return widget.variants.first;
+            });
+      } catch (_) {
+        _selectedVariant = widget.variants.first;
+      }
+    }
+
+    // init modifier selection map
+    for (final g in widget.modifierGroups) {
+      _selModsByGroup[g.groupId] = <String>{};
+    }
+  }
+
+  List<Modifier> _collectSelectedModifiers() {
+    final out = <Modifier>[];
+    for (final g in widget.modifierGroups) {
+      final picked = _selModsByGroup[g.groupId] ?? <String>{};
+      for (final m in g.modifiers) {
+        final key = m.id ?? m.name;
+        if (picked.contains(key)) {
+          out.add(m);
+        }
+      }
+    }
+    return out;
+  }
+
+  double _perUnitPrice() {
+    final base = _selectedVariant?.basePrice ?? 0;
+    double extra = 0;
+    for (final m in _collectSelectedModifiers()) {
+      extra += m.priceDelta;
+    }
+    return base + extra;
+  }
+
+  double _totalPrice() => _perUnitPrice() * _qty;
+
+  void _toggleModifier(
+      _ItemModifierGroupData group,
+      Modifier mod,
+      bool newVal,
+      ) {
+    final key = mod.id ?? mod.name;
+    final picked = _selModsByGroup[group.groupId] ?? <String>{};
+
+    if (newVal) {
+      // enforce max_sel if provided
+      if (group.maxSel != null &&
+          picked.length >= group.maxSel! &&
+          !picked.contains(key)) {
+        // hit the cap -> don't add more
+        return;
+      }
+      picked.add(key);
+    } else {
+      picked.remove(key);
+    }
+
+    setState(() {
+      _selModsByGroup[group.groupId] = picked;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final perUnit = _perUnitPrice();
+    final total = _totalPrice();
+
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+          left: 16,
+          right: 16,
+          top: 16,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Title / desc
+              Text(
+                widget.item.name,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (widget.item.description != null &&
+                  widget.item.description!.trim().isNotEmpty)
+                Text(
+                  widget.item.description!,
+                  style: TextStyle(
+                    color: Colors.grey.shade700,
+                    fontSize: 13,
+                  ),
+                ),
+
+              const SizedBox(height: 16),
+
+              // Variant picker
+              if (widget.variants.isNotEmpty)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Choose Variant',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    ...widget.variants.map((v) {
+                      return RadioListTile<ItemVariant>(
+                        title: Text(
+                          v.label.isEmpty ? 'Default' : v.label,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        subtitle: Text(
+                          '₹ ${v.basePrice.toStringAsFixed(2)}',
+                        ),
+                        value: v,
+                        groupValue: _selectedVariant,
+                        onChanged: (val) {
+                          setState(() {
+                            _selectedVariant = val;
+                          });
+                        },
+                      );
+                    }).toList(),
+                  ],
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    'No variants found.\nPrice will default to ₹0.00',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                ),
+
+              const SizedBox(height: 16),
+
+              // Modifier groups
+              if (widget.modifierGroups.isNotEmpty)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Add-ons / Choices',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    ...widget.modifierGroups.map((group) {
+                      final pickedSet =
+                          _selModsByGroup[group.groupId] ?? <String>{};
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            group.name,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w500,
+                              fontSize: 14,
+                            ),
+                          ),
+                          if (group.maxSel != null)
+                            Text(
+                              'Choose up to ${group.maxSel}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          const SizedBox(height: 4),
+                          ...group.modifiers.map((m) {
+                            final key = m.id ?? m.name;
+                            final selected = pickedSet.contains(key);
+                            final priceText = m.priceDelta == 0
+                                ? ''
+                                : ' (+₹${m.priceDelta.toStringAsFixed(2)})';
+
+                            return CheckboxListTile(
+                              contentPadding: EdgeInsets.zero,
+                              dense: true,
+                              title: Text(
+                                '${m.name}$priceText',
+                                style: const TextStyle(fontSize: 14),
+                              ),
+                              value: selected,
+                              onChanged: (val) {
+                                if (val == null) return;
+                                _toggleModifier(
+                                  group,
+                                  m,
+                                  val,
+                                );
+                              },
+                            );
+                          }).toList(),
+                          const SizedBox(height: 8),
+                        ],
+                      );
+                    }).toList(),
+                  ],
+                ),
+
+              const SizedBox(height: 8),
+
+              // Qty row + per-unit + total
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.remove_circle_outline),
+                        onPressed: () {
+                          setState(() {
+                            if (_qty > 1) _qty--;
+                          });
+                        },
+                      ),
+                      Text(
+                        '$_qty',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 16,
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.add_circle_outline),
+                        onPressed: () {
+                          setState(() {
+                            _qty++;
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        'Per unit: ₹ ${perUnit.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
+                      Text(
+                        'Total: ₹ ${total.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 16),
+
+              // Cancel / Add buttons
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                      },
+                      child: const Text('Cancel'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 2,
+                    child: FilledButton(
+                      onPressed: () {
+                        Navigator.of(context).pop(
+                          _AddResult(
+                            variant: _selectedVariant,
+                            qty: _qty,
+                            modifiers: _collectSelectedModifiers(),
+                          ),
+                        );
+                      },
+                      child: Text(
+                        'Add • ₹ ${total.toStringAsFixed(2)}',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Bottom cart: shows lines, lets you +/-/X, shows total, and checkout
 class _CartSummary extends ConsumerStatefulWidget {
   const _CartSummary({required this.cart});
   final PosCartState cart;
@@ -484,17 +1009,20 @@ class _CartSummary extends ConsumerStatefulWidget {
 class _CartSummaryState extends ConsumerState<_CartSummary> {
   bool _busy = false;
 
-  // --- helper: guess pax from qty total
+  // guess pax from qty total
   int _paxGuess(PosCartState cart) {
-    return cart.lines.fold<int>(
-      0,
-          (sum, l) => sum + l.qty.round(),
-    );
+    return cart.lines.fold<int>(0, (sum, l) => sum + l.qty.round());
   }
 
-  // --- dialog to choose DINE_IN / TAKEAWAY / DELIVERY and pax
+  // dialog to choose DINE_IN / TAKEAWAY / DELIVERY and pax and table
   Future<_CheckoutRequest?> _askCheckoutInfo(PosCartState cart) async {
+    // Preload tables before showing dialog to avoid async gap inside the builder.
+    final tables = await ref.read(diningTablesProvider.future);
+
+    if (!mounted) return null;
+
     OrderChannel chosenChannel = OrderChannel.TAKEAWAY;
+    String? chosenTableId;
     final paxCtl = TextEditingController(
       text: _paxGuess(cart).toString(),
     );
@@ -506,59 +1034,93 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
           builder: (ctx, setLocalState) {
             return AlertDialog(
               title: const Text('Checkout details'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text(
-                    'Channel',
-                    style: TextStyle(fontSize: 12, color: Colors.black54),
-                  ),
-                  DropdownButton<OrderChannel>(
-                    value: chosenChannel,
-                    isExpanded: true,
-                    onChanged: (val) {
-                      if (val != null) {
-                        setLocalState(() {
-                          chosenChannel = val;
-                        });
-                      }
-                    },
-                    items: OrderChannel.values.map((ch) {
-                      return DropdownMenuItem<OrderChannel>(
-                        value: ch,
-                        child: Text(
-                          ch.name.replaceAll('_', ' '),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: paxCtl,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'Pax / Guests',
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DropdownButtonFormField<OrderChannel>(
+                      value: chosenChannel,
+                      decoration:
+                      const InputDecoration(labelText: 'Channel'),
+                      items: OrderChannel.values.map((ch) {
+                        return DropdownMenuItem<OrderChannel>(
+                          value: ch,
+                          child:
+                          Text(ch.name.replaceAll('_', ' ')),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setLocalState(() {
+                            chosenChannel = val;
+                            // if we're not dine-in, clear table
+                            if (chosenChannel != OrderChannel.DINE_IN) {
+                              chosenTableId = null;
+                            }
+                          });
+                        }
+                      },
                     ),
-                  ),
-                  // Future: table selector (for DINE_IN), address for DELIVERY, etc.
-                ],
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: paxCtl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Pax / Guests',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Only show table picker for dine-in
+                    if (chosenChannel == OrderChannel.DINE_IN)
+                      DropdownButtonFormField<String?>(
+                        value: chosenTableId,
+                        decoration: const InputDecoration(
+                          labelText: 'Table',
+                        ),
+                        items: [
+                          const DropdownMenuItem<String?>(
+                            value: null,
+                            child: Text('No table'),
+                          ),
+                          ...tables.map(
+                                (t) => DropdownMenuItem<String?>(
+                              value: t.id,
+                              child: Text(
+                                t.seats != null
+                                    ? '${t.code} (${t.seats} seats)'
+                                    : t.code,
+                              ),
+                            ),
+                          ),
+                        ],
+                        onChanged: (val) {
+                          setLocalState(() {
+                            chosenTableId = val;
+                          });
+                        },
+                      ),
+
+                    // TODO later:
+                    // if DELIVERY -> ask phone/address
+                  ],
+                ),
               ),
               actions: [
                 TextButton(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                  },
+                  onPressed: () => Navigator.pop(ctx),
                   child: const Text('Cancel'),
                 ),
                 FilledButton(
                   onPressed: () {
-                    final paxVal = int.tryParse(paxCtl.text.trim());
+                    final paxVal =
+                    int.tryParse(paxCtl.text.trim());
                     Navigator.pop(
                       ctx,
                       _CheckoutRequest(
                         channel: chosenChannel,
                         pax: paxVal,
+                        tableId: chosenTableId,
                       ),
                     );
                   },
@@ -572,15 +1134,19 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
     );
   }
 
-  // --- the real checkout logic
-  Future<void> _performCheckout(_CheckoutRequest info) async {
-    final cart = widget.cart;
+  // talk to backend: create order, add items, take cash, invoice, print
+  Future<void> _performCheckout(
+      WidgetRef ref,
+      PosCartState cart,
+      _CheckoutRequest info,
+      ) async {
     final client = ref.read(apiClientProvider);
 
     // 1. generate offline-friendly order number
-    final orderNo = 'POS1-${DateTime.now().millisecondsSinceEpoch}';
+    final orderNo =
+        'POS1-${DateTime.now().millisecondsSinceEpoch}';
 
-    // fallback pax if dialog left it blank
+    // pax fallback
     final paxFromCart = _paxGuess(cart);
     final int? paxToSend = (info.pax != null && info.pax! > 0)
         ? info.pax
@@ -593,10 +1159,10 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       branchId: '',
       orderNo: orderNo,
       channel: info.channel, // cashier choice
-      provider: null, // null is fine for non-online orders
+      provider: null, // offline / walk-in
       status: OrderStatus.OPEN,
-      tableId: null, // TODO: table for DINE_IN
-      customerId: null, // TODO: customer/delivery phone
+      tableId: info.tableId, // dine-in table if any
+      customerId: null, // TODO: delivery customer
       openedByUserId: null,
       closedByUserId: null,
       pax: paxToSend,
@@ -610,25 +1176,24 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
     try {
       opened = await client.createOrder(draftOrder);
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to create order: $e')),
-        );
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to create order: $e')),
+      );
       return;
     }
 
     final orderId = opened.id ?? '';
     if (orderId.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No order ID from backend')),
-        );
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('No order ID from backend')),
+      );
       return;
     }
 
-    // 3. add each cart line
+    // 3. add each cart line as an order_item
     for (final line in cart.lines) {
       final itemId = line.item.id;
       if (itemId == null) continue;
@@ -650,41 +1215,51 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       );
 
       try {
+        // We don't actually use the returned value here,
+        // just ensure it succeeds.
         await client.addOrderItem(orderId, orderItem);
+
+        // (future)
+        // await client.addOrderItemModifiers(
+        //   orderId,
+        //   thatCreatedItemId,
+        //   line.modifiers,
+        // );
+
       } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to add line item: $e')),
-          );
-        }
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content:
+              Text('Failed to add line item: $e')),
+        );
         return;
       }
     }
 
-    // 4. fetch totals (to know how much to collect)
+    // 4. totals (to know how much to collect)
     late final OrderDetail detail;
     try {
       detail = await client.getOrderDetail(orderId);
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load totals: $e')),
-        );
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content:
+            Text('Failed to load totals: $e')),
+      );
       return;
     }
-
     final amountDue = detail.totals.due;
 
     // 5. pay in full CASH
     try {
       await client.pay(orderId, PayMode.CASH, amountDue);
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Payment failed: $e')),
-        );
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Payment failed: $e')),
+      );
       return;
     }
 
@@ -696,12 +1271,13 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       // non-blocking
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Invoice issue: $e')),
+          SnackBar(
+              content: Text('Invoice issue: $e')),
         );
       }
     }
 
-    // 7. print invoice if we got an invoice_id
+    // 7. print invoice if we got invoice_id
     final invoiceId = invoiceResp['invoice_id']?.toString();
     if (invoiceId != null && invoiceId.isNotEmpty) {
       try {
@@ -725,43 +1301,43 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       // drawer might not be configured; ignore
     }
 
-    // 9. clear cart now that we are done
+    // 9. clear cart
     ref.read(posCartProvider.notifier).clear();
 
     // 10. success toast
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Paid ₹${amountDue.toStringAsFixed(2)} • Order $orderNo (${info.channel.name}) ✅',
-          ),
-          duration: const Duration(seconds: 3),
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Paid ₹${amountDue.toStringAsFixed(2)} • '
+              'Order $orderNo (${info.channel.name}) ✅',
         ),
-      );
-    }
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   Future<void> _startCheckout() async {
     if (_busy) return;
-
     setState(() {
       _busy = true;
     });
 
-    // collect channel/pax first
-    final req = await _askCheckoutInfo(widget.cart);
+    try {
+      final req = await _askCheckoutInfo(widget.cart);
+      if (req == null) {
+        // user cancelled dialog OR widget unmounted before dialog
+        return;
+      }
 
-    // after await, we MUST bail if widget disposed
-    if (!mounted) return;
-
-    if (req != null) {
-      await _performCheckout(req);
+      await _performCheckout(ref, widget.cart, req);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
     }
-
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-    });
   }
 
   @override
@@ -780,19 +1356,25 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
             // Cart lines list
             if (lines.isNotEmpty)
               ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 200),
+                constraints: const BoxConstraints(
+                  maxHeight: 200,
+                ),
                 child: ListView.separated(
                   shrinkWrap: true,
                   itemCount: lines.length,
-                  separatorBuilder: (_, __) => const Divider(height: 8),
+                  separatorBuilder: (_, __) =>
+                  const Divider(height: 8),
                   itemBuilder: (context, i) {
                     final ln = lines[i];
                     return Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment:
+                      CrossAxisAlignment.start,
                       children: [
+                        // name + modifiers + unit price
                         Expanded(
                           child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                            crossAxisAlignment:
+                            CrossAxisAlignment.start,
                             children: [
                               Text(
                                 ln.displayName,
@@ -800,57 +1382,94 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
+                              if (ln.modifiers.isNotEmpty)
+                                Text(
+                                  ln.modifiersSummary,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color:
+                                    Colors.grey.shade600,
+                                  ),
+                                ),
                               Text(
                                 '₹ ${ln.unitPrice.toStringAsFixed(2)}',
                                 style: TextStyle(
                                   fontSize: 12,
-                                  color: Colors.grey.shade700,
+                                  color:
+                                  Colors.grey.shade700,
                                 ),
                               ),
                             ],
                           ),
                         ),
+
+                        // qty stepper
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
-                              icon: const Icon(
-                                Icons.remove_circle_outline,
-                              ),
+                              icon: const Icon(Icons
+                                  .remove_circle_outline),
                               onPressed: _busy
                                   ? null
                                   : () {
                                 ref
-                                    .read(posCartProvider.notifier)
+                                    .read(
+                                    posCartProvider
+                                        .notifier)
                                     .decQty(i);
                               },
                             ),
                             Text(
                               ln.qty.toStringAsFixed(0),
                               style: const TextStyle(
-                                fontWeight: FontWeight.w600,
+                                fontWeight:
+                                FontWeight.w600,
                               ),
                             ),
                             IconButton(
-                              icon: const Icon(
-                                Icons.add_circle_outline,
-                              ),
+                              icon: const Icon(Icons
+                                  .add_circle_outline),
                               onPressed: _busy
                                   ? null
                                   : () {
                                 ref
-                                    .read(posCartProvider.notifier)
+                                    .read(
+                                    posCartProvider
+                                        .notifier)
                                     .incQty(i);
                               },
                             ),
                           ],
                         ),
                         const SizedBox(width: 8),
-                        Text(
-                          '₹ ${ln.lineTotal.toStringAsFixed(2)}',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                          ),
+
+                        // line total + delete button
+                        Column(
+                          crossAxisAlignment:
+                          CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              '₹ ${ln.lineTotal.toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            IconButton(
+                              icon:
+                              const Icon(Icons.close),
+                              tooltip: 'Remove line',
+                              onPressed: _busy
+                                  ? null
+                                  : () {
+                                ref
+                                    .read(
+                                    posCartProvider
+                                        .notifier)
+                                    .removeLine(i);
+                              },
+                            ),
+                          ],
                         ),
                       ],
                     );
@@ -899,12 +1518,16 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
                     icon: const Icon(Icons.delete),
                     label: const Text('Clear'),
                     style: FilledButton.styleFrom(
-                      backgroundColor: Colors.brown.shade200,
+                      backgroundColor:
+                      Colors.brown.shade200,
                     ),
                     onPressed: lines.isEmpty || _busy
                         ? null
                         : () {
-                      ref.read(posCartProvider.notifier).clear();
+                      ref
+                          .read(posCartProvider
+                          .notifier)
+                          .clear();
                     },
                   ),
                 ),
@@ -919,18 +1542,22 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
                         ? const SizedBox(
                       width: 16,
                       height: 16,
-                      child: CircularProgressIndicator(
+                      child:
+                      CircularProgressIndicator(
                         strokeWidth: 2,
                       ),
                     )
-                        : const Icon(Icons.point_of_sale),
+                        : const Icon(
+                        Icons.point_of_sale),
                     label: Text(
                       _busy
                           ? 'Processing...'
                           : 'Checkout ₹ ${total.toStringAsFixed(2)}',
                     ),
                     onPressed:
-                    lines.isEmpty || _busy ? null : _startCheckout,
+                    lines.isEmpty || _busy
+                        ? null
+                        : _startCheckout,
                   ),
                 ),
               ],

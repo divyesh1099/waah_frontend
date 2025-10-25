@@ -344,36 +344,31 @@ class OrderDetailSheet extends ConsumerWidget {
                     children: [
                       Expanded(
                         child: FilledButton.icon(
-                          icon: const Icon(
-                              Icons.receipt_long),
-                          label: const Text(
-                              'Invoice'),
+                          icon: const Icon(Icons.receipt_long),
+                          label: const Text('Invoice'),
                           onPressed: () async {
-                            final client = ref
-                                .read(apiClientProvider);
+                            final client = ref.read(apiClientProvider);
                             try {
-                              await client
-                                  .createInvoice(
-                                  orderId);
-                              if (context
-                                  .mounted) {
-                                ScaffoldMessenger.of(
-                                    context)
-                                    .showSnackBar(
-                                  const SnackBar(
-                                      content: Text(
-                                          'Invoice requested')),
+                              // 1. ask backend to either create OR return existing invoice
+                              final resp = await client.createInvoice(orderId);
+
+                              // 2. grab invoice_id
+                              final invoiceId = resp['invoice_id']?.toString();
+
+                              // 3. tell backend to print that invoice (GST bill)
+                              if (invoiceId != null && invoiceId.isNotEmpty) {
+                                await client.printInvoice(invoiceId);
+                              }
+
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Invoice printed ✅')),
                                 );
                               }
                             } catch (e) {
-                              if (context
-                                  .mounted) {
-                                ScaffoldMessenger.of(
-                                    context)
-                                    .showSnackBar(
-                                  SnackBar(
-                                      content: Text(
-                                          'Invoice failed: $e')),
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Invoice print failed: $e')),
                                 );
                               }
                             }
@@ -383,21 +378,24 @@ class OrderDetailSheet extends ConsumerWidget {
                       const SizedBox(width: 12),
                       Expanded(
                         child: FilledButton.icon(
-                          icon: const Icon(
-                              Icons.print),
-                          label: const Text(
-                              'Print Bill'),
+                          icon: const Icon(Icons.print),
+                          label: const Text('Print Bill'),
                           onPressed: () async {
-                            // optional hook for /print/invoice etc.
-                            if (context
-                                .mounted) {
-                              ScaffoldMessenger.of(
-                                  context)
-                                  .showSnackBar(
-                                const SnackBar(
-                                    content: Text(
-                                        'TODO: send print to billing printer')),
-                              );
+                            final client = ref.read(apiClientProvider);
+                            try {
+                              await client.printBill(orderId);
+
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Bill sent to printer 🧾')),
+                                );
+                              }
+                            } catch (e) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Bill print failed: $e')),
+                                );
+                              }
                             }
                           },
                         ),
