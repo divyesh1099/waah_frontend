@@ -1,5 +1,4 @@
 // lib/data/models.dart
-import 'dart:convert';
 
 /// ---------- Utilities ----------
 DateTime? _dt(dynamic v) {
@@ -604,88 +603,151 @@ class Customer {
 }
 
 /// ---------- Orders / Payments / Invoice ----------
+
+// Small helpers to parse enums from backend strings defensively.
+OrderChannel _parseOrderChannel(String? raw) {
+  if (raw == null) return OrderChannel.DINE_IN;
+  for (final v in OrderChannel.values) {
+    if (v.name == raw) return v;
+  }
+  // fallback if backend sent something unexpected
+  return OrderChannel.DINE_IN;
+}
+
+OrderStatus _parseOrderStatus(String? raw) {
+  if (raw == null) return OrderStatus.OPEN;
+  for (final v in OrderStatus.values) {
+    if (v.name == raw) return v;
+  }
+  return OrderStatus.OPEN;
+}
+
+OnlineProvider? _parseOnlineProvider(dynamic raw) {
+  // raw might be null, already enum-ish, or a String like "ZOMATO"
+  if (raw == null) return null;
+  final s = raw.toString();
+  if (s.isEmpty) return null;
+  for (final v in OnlineProvider.values) {
+    if (v.name == s) return v;
+  }
+  return null;
+}
+
+// date helper
+DateTime? _parseDate(dynamic v) {
+  if (v == null) return null;
+  if (v is DateTime) return v;
+  if (v is String && v.isNotEmpty) {
+    // FastAPI default is ISO8601 with 'Z' or offset => DateTime.parse works
+    return DateTime.tryParse(v);
+  }
+  return null;
+}
+
+// --- Order model ------------------------------------------
+
 class Order {
   final String? id;
-  final String tenantId;
-  final String branchId;
-  final int orderNo;
+
+  final String? tenantId;
+  final String? branchId;
+
+  // NOTE: backend now sends string order_no like "POS1-173...".
+  final String? orderNo;
+
   final OrderChannel channel;
+
+  // MAKE THIS NULLABLE
   final OnlineProvider? provider;
+
   final OrderStatus status;
+
   final String? tableId;
   final String? customerId;
   final String? openedByUserId;
   final String? closedByUserId;
+
   final int? pax;
   final String? sourceDeviceId;
   final String? note;
+
   final DateTime? openedAt;
   final DateTime? closedAt;
 
   Order({
-    this.id,
+    required this.id,
     required this.tenantId,
     required this.branchId,
     required this.orderNo,
     required this.channel,
-    this.provider,
-    this.status = OrderStatus.OPEN,
-    this.tableId,
-    this.customerId,
-    this.openedByUserId,
-    this.closedByUserId,
-    this.pax,
-    this.sourceDeviceId,
-    this.note,
-    this.openedAt,
-    this.closedAt,
+    required this.provider,      // nullable, but still passed in
+    required this.status,
+    required this.tableId,
+    required this.customerId,
+    required this.openedByUserId,
+    required this.closedByUserId,
+    required this.pax,
+    required this.sourceDeviceId,
+    required this.note,
+    required this.openedAt,
+    required this.closedAt,
   });
 
-  factory Order.fromJson(Map<String, dynamic> j) => Order(
-    id: _str(j['id']),
-    tenantId: _str(j['tenant_id']) ?? '',
-    branchId: _str(j['branch_id']) ?? '',
-    orderNo: _numToInt(j['order_no']) ?? 0,
-    channel: _enum<OrderChannel>(_str(j['channel']), OrderChannel.values, (e) => e.name,
-        orElse: OrderChannel.DINE_IN),
-    provider: j['provider'] == null
-        ? null
-        : _enum<OnlineProvider>(
-      _str(j['provider']),
-      OnlineProvider.values,
-          (e) => e.name,
-    ),
-    status: _enum<OrderStatus>(_str(j['status']), OrderStatus.values, (e) => e.name,
-        orElse: OrderStatus.OPEN),
-    tableId: _str(j['table_id']),
-    customerId: _str(j['customer_id']),
-    openedByUserId: _str(j['opened_by_user_id']),
-    closedByUserId: _str(j['closed_by_user_id']),
-    pax: _numToInt(j['pax']),
-    sourceDeviceId: _str(j['source_device_id']),
-    note: _str(j['note']),
-    openedAt: _dt(j['opened_at']),
-    closedAt: _dt(j['closed_at']),
-  );
+  factory Order.fromJson(Map<String, dynamic> j) {
+    return Order(
+      id: j['id']?.toString(),
 
-  Map<String, dynamic> toJson() => {
-    'id': id,
-    'tenant_id': tenantId,
-    'branch_id': branchId,
-    'order_no': orderNo,
-    'channel': channel.name,
-    'provider': provider?.name,
-    'status': status.name,
-    'table_id': tableId,
-    'customer_id': customerId,
-    'opened_by_user_id': openedByUserId,
-    'closed_by_user_id': closedByUserId,
-    'pax': pax,
-    'source_device_id': sourceDeviceId,
-    'note': note,
-    'opened_at': openedAt?.toIso8601String(),
-    'closed_at': closedAt?.toIso8601String(),
-  };
+      tenantId: j['tenant_id']?.toString(),
+      branchId: j['branch_id']?.toString(),
+
+      // backend can send int or string; just stringify
+      orderNo: j['order_no']?.toString(),
+
+      channel: _parseOrderChannel(j['channel']?.toString()),
+
+      // <-- SAFE NULL PARSE
+      provider: _parseOnlineProvider(j['provider']),
+
+      status: _parseOrderStatus(j['status']?.toString()),
+
+      tableId: j['table_id']?.toString(),
+      customerId: j['customer_id']?.toString(),
+      openedByUserId: j['opened_by_user_id']?.toString(),
+      closedByUserId: j['closed_by_user_id']?.toString(),
+
+      pax: j['pax'] is int
+          ? (j['pax'] as int)
+          : (j['pax'] is String ? int.tryParse(j['pax']) : null),
+
+      sourceDeviceId: j['source_device_id']?.toString(),
+      note: j['note']?.toString(),
+
+      openedAt: _parseDate(j['opened_at']),
+      closedAt: _parseDate(j['closed_at']),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'tenant_id': tenantId,
+      'branch_id': branchId,
+      'order_no': orderNo,
+      'channel': channel.name,
+      // provider is nullable, so only include if present
+      'provider': provider?.name,
+      'status': status.name,
+      'table_id': tableId,
+      'customer_id': customerId,
+      'opened_by_user_id': openedByUserId,
+      'closed_by_user_id': closedByUserId,
+      'pax': pax,
+      'source_device_id': sourceDeviceId,
+      'note': note,
+      'opened_at': openedAt?.toUtc().toIso8601String(),
+      'closed_at': closedAt?.toUtc().toIso8601String(),
+    };
+  }
 }
 
 class OrderItem {

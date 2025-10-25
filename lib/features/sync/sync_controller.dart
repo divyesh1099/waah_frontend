@@ -2,7 +2,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:waah_frontend/app/providers.dart';
-import 'package:waah_frontend/data/api_client.dart';
 
 class SyncState {
   final bool syncing;

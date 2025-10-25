@@ -129,11 +129,11 @@ class _OrderTile extends ConsumerWidget {
 
     // next status flow (simple heuristic)
     final nextStatus = _calcNextStatus(order.status);
-
+    final displayNo = order.orderNo ?? '—';
     return Card(
       child: ListTile(
         title: Text(
-          'Order #${order.orderNo} (${order.channel.name})',
+          'Order #$displayNo (${order.channel.name})',
           style: const TextStyle(fontWeight: FontWeight.w600),
         ),
         subtitle: Column(
@@ -234,6 +234,7 @@ void _showOrderDetailsSheet(
     context: context,
     showDragHandle: true,
     builder: (ctx) {
+      final displayNo = order.orderNo ?? '—';
       return Padding(
         padding: const EdgeInsets.all(16),
         child: SingleChildScrollView(
@@ -243,7 +244,7 @@ void _showOrderDetailsSheet(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Order #${order.orderNo}',
+                  'Order #$displayNo',
                   style: Theme.of(ctx)
                       .textTheme
                       .titleLarge
