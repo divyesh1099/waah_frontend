@@ -27,7 +27,7 @@ class WaahApp extends ConsumerWidget {
     final router = ref.watch(appRouterProvider);
     return MaterialApp.router(
       debugShowCheckedModeBanner: false,
-      title: 'Waah POS',
+      title: 'dPOS',
       routerConfig: router,
       theme: ThemeData(
         useMaterial3: true,

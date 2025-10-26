@@ -14,6 +14,23 @@ class AppShell extends ConsumerWidget {
     final me = ref.watch(authControllerProvider).me;
     final currentBranchId = ref.watch(activeBranchIdProvider);
 
+    // pull restaurant settings (name, logo) for this tenant+branch
+    final rs = ref.watch(restaurantSettingsProvider).maybeWhen(
+      data: (s) => s,
+      orElse: () => null,
+    );
+
+    // fallback brand while loading or if not configured yet
+    final brandName =
+    (rs != null && rs.name.isNotEmpty) ? rs.name : 'dPOS';
+
+    // build absolute logo URL if we have a /media/... path
+    final logoFullUrl = (rs != null &&
+        rs.logoUrl != null &&
+        rs.logoUrl!.isNotEmpty)
+        ? '$kBaseUrl${rs.logoUrl}'
+        : null;
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!context.mounted) return;
       if (!authed) {
@@ -23,7 +40,33 @@ class AppShell extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Waah'),
+        title: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            if (logoFullUrl != null)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: Image.network(
+                    logoFullUrl,
+                    height: 32,
+                    width: 32,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) =>
+                    const Icon(Icons.restaurant, size: 32),
+                  ),
+                ),
+              ),
+            Flexible(
+              child: Text(
+                brandName,
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+              ),
+            ),
+          ],
+        ),
       ),
       drawer: Drawer(
         child: ListView(
@@ -32,12 +75,39 @@ class AppShell extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Waah POS',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 16,
-                      )),
+                  // Brand row (logo + name), replaces "dPOS"
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      if (logoFullUrl != null)
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: Image.network(
+                            logoFullUrl,
+                            height: 40,
+                            width: 40,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) =>
+                            const Icon(Icons.restaurant, size: 40),
+                          ),
+                        ),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          brandName,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 16,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      ),
+                    ],
+                  ),
+
                   const SizedBox(height: 8),
+
                   Text(
                     'User: ${me?.name ?? ''}',
                     style: const TextStyle(fontSize: 13),
@@ -46,7 +116,9 @@ class AppShell extends ConsumerWidget {
                     'Branch: ${currentBranchId.isEmpty ? '(none)' : currentBranchId}',
                     style: const TextStyle(fontSize: 12),
                   ),
+
                   const SizedBox(height: 8),
+
                   OutlinedButton.icon(
                     icon: const Icon(Icons.store),
                     label: const Text(

@@ -125,3 +125,23 @@ FutureProvider.autoDispose<List<BranchInfo>>((ref) async {
   if (tenantId.isEmpty) return <BranchInfo>[];
   return api.fetchBranches(tenantId: tenantId);
 });
+
+// Restaurant settings (branding: name, logo, etc) for the active branch.
+final restaurantSettingsProvider =
+FutureProvider.autoDispose<RestaurantSettings?>((ref) async {
+  final api = ref.watch(apiClientProvider);
+  final me = ref.watch(authControllerProvider).me;
+
+  final tenantId = me?.tenantId ?? '';
+  final branchId = ref.watch(activeBranchIdProvider);
+
+  if (tenantId.isEmpty || branchId.isEmpty) {
+    return null;
+  }
+
+  // This calls GET /settings/restaurant and maps it to RestaurantSettings model
+  return api.getRestaurantSettings(
+    tenantId: tenantId,
+    branchId: branchId,
+  );
+});

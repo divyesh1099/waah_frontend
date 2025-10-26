@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:dio/dio.dart';
-
+import 'package:http_parser/http_parser.dart';
 import 'models.dart';
 
 class UnauthorizedException implements Exception {
@@ -1244,16 +1244,13 @@ class ApiClient {
     );
   }
 
-  Future<KitchenTicket> patchKitchenTicketStatus(
+  Future<void> patchKitchenTicketStatus(
       String id,
       KOTStatus status,
       ) async {
-    final r = await _patch(
+    await _patch(
       '/kot/$id',
       body: {'status': status.name},
-    );
-    return KitchenTicket.fromJson(
-      Map<String, dynamic>.from(r as Map),
     );
   }
 
@@ -1571,4 +1568,57 @@ class ApiClient {
     }
     return <PermissionInfo>[];
   }
+  /// Upload restaurant logo image and get back a public URL.
+  /// - tenantId / branchId go as normal form fields
+  /// - file goes as multipart
+  /// - backend returns { "logo_url": "/media/..." }
+  ///
+  /// `bytes`: file bytes (e.g. pickedFile.readAsBytes())
+  /// `filename`: something like "logo.png" or "logo.jpg"
+  /// `contentType`: mime string like "image/png" or "image/jpeg"
+  ///
+  Future<String> uploadRestaurantLogo({
+    required String tenantId,
+    required String branchId,
+    required List<int> bytes,
+    required String filename,
+    required String contentType, // make this required so backend validation passes
+  }) async {
+    // Build a MediaType ("image", "png") from "image/png"
+    final mediaType = MediaType.parse(contentType);
+
+    final formData = FormData.fromMap({
+      'tenant_id': tenantId,
+      'branch_id': branchId,
+      'file': MultipartFile.fromBytes(
+        bytes,
+        filename: filename,
+        contentType: mediaType,
+      ),
+    });
+
+    final resp = await _dio.post(
+      '/settings/restaurant/logo',
+      data: formData,
+      options: Options(
+        headers: {
+          // Dio will add the proper multipart boundary.
+          'Content-Type': 'multipart/form-data',
+          if (_token != null && _token!.isNotEmpty)
+            'Authorization': 'Bearer $_token',
+        },
+      ),
+    );
+
+    final data = resp.data;
+    if (data is Map && data['logo_url'] is String) {
+      return data['logo_url'] as String;
+    }
+
+    throw ApiException(
+      'uploadRestaurantLogo: unexpected response',
+      resp.statusCode,
+    );
+  }
+
 }

@@ -6,7 +6,7 @@ class HomePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Center(
-      child: Text('Welcome to WAAH â€” Windows & Android ready.'),
+      child: Text('Welcome to dPOS Windows & Android ready.'),
     );
   }
 }
