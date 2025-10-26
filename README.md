@@ -338,3 +338,4 @@ All rights reserved by the author(s).
 dPOS is aiming to be “restaurant-first, not accounting-first”: fast billing, fast KOT, and very little nonsense.
 ::contentReference[oaicite:0]{index=0}
 ```
+❤️Moti
