@@ -6,6 +6,8 @@ import 'package:dio/dio.dart';
 import 'package:waah_frontend/data/api_client.dart';
 import 'package:waah_frontend/features/auth/auth_controller.dart';
 
+import '../data/models.dart';
+
 /// ---- Base URL (edit if you use another env) ----
 const kBaseUrl = String.fromEnvironment(
   'WAAH_BASE_URL',
@@ -112,4 +114,14 @@ final apiClientProvider = Provider<ApiClient>((ref) {
 final activeBranchIdProvider = StateProvider<String>((ref) {
   final me = ref.watch(authControllerProvider).me;
   return me?.branchId ?? '';
+});
+
+// All branches for this tenant (used by branch picker UI)
+final branchesProvider =
+FutureProvider.autoDispose<List<BranchInfo>>((ref) async {
+  final api = ref.watch(apiClientProvider);
+  final me = ref.watch(authControllerProvider).me;
+  final tenantId = me?.tenantId ?? '';
+  if (tenantId.isEmpty) return <BranchInfo>[];
+  return api.fetchBranches(tenantId: tenantId);
 });

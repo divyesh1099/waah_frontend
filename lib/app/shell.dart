@@ -11,8 +11,9 @@ class AppShell extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final authed = ref.watch(isAuthedProvider);
+    final me = ref.watch(authControllerProvider).me;
+    final currentBranchId = ref.watch(activeBranchIdProvider);
 
-    // if token got nuked (401 -> logout), kick user to /login
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!context.mounted) return;
       if (!authed) {
@@ -27,8 +28,37 @@ class AppShell extends ConsumerWidget {
       drawer: Drawer(
         child: ListView(
           children: [
-            const DrawerHeader(
-              child: Text('Waah POS'),
+            DrawerHeader(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Waah POS',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 16,
+                      )),
+                  const SizedBox(height: 8),
+                  Text(
+                    'User: ${me?.name ?? ''}',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  Text(
+                    'Branch: ${currentBranchId.isEmpty ? '(none)' : currentBranchId}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.store),
+                    label: const Text(
+                      'Change Branch',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    onPressed: () {
+                      context.go('/branch/select');
+                    },
+                  ),
+                ],
+              ),
             ),
             ListTile(
               title: const Text('Menu'),

@@ -33,6 +33,7 @@ import 'package:waah_frontend/features/users/roles_page.dart';
 import 'package:waah_frontend/features/settings/settings_page.dart';
 import 'package:waah_frontend/features/settings/branch_settings_page.dart';
 import 'package:waah_frontend/features/settings/printer_settings_page.dart';
+import 'package:waah_frontend/features/settings/branch_select_page.dart';
 
 /// Small gate that redirects after the first frame based on auth state.
 class HomeGate extends ConsumerWidget {
@@ -41,10 +42,18 @@ class HomeGate extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final authed = ref.watch(isAuthedProvider);
+    final hasBranch =
+        ref.watch(activeBranchIdProvider).trim().isNotEmpty;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!context.mounted) return;
-      context.go(authed ? '/menu' : '/login');
+      if (!authed) {
+        context.go('/login');
+      } else if (!hasBranch) {
+        context.go('/branch/select');
+      } else {
+        context.go('/menu');
+      }
     });
 
     return const Scaffold(body: SizedBox.shrink());
@@ -178,6 +187,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             name: 'orders',
             builder: (c, s) => const OrdersPage(),
           ),
+          GoRoute(
+            path: '/branch/select',
+            builder: (c, s) => const BranchSelectPage(),
+          ),
         ],
       ),
     ],
@@ -186,15 +199,34 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     redirect: (context, state) {
       final authed = ref.read(isAuthedProvider);
       final path = state.uri.path;
+      final branchIdNow =
+      ref.read(activeBranchIdProvider).trim();
+      final hasBranch = branchIdNow.isNotEmpty;
 
       final isPublic = path == '/login' ||
           path == '/onboarding' ||
           path == '/';
 
-      // not logged in -> must be on public route
-      if (!authed && !isPublic) return '/login';
+      // not logged in -> force /login (unless already public)
+      if (!authed && !isPublic) {
+        return '/login';
+      }
 
-      // logged in shouldn't go back to login/onboarding
+      // logged in but NO branch yet:
+      // only let them sit on /branch/select
+      if (authed && !hasBranch) {
+        if (path != '/branch/select') {
+          return '/branch/select';
+        }
+        return null;
+      }
+
+      // logged in AND branch chosen, but they're still on /branch/select
+      if (authed && hasBranch && path == '/branch/select') {
+        return '/menu';
+      }
+
+      // logged in shouldn't go to /login or /onboarding anymore
       if (authed && (path == '/login' || path == '/onboarding')) {
         return '/';
       }

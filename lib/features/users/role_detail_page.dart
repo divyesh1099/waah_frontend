@@ -7,13 +7,12 @@ import 'package:waah_frontend/data/models.dart';
 
 /// Fetch a specific role (including permissions list)
 final roleDetailProvider =
-FutureProvider.autoDispose
-    .family<RoleInfo, String>((ref, roleId) async {
+FutureProvider.autoDispose.family<RoleInfo, String>((ref, roleId) async {
   final api = ref.watch(apiClientProvider);
   return api.fetchRole(roleId); // ApiClient.fetchRole -> RoleInfo
 });
 
-/// Fetch all possible permissions
+/// Fetch all possible permissions in the system
 final allPermissionsProvider =
 FutureProvider.autoDispose<List<PermissionInfo>>((ref) async {
   final api = ref.watch(apiClientProvider);
@@ -32,7 +31,6 @@ class RoleDetailPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Optimistic initial data: if we navigated with extra:role
     final asyncRole = ref.watch(roleDetailProvider(roleId));
 
     return Scaffold(
@@ -146,7 +144,8 @@ class _PermTileState extends ConsumerState<_PermTile> {
       await ref
           .read(apiClientProvider)
           .revokeRolePermission(widget.roleId, widget.permCode);
-      // after successful revoke, refresh parent role detail provider
+
+      // refresh role after revoke
       ref.invalidate(roleDetailProvider(widget.roleId));
     } catch (e) {
       if (mounted) {
@@ -182,7 +181,7 @@ class _PermTileState extends ConsumerState<_PermTile> {
   }
 }
 
-/// Dialog to GRANT new permissions to this role.
+/// Dialog to GRANT a new permission to this role.
 class _AddPermDialog extends ConsumerStatefulWidget {
   final String roleId;
   const _AddPermDialog({required this.roleId});
@@ -229,8 +228,6 @@ class _AddPermDialogState extends ConsumerState<_AddPermDialog> {
 
   @override
   Widget build(BuildContext context) {
-    // We need both the full list of permissions in system,
-    // and the current role's permissions so we can filter out duplicates.
     final asyncAllPerms = ref.watch(allPermissionsProvider);
     final asyncRole = ref.watch(roleDetailProvider(widget.roleId));
 

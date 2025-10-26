@@ -1347,6 +1347,31 @@ class ApiClient {
     return <BranchInfo>[];
   }
 
+  Future<String> createBranch({
+    required String tenantId,
+    required String name,
+    String? phone,
+    String? gstin,
+    String? stateCode,
+    String? address,
+  }) async {
+    final resp = await _post(
+      '/identity/branches',
+      body: {
+        'tenant_id': tenantId,
+        'name': name,
+        if (phone != null && phone.isNotEmpty) 'phone': phone,
+        if (gstin != null && gstin.isNotEmpty) 'gstin': gstin,
+        if (stateCode != null && stateCode.isNotEmpty)
+          'state_code': stateCode,
+        if (address != null && address.isNotEmpty) 'address': address,
+      },
+    );
+
+    final map = Map<String, dynamic>.from(resp as Map);
+    return map['id']?.toString() ?? '';
+  }
+
   // ---------- Shift ----------
 
   // GET /shift/status?branch_id=...
