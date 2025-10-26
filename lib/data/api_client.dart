@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'package:dio/dio.dart';
 import 'package:http_parser/http_parser.dart';
 import 'models.dart';
+import '../../env.dart';
 
 class UnauthorizedException implements Exception {
   final String message;
