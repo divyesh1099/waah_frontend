@@ -1,30 +1,38 @@
-﻿// lib/app/router.dart
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:waah_frontend/app/providers.dart';
-import 'package:waah_frontend/data/models.dart'; // <-- add this
+import 'package:waah_frontend/data/models.dart';
 
+import '../features/users/role_detail_page.dart';
 import 'shell.dart';
 
-import '../features/auth/login_page.dart';
-import '../features/onboarding/onboarding_page.dart';
+// Public / auth / onboarding
+import 'package:waah_frontend/features/auth/login_page.dart';
+import 'package:waah_frontend/features/onboarding/onboarding_page.dart';
 
-import '../features/home/home_page.dart';
-import '../features/pos/pos_page.dart';
-import '../features/kot/kot_page.dart';
-import '../features/online/online_page.dart';
-import '../features/shift/shift_page.dart';
-import '../features/menu/menu_page.dart';
-import '../features/inventory/inventory_page.dart';
-import '../features/reports/reports_page.dart';
-import '../features/users/users_page.dart';
-import '../features/users/user_new_page.dart';
-import '../features/users/user_detail_page.dart';
-import '../features/users/roles_page.dart'; //
-import '../features/settings/settings_page.dart';
-import '../features/orders/orders_page.dart';
+// Main app sections
+import 'package:waah_frontend/features/home/home_page.dart';
+import 'package:waah_frontend/features/pos/pos_page.dart';
+import 'package:waah_frontend/features/kot/kot_page.dart';
+import 'package:waah_frontend/features/online/online_page.dart';
+import 'package:waah_frontend/features/shift/shift_page.dart';
+import 'package:waah_frontend/features/menu/menu_page.dart';
+import 'package:waah_frontend/features/inventory/inventory_page.dart';
+import 'package:waah_frontend/features/reports/reports_page.dart';
+import 'package:waah_frontend/features/orders/orders_page.dart';
+
+// Users / roles
+import 'package:waah_frontend/features/users/users_page.dart';
+import 'package:waah_frontend/features/users/user_new_page.dart';
+import 'package:waah_frontend/features/users/user_detail_page.dart';
+import 'package:waah_frontend/features/users/roles_page.dart';
+
+// Settings
+import 'package:waah_frontend/features/settings/settings_page.dart';
+import 'package:waah_frontend/features/settings/branch_settings_page.dart';
+import 'package:waah_frontend/features/settings/printer_settings_page.dart';
 
 /// Small gate that redirects after the first frame based on auth state.
 class HomeGate extends ConsumerWidget {
@@ -48,25 +56,55 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     initialLocation: '/',
     routes: [
       // Public
-      GoRoute(path: '/', builder: (c, s) => const HomeGate()),
-      GoRoute(path: '/login', builder: (c, s) => const LoginPage()),
-      GoRoute(path: '/onboarding', builder: (c, s) => const OnboardingPage()),
+      GoRoute(
+        path: '/',
+        builder: (c, s) => const HomeGate(),
+      ),
+      GoRoute(
+        path: '/login',
+        builder: (c, s) => const LoginPage(),
+      ),
+      GoRoute(
+        path: '/onboarding',
+        builder: (c, s) => const OnboardingPage(),
+      ),
 
-      // Authed area
+      // Authed area (everything below goes inside AppShell with drawer/appbar)
       ShellRoute(
         builder: (context, state, child) => AppShell(child: child),
         routes: [
-          GoRoute(path: '/home', builder: (c, s) => const HomePage()),
-          GoRoute(path: '/pos', builder: (c, s) => const PosPage()),
-          GoRoute(path: '/kot', builder: (c, s) => const KotPage()),
-          GoRoute(path: '/online', builder: (c, s) => const OnlinePage()),
-          GoRoute(path: '/shift', builder: (c, s) => const ShiftPage()),
-          GoRoute(path: '/menu', builder: (c, s) => const MenuPage()),
+          GoRoute(
+            path: '/home',
+            builder: (c, s) => const HomePage(),
+          ),
+          GoRoute(
+            path: '/pos',
+            builder: (c, s) => const PosPage(),
+          ),
+          GoRoute(
+            path: '/kot',
+            builder: (c, s) => const KotPage(),
+          ),
+          GoRoute(
+            path: '/online',
+            builder: (c, s) => const OnlinePage(),
+          ),
+          GoRoute(
+            path: '/shift',
+            builder: (c, s) => const ShiftPage(),
+          ),
+          GoRoute(
+            path: '/menu',
+            builder: (c, s) => const MenuPage(),
+          ),
           GoRoute(
             path: '/inventory',
             builder: (c, s) => const InventoryPage(),
           ),
-          GoRoute(path: '/reports', builder: (c, s) => const ReportsPage()),
+          GoRoute(
+            path: '/reports',
+            builder: (c, s) => const ReportsPage(),
+          ),
 
           // USERS LIST
           GoRoute(
@@ -106,8 +144,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: '/roles/:roleId',
             builder: (c, s) {
               final rid = s.pathParameters['roleId']!;
-              final initialRole =
-              s.extra is Role ? s.extra as Role : null;
+              final initialRole = s.extra is RoleInfo
+                  ? s.extra as RoleInfo
+                  : null;
               return RoleDetailPage(
                 roleId: rid,
                 initialRole: initialRole,
@@ -115,8 +154,25 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             },
           ),
 
+          // SETTINGS LANDING
           GoRoute(
-              path: '/settings', builder: (c, s) => const SettingsPage()),
+            path: '/settings',
+            builder: (c, s) => const SettingsPage(),
+          ),
+
+          // SETTINGS - BRANCH / RESTAURANT PROFILE
+          GoRoute(
+            path: '/settings/branch',
+            builder: (c, s) => const BranchSettingsPage(),
+          ),
+
+          // SETTINGS - PRINTERS / STATIONS
+          GoRoute(
+            path: '/settings/printers',
+            builder: (c, s) => const PrinterSettingsPage(),
+          ),
+
+          // ORDERS LIST
           GoRoute(
             path: '/orders',
             name: 'orders',
@@ -131,13 +187,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       final authed = ref.read(isAuthedProvider);
       final path = state.uri.path;
 
-      final isPublic =
-          path == '/login' || path == '/onboarding' || path == '/';
+      final isPublic = path == '/login' ||
+          path == '/onboarding' ||
+          path == '/';
 
-      // if not logged in and trying to hit a private route
+      // not logged in -> must be on public route
       if (!authed && !isPublic) return '/login';
 
-      // if logged in but trying to go to login/onboarding
+      // logged in shouldn't go back to login/onboarding
       if (authed && (path == '/login' || path == '/onboarding')) {
         return '/';
       }

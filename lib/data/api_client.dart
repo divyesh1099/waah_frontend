@@ -579,52 +579,6 @@ class ApiClient {
         fromJson: Customer.fromJson,
       );
 
-  // ---------- Shift ----------
-
-  Future<Map<String, dynamic>> openShift({
-    required String branchId,
-    required double openingFloat,
-  }) async {
-    final r = await _post(
-      '/shift/open',
-      params: {
-        'branch_id': branchId,
-        'opening_float': openingFloat,
-      },
-    );
-    return Map<String, dynamic>.from(r as Map);
-  }
-
-  Future<void> payout(
-      String shiftId,
-      double amount,
-      String reason,
-      ) async {
-    await _post(
-      '/shift/$shiftId/payout',
-      params: {
-        'amount': amount,
-        'reason': reason,
-      },
-    );
-  }
-
-  Future<void> closeShift(
-      String shiftId, {
-        required double expectedCash,
-        required double actualCash,
-        String? note,
-      }) async {
-    await _post(
-      '/shift/$shiftId/close',
-      params: {
-        'expected_cash': expectedCash,
-        'actual_cash': actualCash,
-        'note': note,
-      }..removeWhere((k, v) => v == null),
-    );
-  }
-
   // ---------- Orders / Pay / Invoice ----------
 
   Future<PageResult<Order>> fetchOrders({
@@ -1069,78 +1023,6 @@ class ApiClient {
     await _delete('/users/$userId/roles/$roleCode');
   }
 
-  /// List roles for a tenant
-  Future<List<Role>> listRoles({required String tenantId}) async {
-    final r = await _get(
-      '/users/roles',
-      params: {
-        'tenant_id': tenantId,
-      },
-    );
-    if (r is List) {
-      return r
-          .map(
-            (row) => Role.fromJson(
-          Map<String, dynamic>.from(row as Map),
-        ),
-      )
-          .toList();
-    }
-    return <Role>[];
-  }
-
-  /// Create a role code in a tenant, returns new role id
-  Future<String> createRole({
-    required String tenantId,
-    required String code,
-  }) async {
-    final resp = await _post(
-      '/users/roles',
-      body: {
-        'tenant_id': tenantId,
-        'code': code,
-      },
-    );
-    final map = Map<String, dynamic>.from(resp as Map);
-    return map['id']?.toString() ?? '';
-  }
-
-  /// List all possible permissions in the system
-  Future<List<PermissionInfo>> listPermissions() async {
-    final r = await _get('/users/permissions');
-    if (r is List) {
-      return r
-          .map(
-            (row) => PermissionInfo.fromJson(
-          Map<String, dynamic>.from(row as Map),
-        ),
-      )
-          .toList();
-    }
-    return <PermissionInfo>[];
-  }
-
-  /// Grant permissions to a role
-  /// POST /users/roles/{role_id}/grant { "permissions": ["SETTINGS_EDIT", ...] }
-  Future<void> grantRolePermissions(
-      String roleId,
-      List<String> permissions,
-      ) async {
-    await _post(
-      '/users/roles/$roleId/grant',
-      body: {'permissions': permissions},
-    );
-  }
-
-  /// Revoke a single permission from a role
-  /// DELETE /users/roles/{role_id}/revoke/{perm_code}
-  Future<void> revokeRolePermission(
-      String roleId,
-      String permCode,
-      ) async {
-    await _delete('/users/roles/$roleId/revoke/$permCode');
-  }
-
   // ---------- Sync ----------
 
   Future<void> syncPush({
@@ -1442,5 +1324,226 @@ class ApiClient {
       },
     );
     return Ingredient.fromJson(Map<String, dynamic>.from(r as Map));
+  }
+
+  // ---------- Identity / Branches ----------
+
+  Future<List<BranchInfo>> fetchBranches({String? tenantId}) async {
+    final r = await _get(
+      '/identity/branches',
+      params: {
+        if (tenantId != null && tenantId.isNotEmpty)
+          'tenant_id': tenantId,
+      },
+    );
+
+    if (r is List) {
+      return r
+          .map((row) => BranchInfo.fromJson(
+        Map<String, dynamic>.from(row as Map),
+      ))
+          .toList();
+    }
+    return <BranchInfo>[];
+  }
+
+  // ---------- Shift ----------
+
+  // GET /shift/status?branch_id=...
+  Future<ShiftStatus?> fetchCurrentShift({
+    required String branchId,
+  }) async {
+    final r = await _get(
+      '/shift/status',
+      params: {'branch_id': branchId},
+    );
+
+    if (r is Map && r.isNotEmpty && r['id'] != null) {
+      return ShiftStatus.fromJson(
+        Map<String, dynamic>.from(r as Map),
+      );
+    }
+    return null;
+  }
+
+  // POST /shift/open?branch_id=...&opening_float=...
+  Future<void> openShift({
+    required String branchId,
+    required double openingFloat,
+  }) async {
+    await _post(
+      '/shift/open',
+      params: {
+        'branch_id': branchId,
+        'opening_float': openingFloat,
+      },
+    );
+  }
+
+  // POST /shift/{shift_id}/payin?amount=..&reason=..
+  Future<void> cashIn({
+    required String shiftId,
+    required double amount,
+    String? reason,
+  }) async {
+    await _post(
+      '/shift/$shiftId/payin',
+      params: {
+        'amount': amount,
+        if (reason != null) 'reason': reason,
+      },
+    );
+  }
+
+  // POST /shift/{shift_id}/payout?amount=..&reason=..
+  Future<void> cashOut({
+    required String shiftId,
+    required double amount,
+    String? reason,
+  }) async {
+    await _post(
+      '/shift/$shiftId/payout',
+      params: {
+        'amount': amount,
+        if (reason != null) 'reason': reason,
+      },
+    );
+  }
+
+  // POST /shift/{shift_id}/close?expected_cash=..&actual_cash=..&note=..
+  Future<Map<String, dynamic>> closeShift({
+    required String shiftId,
+    required double expectedCash,
+    required double actualCash,
+    String? note,
+  }) async {
+    final r = await _post(
+      '/shift/$shiftId/close',
+      params: {
+        'expected_cash': expectedCash,
+        'actual_cash': actualCash,
+        if (note != null) 'note': note,
+      },
+    );
+    return Map<String, dynamic>.from(r as Map);
+  }
+
+  Future<List<Map<String, dynamic>>> listPrinters({
+    required String tenantId,
+    required String branchId,
+  }) async {
+    final r = await _get('/settings/printers', params: {
+      'tenant_id': tenantId,
+      'branch_id': branchId,
+    });
+
+    if (r is List) {
+      return List<Map<String, dynamic>>.from(
+        r.map((e) => Map<String, dynamic>.from(e as Map)),
+      );
+    }
+    return <Map<String, dynamic>>[];
+  }
+
+  Future<List<Map<String, dynamic>>> listStations({
+    required String tenantId,
+    required String branchId,
+  }) async {
+    final r = await _get('/settings/stations', params: {
+      'tenant_id': tenantId,
+      'branch_id': branchId,
+    });
+
+    if (r is List) {
+      return List<Map<String, dynamic>>.from(
+        r.map((e) => Map<String, dynamic>.from(e as Map)),
+      );
+    }
+    return <Map<String, dynamic>>[];
+  }
+
+  // ---------- Roles -------------------------------------------------------
+
+  /// List roles in a tenant.
+  /// Each role includes id, code, and a `permissions` list (may be empty).
+  Future<List<RoleInfo>> listRoles({String? tenantId}) async {
+    final r = await _get(
+      '/users/roles',
+      params: {
+        if (tenantId != null && tenantId.isNotEmpty)
+          'tenant_id': tenantId,
+      },
+    );
+
+    if (r is List) {
+      return r
+          .map(
+            (row) => RoleInfo.fromListJson(
+          Map<String, dynamic>.from(row as Map),
+        ),
+      )
+          .toList();
+    }
+    return <RoleInfo>[];
+  }
+
+  /// Create a new role code in this tenant.
+  /// Returns the new role ID.
+  Future<String> createRole({
+    required String tenantId,
+    required String code,
+  }) async {
+    final resp = await _post(
+      '/users/roles',
+      body: {
+        'tenant_id': tenantId,
+        'code': code,
+      },
+    );
+    final map = Map<String, dynamic>.from(resp as Map);
+    return map['id']?.toString() ?? '';
+  }
+
+  /// Fetch 1 role including its granted permissions[].
+  /// Used in RoleDetailPage.
+  Future<RoleInfo> fetchRole(String roleId) async {
+    final r = await _get('/users/roles/$roleId');
+    return RoleInfo.fromJson(Map<String, dynamic>.from(r as Map));
+  }
+
+  /// Grant 1+ permissions to a role.
+  /// POST /users/roles/{role_id}/grant  { "permissions": ["SETTINGS_EDIT","..."] }
+  Future<void> grantRolePermissions(
+      String roleId,
+      List<String> permissions,
+      ) async {
+    await _post(
+      '/users/roles/$roleId/grant',
+      body: {'permissions': permissions},
+    );
+  }
+
+  /// Revoke a specific permission from a role.
+  /// DELETE /users/roles/{role_id}/revoke/{perm_code}
+  Future<void> revokeRolePermission(String roleId, String permCode) async {
+    await _delete('/users/roles/$roleId/revoke/$permCode');
+  }
+
+  // ---------- Permissions --------------------------------------------------
+
+  /// List all possible permissions system-wide.
+  /// Each PermissionInfo has `code` and maybe `description`.
+  Future<List<PermissionInfo>> listPermissions() async {
+    final r = await _get('/users/permissions');
+    if (r is List) {
+      return r
+          .map(
+            (row) => PermissionInfo.fromJson(
+          Map<String, dynamic>.from(row as Map),
+        ),
+      )
+          .toList();
+    }
+    return <PermissionInfo>[];
   }
 }

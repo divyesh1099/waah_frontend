@@ -1237,6 +1237,7 @@ class KitchenTicket {
 class MeInfo {
   final String id;
   final String tenantId;
+  final String? branchId;
   final String name;
   final String? mobile;
   final String? email;
@@ -1247,6 +1248,7 @@ class MeInfo {
   MeInfo({
     required this.id,
     required this.tenantId,
+    required this.branchId,
     required this.name,
     this.mobile,
     this.email,
@@ -1262,6 +1264,7 @@ class MeInfo {
     return MeInfo(
       id: _str(j['id']) ?? '',
       tenantId: _str(j['tenant_id']) ?? '',
+      branchId: _str(j['branch_id']) ?? '',
       name: _str(j['name']) ?? '',
       mobile: _str(j['mobile']),
       email: _str(j['email']),
@@ -1287,6 +1290,13 @@ class MeInfo {
   bool hasPerm(String code) => permissions.contains(code);
 
   bool hasRole(String code) => roles.contains(code);
+
+  bool get canCloseShift =>
+      permissions.contains('SHIFT_CLOSE') ||
+          permissions.contains('MANAGER_APPROVE');
+
+  bool get canSettingsEdit =>
+      permissions.contains('SETTINGS_EDIT');
 }
 
 /// Row returned by GET /users/ (list of all staff for a tenant).
@@ -1432,6 +1442,153 @@ class PermissionInfo {
       id: j['id']?.toString() ?? '',
       code: j['code']?.toString() ?? '',
       description: j['description']?.toString(),
+    );
+  }
+}
+
+class CashMovementInfo {
+  final String id;
+  final String kind; // "PAYIN" or "PAYOUT"
+  final double amount;
+  final String? reason;
+  final DateTime? ts;
+
+  CashMovementInfo({
+    required this.id,
+    required this.kind,
+    required this.amount,
+    this.reason,
+    this.ts,
+  });
+
+  factory CashMovementInfo.fromJson(Map<String, dynamic> json) {
+    double _toDouble(dynamic v) {
+      if (v is num) return v.toDouble();
+      return double.tryParse(v?.toString() ?? '0') ?? 0.0;
+    }
+
+    return CashMovementInfo(
+      id: json['id']?.toString() ?? '',
+      kind: json['kind']?.toString() ?? '',
+      amount: _toDouble(json['amount']),
+      reason: json['reason'] as String?,
+      ts: json['ts'] != null
+          ? DateTime.tryParse(json['ts'].toString())
+          : null,
+    );
+  }
+}
+
+// --- Branch list item from /identity/branches
+class BranchInfo {
+  final String id;
+  final String tenantId;
+  final String name;
+  final String? phone;
+  final String? gstin;
+  final String? address;
+  final String? stateCode;
+
+  BranchInfo({
+    required this.id,
+    required this.tenantId,
+    required this.name,
+    this.phone,
+    this.gstin,
+    this.address,
+    this.stateCode,
+  });
+
+  factory BranchInfo.fromJson(Map<String, dynamic> json) {
+    return BranchInfo(
+      id: json['id']?.toString() ?? '',
+      tenantId: json['tenant_id']?.toString() ?? '',
+      name: json['name']?.toString() ?? '',
+      phone: json['phone']?.toString(),
+      gstin: json['gstin']?.toString(),
+      address: json['address']?.toString(),
+      stateCode: json['state_code']?.toString(),
+    );
+  }
+}
+
+// --- One movement row returned in shift.status.movements[]
+class ShiftMovementInfo {
+  final String id;
+  final String kind; // "PAYIN" / "PAYOUT"
+  final double amount;
+  final String? reason;
+  final DateTime? ts;
+
+  ShiftMovementInfo({
+    required this.id,
+    required this.kind,
+    required this.amount,
+    this.reason,
+    this.ts,
+  });
+
+  factory ShiftMovementInfo.fromJson(Map<String, dynamic> json) {
+    double _toDouble(dynamic v) {
+      if (v is num) return v.toDouble();
+      if (v is String) return double.tryParse(v) ?? 0.0;
+      return 0.0;
+    }
+
+    return ShiftMovementInfo(
+      id: json['id']?.toString() ?? '',
+      kind: json['kind']?.toString() ?? '',
+      amount: _toDouble(json['amount']),
+      reason: json['reason']?.toString(),
+      ts: json['ts'] != null ? DateTime.tryParse(json['ts'].toString()) : null,
+    );
+  }
+}
+
+// --- Shape from /shift/status
+class ShiftStatus {
+  final String id;
+  final String branchId;
+  final DateTime? openedAt;
+  final double openingFloat;
+  final double expectedNow;
+  final bool isOpenAndUnlocked;
+  final List<ShiftMovementInfo> movements;
+
+  ShiftStatus({
+    required this.id,
+    required this.branchId,
+    required this.openedAt,
+    required this.openingFloat,
+    required this.expectedNow,
+    required this.isOpenAndUnlocked,
+    required this.movements,
+  });
+
+  factory ShiftStatus.fromJson(Map<String, dynamic> json) {
+    double _toDouble(dynamic v) {
+      if (v is num) return v.toDouble();
+      if (v is String) return double.tryParse(v) ?? 0.0;
+      return 0.0;
+    }
+
+    final mvList = (json['movements'] as List? ?? const [])
+        .map((row) => ShiftMovementInfo.fromJson(
+      Map<String, dynamic>.from(row as Map),
+    ))
+        .toList();
+
+    return ShiftStatus(
+      id: json['id']?.toString() ?? '',
+      branchId: json['branch_id']?.toString() ?? '',
+      openedAt: json['opened_at'] != null
+          ? DateTime.tryParse(json['opened_at'].toString())
+          : null,
+      openingFloat: _toDouble(json['opening_float']),
+      expectedNow: _toDouble(json['expected_now']),
+      isOpenAndUnlocked:
+      json['is_open_and_unlocked'] == true,
+      movements: mvList,
     );
   }
 }

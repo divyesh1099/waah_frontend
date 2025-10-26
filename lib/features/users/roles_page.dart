@@ -1,19 +1,22 @@
-// lib/features/users/roles_page.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:waah_frontend/app/providers.dart';
-import 'package:waah_frontend/data/api_client.dart';
+// no direct import of api_client.dart needed here
 import 'package:waah_frontend/data/models.dart';
 
-/// List all roles for the current tenant
+/// Load all roles for my tenant.
 final rolesListProvider =
-FutureProvider.autoDispose<List<Role>>((ref) async {
+FutureProvider.autoDispose<List<RoleInfo>>((ref) async {
   final api = ref.watch(apiClientProvider);
   final auth = ref.watch(authControllerProvider);
   final tenantId = auth.me?.tenantId ?? '';
-  if (tenantId.isEmpty) return <Role>[];
+
+  if (tenantId.isEmpty) {
+    return <RoleInfo>[];
+  }
+
   return api.listRoles(tenantId: tenantId);
 });
 
@@ -32,33 +35,42 @@ class RolesPage extends ConsumerWidget {
         onPressed: () async {
           final created = await showDialog<bool>(
             context: context,
-            builder: (_) => const _CreateRoleDialog(),
+            builder: (_) => const _NewRoleDialog(),
           );
-          if (created == true) {
+
+          if (created == true && context.mounted) {
             ref.invalidate(rolesListProvider);
           }
         },
         child: const Icon(Icons.add),
       ),
       body: asyncRoles.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, st) => Center(
+        loading: () =>
+        const Center(child: CircularProgressIndicator()),
+        error: (err, _) => Center(
           child: Text(
-            'Failed to load roles: $e',
-            style: const TextStyle(color: Colors.red),
+            'Failed to load roles: $err',
+            style: const TextStyle(
+              color: Colors.redAccent,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
         data: (roles) {
           if (roles.isEmpty) {
             return const Center(
               child: Text(
-                'No roles yet.\nTap + to add one.',
+                'No roles yet.\nTap + to create one.',
                 textAlign: TextAlign.center,
               ),
             );
           }
 
           return ListView.separated(
+            padding: const EdgeInsets.symmetric(
+              vertical: 8,
+              horizontal: 16,
+            ),
             itemCount: roles.length,
             separatorBuilder: (_, __) =>
             const Divider(height: 1, thickness: 0.5),
@@ -68,29 +80,27 @@ class RolesPage extends ConsumerWidget {
                 leading: const Icon(Icons.badge),
                 title: Text(
                   r.code,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 subtitle: Text(
-                  'Tenant ${r.tenantId}',
+                  r.permissions.isEmpty
+                      ? 'No permissions'
+                      : r.permissions.take(3).join(', ') +
+                      (r.permissions.length > 3 ? '…' : ''),
                   style: TextStyle(
                     fontSize: 12,
                     color: Theme.of(context)
                         .colorScheme
                         .onSurface
-                        .withOpacity(.6),
+                        .withOpacity(.7),
                   ),
-                ),
-                trailing: Icon(
-                  Icons.chevron_right,
-                  color: Theme.of(context)
-                      .colorScheme
-                      .onSurface
-                      .withOpacity(.5),
                 ),
                 onTap: () {
                   context.push(
                     '/roles/${r.id}',
-                    extra: r,
+                    extra: r, // passes RoleInfo to RoleDetailPage
                   );
                 },
               );
@@ -102,17 +112,18 @@ class RolesPage extends ConsumerWidget {
   }
 }
 
-/// Dialog to create a role code for this tenant
-class _CreateRoleDialog extends ConsumerStatefulWidget {
-  const _CreateRoleDialog();
+/// Dialog to create a new role code in this tenant.
+class _NewRoleDialog extends ConsumerStatefulWidget {
+  const _NewRoleDialog();
 
   @override
-  ConsumerState<_CreateRoleDialog> createState() => _CreateRoleDialogState();
+  ConsumerState<_NewRoleDialog> createState() => _NewRoleDialogState();
 }
 
-class _CreateRoleDialogState extends ConsumerState<_CreateRoleDialog> {
+class _NewRoleDialogState extends ConsumerState<_NewRoleDialog> {
   final _codeCtl = TextEditingController();
-  bool _saving = false;
+  bool _busy = false;
+  String? _err;
 
   @override
   void dispose() {
@@ -121,32 +132,42 @@ class _CreateRoleDialogState extends ConsumerState<_CreateRoleDialog> {
   }
 
   Future<void> _save() async {
-    final tenantId = ref.read(authControllerProvider).me?.tenantId ?? '';
-    if (tenantId.isEmpty) {
-      Navigator.pop(context, false);
+    final code = _codeCtl.text.trim().toUpperCase();
+    if (code.isEmpty) {
+      setState(() => _err = 'Enter a role code, e.g. CASHIER');
       return;
     }
 
-    final code = _codeCtl.text.trim();
-    if (code.isEmpty) return;
+    setState(() {
+      _busy = true;
+      _err = null;
+    });
 
-    setState(() => _saving = true);
     try {
-      await ref.read(apiClientProvider).createRole(
+      final api = ref.read(apiClientProvider);
+      final me = ref.read(authControllerProvider).me;
+      final tenantId = me?.tenantId ?? '';
+
+      if (tenantId.isEmpty) {
+        throw Exception('No tenant');
+      }
+
+      await api.createRole(
         tenantId: tenantId,
         code: code,
       );
 
-      if (!mounted) return;
-      Navigator.pop(context, true);
+      if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to create role: $e')),
-        );
+        setState(() {
+          _err = e.toString();
+        });
       }
     } finally {
-      if (mounted) setState(() => _saving = false);
+      if (mounted) {
+        setState(() => _busy = false);
+      }
     }
   }
 
@@ -154,212 +175,46 @@ class _CreateRoleDialogState extends ConsumerState<_CreateRoleDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('New Role'),
-      content: TextField(
-        controller: _codeCtl,
-        decoration: const InputDecoration(
-          labelText: 'Role code *',
-          helperText: 'Example: CASHIER, WAITER, MANAGER',
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.pop(context, false),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: _saving ? null : _save,
-          child: _saving
-              ? const SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          )
-              : const Text('Save'),
-        ),
-      ],
-    );
-  }
-}
-
-/// Detail page for a single role: grant or revoke permissions
-class RoleDetailPage extends ConsumerStatefulWidget {
-  const RoleDetailPage({
-    super.key,
-    required this.roleId,
-    this.initialRole,
-  });
-
-  final String roleId;
-  final Role? initialRole;
-
-  @override
-  ConsumerState<RoleDetailPage> createState() => _RoleDetailPageState();
-}
-
-class _RoleDetailPageState extends ConsumerState<RoleDetailPage> {
-  final _grantCtl = TextEditingController();
-  final _revokeCtl = TextEditingController();
-  bool _busyGrant = false;
-  bool _busyRevoke = false;
-
-  @override
-  void dispose() {
-    _grantCtl.dispose();
-    _revokeCtl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _grant() async {
-    final code = _grantCtl.text.trim();
-    if (code.isEmpty) return;
-    setState(() => _busyGrant = true);
-    try {
-      await ref
-          .read(apiClientProvider)
-          .grantRolePermissions(widget.roleId, [code]);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Granted $code')),
-        );
-        _grantCtl.clear();
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Grant failed: $e')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _busyGrant = false);
-    }
-  }
-
-  Future<void> _revoke() async {
-    final code = _revokeCtl.text.trim();
-    if (code.isEmpty) return;
-    setState(() => _busyRevoke = true);
-    try {
-      await ref
-          .read(apiClientProvider)
-          .revokeRolePermission(widget.roleId, code);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Revoked $code')),
-        );
-        _revokeCtl.clear();
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Revoke failed: $e')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _busyRevoke = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final role = widget.initialRole;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(role == null ? 'Role' : role.code),
-      ),
-      body: SingleChildScrollView(
-        padding: EdgeInsets.only(
-          left: 16,
-          right: 16,
-          top: 16,
-          bottom: MediaQuery.of(context).viewInsets.bottom + 32,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (role != null) ...[
-              const Text(
-                'Role Code',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12,
-                ),
-              ),
-              Text(
-                role.code,
-                style: const TextStyle(fontSize: 16),
-              ),
-              const SizedBox(height: 24),
-            ],
-
-            const Text(
-              'Grant Permission',
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
-                fontSize: 16,
-              ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _codeCtl,
+            decoration: const InputDecoration(
+              labelText: 'Role Code',
+              helperText: 'Example: CASHIER, MANAGER, WAITER',
             ),
+          ),
+          if (_err != null) ...[
             const SizedBox(height: 8),
-            TextField(
-              controller: _grantCtl,
-              decoration: const InputDecoration(
-                labelText: 'Permission code',
-                helperText: 'e.g. SETTINGS_EDIT, REPRINT, CLOSE_SHIFT',
-              ),
-            ),
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: _busyGrant ? null : _grant,
-              icon: _busyGrant
-                  ? const SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-                  : const Icon(Icons.add),
-              label: const Text('Grant'),
-            ),
-            const Divider(height: 32),
-
-            const Text(
-              'Revoke Permission',
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
-                fontSize: 16,
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _revokeCtl,
-              decoration: const InputDecoration(
-                labelText: 'Permission code',
-              ),
-            ),
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: _busyRevoke ? null : _revoke,
-              icon: _busyRevoke
-                  ? const SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-                  : const Icon(Icons.remove_circle_outline),
-              label: const Text('Revoke'),
-            ),
-            const SizedBox(height: 24),
-
             Text(
-              'Note: backend does not (yet) return the list of permissions '
-                  'per role in one call, so we manage them here by code.',
+              _err!,
               style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey.shade600,
+                color: Colors.red.shade700,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
               ),
             ),
           ],
-        ),
+        ],
       ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _busy ? null : _save,
+          child: _busy
+              ? const SizedBox(
+            width: 16,
+            height: 16,
+            child:
+            CircularProgressIndicator(strokeWidth: 2),
+          )
+              : const Text('Create'),
+        ),
+      ],
     );
   }
 }

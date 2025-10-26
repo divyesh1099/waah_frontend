@@ -1,5 +1,4 @@
-﻿// lib/app/shell.dart
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -44,9 +43,26 @@ class AppShell extends ConsumerWidget {
               onTap: () => context.go('/orders'),
             ),
             ListTile(
-              title: const Text('Shift'),
+              title: const Text('Shift & Cash'),
               onTap: () => context.go('/shift'),
             ),
+            ListTile(
+              title: const Text('KOT'),
+              onTap: () => context.go('/kot'),
+            ),
+            ListTile(
+              title: const Text('Online Orders'),
+              onTap: () => context.go('/online'),
+            ),
+            ListTile(
+              title: const Text('Inventory'),
+              onTap: () => context.go('/inventory'),
+            ),
+            ListTile(
+              title: const Text('Reports'),
+              onTap: () => context.go('/reports'),
+            ),
+            const Divider(),
             ListTile(
               title: const Text('Users'),
               onTap: () => context.go('/users'),
@@ -57,6 +73,7 @@ class AppShell extends ConsumerWidget {
             ),
             ListTile(
               title: const Text('Settings'),
+              subtitle: const Text('Branch, printers, backup'),
               onTap: () => context.go('/settings'),
             ),
             const Divider(),

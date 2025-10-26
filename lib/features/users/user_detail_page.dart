@@ -1,4 +1,3 @@
-// lib/features/users/user_detail_page.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -24,12 +23,12 @@ FutureProvider.family.autoDispose<UserSummary?, String>((ref, userId) async {
 
 /// roles in this tenant (used in "Add Role" bottom sheet)
 final _tenantRolesProvider =
-FutureProvider.autoDispose<List<Role>>((ref) async {
+FutureProvider.autoDispose<List<RoleInfo>>((ref) async {
   final api = ref.watch(apiClientProvider);
   final auth = ref.watch(authControllerProvider);
   final tenantId = auth.me?.tenantId ?? '';
-  if (tenantId.isEmpty) return <Role>[];
-  return api.listRoles(tenantId: tenantId);
+  if (tenantId.isEmpty) return <RoleInfo>[];
+  return api.listRoles(tenantId: tenantId); // now returns List<RoleInfo>
 });
 
 class UserDetailPage extends ConsumerWidget {
@@ -136,7 +135,8 @@ class _UserDetailBody extends ConsumerWidget {
               CircleAvatar(
                 backgroundColor:
                 user.active ? Colors.green : Colors.grey,
-                child: const Icon(Icons.person, color: Colors.white),
+                child:
+                const Icon(Icons.person, color: Colors.white),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -192,7 +192,8 @@ class _UserDetailBody extends ConsumerWidget {
                 icon: const Icon(Icons.add),
                 label: const Text('Add Role'),
                 onPressed: () async {
-                  final added = await showModalBottomSheet<bool>(
+                  final added =
+                  await showModalBottomSheet<bool>(
                     context: context,
                     isScrollControlled: true,
                     builder: (_) => _AddRoleSheet(
@@ -201,7 +202,8 @@ class _UserDetailBody extends ConsumerWidget {
                     ),
                   );
                   if (added == true) {
-                    ref.invalidate(_userDetailProvider(userId));
+                    ref.invalidate(
+                        _userDetailProvider(userId));
                   }
                 },
               ),
@@ -212,7 +214,9 @@ class _UserDetailBody extends ConsumerWidget {
           if (chips.isEmpty)
             Text(
               'No roles yet. Tap "Add Role".',
-              style: TextStyle(color: Colors.grey.shade600),
+              style: TextStyle(
+                color: Colors.grey.shade600,
+              ),
             )
           else
             Wrap(children: chips),
@@ -232,10 +236,12 @@ class _AddRoleSheet extends ConsumerStatefulWidget {
   final List<String> already;
 
   @override
-  ConsumerState<_AddRoleSheet> createState() => _AddRoleSheetState();
+  ConsumerState<_AddRoleSheet> createState() =>
+      _AddRoleSheetState();
 }
 
-class _AddRoleSheetState extends ConsumerState<_AddRoleSheet> {
+class _AddRoleSheetState
+    extends ConsumerState<_AddRoleSheet> {
   final Set<String> _selected = {};
   bool _saving = false;
 
@@ -250,7 +256,8 @@ class _AddRoleSheetState extends ConsumerState<_AddRoleSheet> {
     try {
       await ref
           .read(apiClientProvider)
-          .assignUserRoles(widget.userId, _selected.toList());
+          .assignUserRoles(
+          widget.userId, _selected.toList());
 
       if (!mounted) return;
       Navigator.pop(context, true);
@@ -275,25 +282,30 @@ class _AddRoleSheetState extends ConsumerState<_AddRoleSheet> {
           left: 16,
           right: 16,
           top: 16,
-          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+          bottom:
+          MediaQuery.of(context).viewInsets.bottom + 16,
         ),
         child: rolesAsync.when(
           loading: () => const SizedBox(
             height: 120,
-            child: Center(child: CircularProgressIndicator()),
+            child:
+            Center(child: CircularProgressIndicator()),
           ),
           error: (e, st) => SizedBox(
             height: 120,
             child: Center(
               child: Text(
                 'Failed to load roles: $e',
-                style: const TextStyle(color: Colors.red),
+                style:
+                const TextStyle(color: Colors.red),
               ),
             ),
           ),
           data: (roles) {
+            // roles is List<RoleInfo>
             final filtered = roles
-                .where((r) => !widget.already.contains(r.code))
+                .where((r) =>
+            !widget.already.contains(r.code))
                 .toList();
 
             if (filtered.isEmpty) {
@@ -302,11 +314,14 @@ class _AddRoleSheetState extends ConsumerState<_AddRoleSheet> {
                 children: [
                   const Text(
                     'No more roles to add.',
-                    style: TextStyle(fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   OutlinedButton(
-                    onPressed: () => Navigator.pop(context, false),
+                    onPressed: () =>
+                        Navigator.pop(context, false),
                     child: const Text('Close'),
                   ),
                 ],
@@ -325,11 +340,14 @@ class _AddRoleSheetState extends ConsumerState<_AddRoleSheet> {
                 ),
                 const SizedBox(height: 12),
                 ...filtered.map((r) {
-                  final checked = _selected.contains(r.code);
+                  final checked =
+                  _selected.contains(r.code);
                   return CheckboxListTile(
                     value: checked,
                     title: Text(r.code),
-                    controlAffinity: ListTileControlAffinity.leading,
+                    controlAffinity:
+                    ListTileControlAffinity
+                        .leading,
                     onChanged: (val) {
                       setState(() {
                         if (val == true) {
@@ -346,20 +364,28 @@ class _AddRoleSheetState extends ConsumerState<_AddRoleSheet> {
                   children: [
                     Expanded(
                       child: OutlinedButton(
-                        onPressed:
-                        _saving ? null : () => Navigator.pop(context, false),
-                        child: const Text('Cancel'),
+                        onPressed: _saving
+                            ? null
+                            : () =>
+                            Navigator.pop(
+                                context,
+                                false),
+                        child:
+                        const Text('Cancel'),
                       ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: FilledButton(
-                        onPressed: _saving ? null : _commit,
+                        onPressed: _saving
+                            ? null
+                            : _commit,
                         child: _saving
                             ? const SizedBox(
                           width: 16,
                           height: 16,
-                          child: CircularProgressIndicator(
+                          child:
+                          CircularProgressIndicator(
                             strokeWidth: 2,
                           ),
                         )

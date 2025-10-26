@@ -107,3 +107,9 @@ final apiClientProvider = Provider<ApiClient>((ref) {
 
   return client;
 });
+// Which branch this device is currently operating on.
+// Defaults to whatever /auth/me said, but user can change it via picker.
+final activeBranchIdProvider = StateProvider<String>((ref) {
+  final me = ref.watch(authControllerProvider).me;
+  return me?.branchId ?? '';
+});
