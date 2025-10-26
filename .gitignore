@@ -6,3 +6,5 @@ build/
 ios/Pods/
 android/.gradle/
 windows/flutter/ephemeral/
+android/key.properties
+android/app/release.keystore
