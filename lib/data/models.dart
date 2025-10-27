@@ -1149,7 +1149,63 @@ class OrderDetail {
   final OrderTotals totals;
   OrderDetail({required this.order, required this.totals});
 }
+/// ---------- KOT line model (add this) ----------
+class KitchenTicketLine {
+  final String? id;
+  final String name;
+  final double qty;
+  final String? variantLabel;
+  /// Accepts List<String> or List<Map>/objects from backend
+  final List<dynamic> modifiers;
 
+  KitchenTicketLine({
+    this.id,
+    required this.name,
+    required this.qty,
+    this.variantLabel,
+    List<dynamic>? modifiers,
+  }) : modifiers = modifiers ?? const [];
+
+  factory KitchenTicketLine.fromJson(Map<String, dynamic> j) {
+    final name =
+        _str(j['name']) ??
+            _str(j['item_name']) ??
+            _str(j['title']) ??
+            _str(j['label']) ??
+            '';
+    final qty =
+        _numToDouble(j['qty']) ??
+            _numToDouble(j['quantity']) ??
+            1;
+
+    final variant =
+        _str(j['variant_label']) ??
+            _str(j['variantLabel']) ??
+            _str(j['variant_name']) ??
+            _str(j['variantName']) ??
+            _str(j['variant']);
+
+    final mods = j['modifiers'] ?? j['mods'] ?? const [];
+
+    return KitchenTicketLine(
+      id: _str(j['id']) ?? _str(j['_id']),
+      name: name ?? '',
+      qty: qty ?? 1,
+      variantLabel: variant,
+      modifiers: (mods is List) ? mods : const [],
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'qty': qty,
+    'variant_label': variantLabel,
+    'modifiers': modifiers,
+  };
+}
+
+/// ---------- KOT ticket (replace your existing class) ----------
 class KitchenTicket {
   final String? id;
   final String orderId;
@@ -1166,6 +1222,9 @@ class KitchenTicket {
   final String? orderNo;
   final String? orderNote;
 
+  // NEW: detailed line items for the ticket
+  final List<KitchenTicketLine> lines;
+
   KitchenTicket({
     required this.id,
     required this.orderId,
@@ -1179,35 +1238,54 @@ class KitchenTicket {
     required this.waiterName,
     required this.orderNo,
     required this.orderNote,
-  });
+    List<KitchenTicketLine>? lines,
+  }) : lines = lines ?? const [];
 
   factory KitchenTicket.fromJson(Map<String, dynamic> json) {
-    // parse status
-    final statusStr = (json['status'] ?? 'NEW') as String;
+    // status
+    final statusStr = (_str(json['status']) ?? 'NEW');
     final st = KOTStatus.values.firstWhere(
           (e) => e.name == statusStr,
       orElse: () => KOTStatus.NEW,
     );
 
+    // lines: accept several possible keys from backend
+    final rawLines =
+        json['lines'] ??
+            json['items'] ??
+            json['order_lines'] ??
+            json['kot_lines'] ??
+            const [];
+    final parsedLines = (rawLines is List)
+        ? rawLines
+        .where((e) => e is Map)
+        .map((e) => KitchenTicketLine.fromJson(
+      Map<String, dynamic>.from(e as Map),
+    ))
+        .toList()
+        : const <KitchenTicketLine>[];
+
     return KitchenTicket(
-      id: json['id'] as String?,
-      orderId: json['order_id'] as String,
+      id: _str(json['id']),
+      orderId: _str(json['order_id']) ?? '',  // keep required in your model
       ticketNo: json['ticket_no'] is int
-          ? json['ticket_no'] as int
+          ? (json['ticket_no'] as int)
           : int.tryParse(json['ticket_no'].toString()) ?? 0,
-      targetStation: json['target_station'] as String?,
-      stationName: json['station_name'] as String?,
+      targetStation: _str(json['target_station']),
+      stationName: _str(json['station_name']),
       status: st,
-      printedAt: json['printed_at'] != null && (json['printed_at'] as String).isNotEmpty
-          ? DateTime.tryParse(json['printed_at'] as String)
+      printedAt: _str(json['printed_at']) != null &&
+          _str(json['printed_at'])!.isNotEmpty
+          ? DateTime.tryParse(_str(json['printed_at'])!)
           : null,
       reprintCount: json['reprint_count'] is int
           ? (json['reprint_count'] as int)
           : int.tryParse('${json['reprint_count'] ?? "0"}') ?? 0,
-      tableCode: json['table_code'] as String?,
-      waiterName: json['waiter_name'] as String?,
-      orderNo: json['order_no'] as String?,
-      orderNote: json['order_note'] as String?,
+      tableCode: _str(json['table_code']),
+      waiterName: _str(json['waiter_name']),
+      orderNo: _str(json['order_no']),
+      orderNote: _str(json['order_note']),
+      lines: parsedLines,
     );
   }
 
@@ -1225,6 +1303,7 @@ class KitchenTicket {
       'waiter_name': waiterName,
       'order_no': orderNo,
       'order_note': orderNote,
+      'lines': lines.map((e) => e.toJson()).toList(),
     };
   }
 }

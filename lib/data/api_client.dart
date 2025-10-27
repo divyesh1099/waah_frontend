@@ -24,14 +24,20 @@ class ApiClient {
   ApiClient(this._dio, {
     required this.baseUrl,
     void Function()? onUnauthorized,
-  }) : _onUnauthorized = onUnauthorized;
+  }) : _onUnauthorized = onUnauthorized {
+    // Keep Dio aligned with http.* base and auth for relative calls
+    _dio.options.baseUrl = baseUrl;
+    if (_token != null && _token!.isNotEmpty) {
+      _dio.options.headers['Authorization'] = 'Bearer $_token';
+    }
+  }
   final Dio _dio;
   final String baseUrl;
   final void Function()? _onUnauthorized;
 
   String? _token;
 
-  void setToken(String? t) => _token = t;
+  void setToken(String? t) => _token = t; // kept as-is for backward compatibility
   void updateAuthToken(String? token) {
     _token = token;
 
@@ -1193,13 +1199,20 @@ class ApiClient {
     );
   }
 
+  // ---------- KOT (Kitchen) ----------
+
   Future<List<KitchenTicket>> fetchKitchenTickets({
     KOTStatus? status,
+    String? tenantId,
+    String? branchId,
   }) {
     return listAll<KitchenTicket>(
       path: '/kot/tickets',
-      params: {'status': status?.name}
-        ..removeWhere((k, v) => v == null),
+      params: {
+        'status': status?.name,
+        if (tenantId != null) 'tenant_id': tenantId,
+        if (branchId != null) 'branch_id': branchId,
+      }..removeWhere((k, v) => v == null),
       fromJson: KitchenTicket.fromJson,
     );
   }
@@ -1208,6 +1221,8 @@ class ApiClient {
     required String orderId,
     required int ticketNo,
     String? targetStation,
+    String? tenantId,
+    String? branchId,
   }) async {
     final r = await _post(
       '/kot/tickets',
@@ -1215,6 +1230,8 @@ class ApiClient {
         'order_id': orderId,
         'ticket_no': ticketNo,
         'target_station': targetStation,
+        if (tenantId != null) 'tenant_id': tenantId,
+        if (branchId != null) 'branch_id': branchId,
       }..removeWhere((k, v) => v == null),
     );
     return KitchenTicket.fromJson(
@@ -1225,30 +1242,48 @@ class ApiClient {
   Future<void> reprintKitchenTicket(
       String ticketId, {
         String? reason,
+        String? tenantId,
+        String? branchId,
       }) async {
     await _post(
       '/kot/$ticketId/reprint',
-      params: {'reason': reason},
+      params: {
+        if (reason != null) 'reason': reason,
+        if (tenantId != null) 'tenant_id': tenantId,
+        if (branchId != null) 'branch_id': branchId,
+      }..removeWhere((k, v) => v == null),
     );
   }
 
   Future<void> cancelKitchenTicket(
       String ticketId, {
         String? reason,
+        String? tenantId,
+        String? branchId,
       }) async {
     await _post(
       '/kot/$ticketId/cancel',
-      params: {'reason': reason},
+      params: {
+        if (reason != null) 'reason': reason,
+        if (tenantId != null) 'tenant_id': tenantId,
+        if (branchId != null) 'branch_id': branchId,
+      }..removeWhere((k, v) => v == null),
     );
   }
 
   Future<void> patchKitchenTicketStatus(
       String id,
-      KOTStatus status,
-      ) async {
+      KOTStatus status, {
+        String? tenantId,
+        String? branchId,
+      }) async {
     await _patch(
       '/kot/$id',
-      body: {'status': status.name},
+      body: {
+        'status': status.name,
+        if (tenantId != null) 'tenant_id': tenantId,
+        if (branchId != null) 'branch_id': branchId,
+      }..removeWhere((k, v) => v == null),
     );
   }
 

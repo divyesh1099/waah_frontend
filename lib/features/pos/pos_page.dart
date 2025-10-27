@@ -10,31 +10,37 @@ import 'package:waah_frontend/data/models.dart';
 /// Which category is currently selected in POS? null means "All".
 final selectedCategoryIdProvider = StateProvider<String?>((ref) => null);
 
-/// Load menu categories (tenant/branch aware soon; for now we send "").
+/// Load menu categories for the ACTIVE tenant/branch.
 final posCategoriesProvider =
 FutureProvider.autoDispose<List<MenuCategory>>((ref) async {
-  final client = ref.watch(apiClientProvider);
+  final client   = ref.watch(apiClientProvider);
+  final tenantId = ref.watch(activeTenantIdProvider);
+  final branchId = ref.watch(activeBranchIdProvider);
 
-  // backend wants tenant_id & branch_id, but we've been passing "" for now
+  if (tenantId.isEmpty || branchId.isEmpty) return <MenuCategory>[];
+
   final cats = await client.fetchCategories(
-    tenantId: "",
-    branchId: "",
+    tenantId: tenantId,
+    branchId: branchId,
   );
 
-  // sort nicely by position
+  // stable sort by position for consistent UI
   cats.sort((a, b) => (a.position).compareTo(b.position));
   return cats;
 });
 
-/// Load menu items for currently selected category.
+/// Load menu items for currently selected category for the ACTIVE tenant.
 final posItemsProvider =
 FutureProvider.autoDispose<List<MenuItem>>((ref) async {
-  final client = ref.watch(apiClientProvider);
-  final catId = ref.watch(selectedCategoryIdProvider);
+  final client   = ref.watch(apiClientProvider);
+  final tenantId = ref.watch(activeTenantIdProvider);
+  final catId    = ref.watch(selectedCategoryIdProvider);
+
+  if (tenantId.isEmpty) return <MenuItem>[];
 
   final items = await client.fetchItems(
     categoryId: catId,
-    tenantId: "", // consistent with backend test script
+    tenantId: tenantId,
   );
 
   // Only active / not stock_out, just to keep POS clean.
@@ -47,20 +53,18 @@ FutureProvider.autoDispose<List<MenuItem>>((ref) async {
   return filtered;
 });
 
-/// Load dining tables for branch '' right now.
-/// Later you'll pass the real branchId from auth/session.
-final diningTablesProvider =
-FutureProvider<List<DiningTable>>((ref) async {
-  final client = ref.watch(apiClientProvider);
+/// Load dining tables for ACTIVE branch.
+final diningTablesProvider = FutureProvider<List<DiningTable>>((ref) async {
+  final client   = ref.watch(apiClientProvider);
+  final branchId = ref.watch(activeBranchIdProvider);
 
-  // '' placeholder: matches what you're doing for tenant/branch elsewhere
-  final tables = await client.fetchDiningTables(branchId: '');
+  if (branchId.isEmpty) return <DiningTable>[];
+
+  final tables = await client.fetchDiningTables(branchId: branchId);
 
   // local defensive sort by code just in case
   final sorted = [...tables]
-    ..sort(
-          (a, b) => a.code.toLowerCase().compareTo(b.code.toLowerCase()),
-    );
+    ..sort((a, b) => a.code.toLowerCase().compareTo(b.code.toLowerCase()));
 
   return sorted;
 });
@@ -242,19 +246,6 @@ NotifierProvider<PosCartNotifier, PosCartState>(PosCartNotifier.new);
 /// ------------------------------------------------------------
 
 /// One modifier group + all its modifiers (parsed from backend /modifiers_full).
-///
-/// Backend response shape for each group:
-/// {
-///   "group_id": "...",
-///   "name": "Toppings",
-///   "required": false,
-///   "min_sel": 0,
-///   "max_sel": 3,
-///   "modifiers": [
-///     {"id":"...","name":"Extra Cheese","price_delta":20.0},
-///     ...
-///   ]
-/// }
 class _ItemModifierGroupData {
   final String groupId;
   final String name;
@@ -341,9 +332,29 @@ class PosPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final catsAsync = ref.watch(posCategoriesProvider);
+    final tenantId = ref.watch(activeTenantIdProvider);
+    final branchId = ref.watch(activeBranchIdProvider);
+
+    // Guard: require active tenant/branch
+    if (tenantId.isEmpty || branchId.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('POS')),
+        body: const Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              'Please select a Tenant and Branch in the app first.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 16),
+            ),
+          ),
+        ),
+      );
+    }
+
+    final catsAsync  = ref.watch(posCategoriesProvider);
     final itemsAsync = ref.watch(posItemsProvider);
-    final cart = ref.watch(posCartProvider);
+    final cart       = ref.watch(posCartProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -397,9 +408,7 @@ class PosPage extends ConsumerWidget {
             data: (cats) => _CategoryBar(categories: cats),
             loading: () => const SizedBox(
               height: 56,
-              child: Center(
-                child: CircularProgressIndicator(),
-              ),
+              child: Center(child: CircularProgressIndicator()),
             ),
             error: (e, st) => SizedBox(
               height: 56,
@@ -427,8 +436,7 @@ class PosPage extends ConsumerWidget {
                 // Grid of tappable menu items
                 return GridView.builder(
                   padding: const EdgeInsets.all(12),
-                  gridDelegate:
-                  const SliverGridDelegateWithFixedCrossAxisCount(
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: 3,
                     mainAxisSpacing: 12,
                     crossAxisSpacing: 12,
@@ -447,11 +455,8 @@ class PosPage extends ConsumerWidget {
                         await client.fetchVariants(it.id ?? '');
 
                         // 2. fetch modifier groups (+mods) from backend
-                        // ApiClient should expose fetchItemModifierGroups(itemId)
                         final rawGroups =
-                        await client.fetchItemModifierGroups(
-                          it.id ?? '',
-                        );
+                        await client.fetchItemModifierGroups(it.id ?? '');
                         final modifierGroups = rawGroups
                             .map<_ItemModifierGroupData>(
                               (g) => _ItemModifierGroupData.fromRaw(
@@ -460,10 +465,9 @@ class PosPage extends ConsumerWidget {
                         )
                             .toList();
 
-                        // 3. open bottom sheet (variant + modifiers + qty)
+                        // 3. bottom sheet (variant + modifiers + qty)
                         if (!context.mounted) return;
-                        final res =
-                        await showModalBottomSheet<_AddResult>(
+                        final res = await showModalBottomSheet<_AddResult>(
                           context: context,
                           isScrollControlled: true,
                           builder: (_) => _AddToCartSheet(
@@ -474,7 +478,7 @@ class PosPage extends ConsumerWidget {
                         );
                         if (res == null) return;
 
-                        // 4. add to cart (price calc happens in Notifier)
+                        // 4. add to cart
                         ref.read(posCartProvider.notifier).addItem(
                           item: it,
                           variant: res.variant,
@@ -486,11 +490,9 @@ class PosPage extends ConsumerWidget {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
-                              content: Text(
-                                  '${it.name} x${res.qty} added to cart'),
-                              duration: const Duration(
-                                milliseconds: 800,
-                              ),
+                              content:
+                              Text('${it.name} x${res.qty} added to cart'),
+                              duration: const Duration(milliseconds: 800),
                             ),
                           );
                         }
@@ -499,9 +501,7 @@ class PosPage extends ConsumerWidget {
                   },
                 );
               },
-              loading: () => const Center(
-                child: CircularProgressIndicator(),
-              ),
+              loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, st) => Center(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
@@ -884,11 +884,7 @@ class _AddToCartSheetState extends State<_AddToCartSheet> {
                               value: selected,
                               onChanged: (val) {
                                 if (val == null) return;
-                                _toggleModifier(
-                                  group,
-                                  m,
-                                  val,
-                                );
+                                _toggleModifier(group, m, val);
                               },
                             );
                           }).toList(),
@@ -980,9 +976,7 @@ class _AddToCartSheetState extends State<_AddToCartSheet> {
                           ),
                         );
                       },
-                      child: Text(
-                        'Add • ₹ ${total.toStringAsFixed(2)}',
-                      ),
+                      child: Text('Add • ₹ ${total.toStringAsFixed(2)}'),
                     ),
                   ),
                 ],
@@ -1040,13 +1034,11 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
                   children: [
                     DropdownButtonFormField<OrderChannel>(
                       value: chosenChannel,
-                      decoration:
-                      const InputDecoration(labelText: 'Channel'),
+                      decoration: const InputDecoration(labelText: 'Channel'),
                       items: OrderChannel.values.map((ch) {
                         return DropdownMenuItem<OrderChannel>(
                           value: ch,
-                          child:
-                          Text(ch.name.replaceAll('_', ' ')),
+                          child: Text(ch.name.replaceAll('_', ' ')),
                         );
                       }).toList(),
                       onChanged: (val) {
@@ -1113,8 +1105,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
                 ),
                 FilledButton(
                   onPressed: () {
-                    final paxVal =
-                    int.tryParse(paxCtl.text.trim());
+                    final paxVal = int.tryParse(paxCtl.text.trim());
                     Navigator.pop(
                       ctx,
                       _CheckoutRequest(
@@ -1140,41 +1131,40 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       PosCartState cart,
       _CheckoutRequest info,
       ) async {
-    final client = ref.read(apiClientProvider);
+    final client   = ref.read(apiClientProvider);
+    final tenantId = ref.read(activeTenantIdProvider);
+    final branchId = ref.read(activeBranchIdProvider);
+
+    if (tenantId.isEmpty || branchId.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select tenant & branch first')),
+      );
+      return;
+    }
 
     // 1. generate offline-friendly order number
-    final orderNo =
-        'POS1-${DateTime.now().millisecondsSinceEpoch}';
+    final orderNo = 'POS1-${DateTime.now().millisecondsSinceEpoch}';
 
     // pax fallback
     final paxFromCart = _paxGuess(cart);
-    final int? paxToSend = (info.pax != null && info.pax! > 0)
-        ? info.pax
-        : (paxFromCart == 0 ? null : paxFromCart);
+    final int? paxToSend =
+    (info.pax != null && info.pax! > 0) ? info.pax : (paxFromCart == 0 ? null : paxFromCart);
 
-    // 2. create order on backend using chosen channel
-    final draftOrder = Order(
-      id: null,
-      tenantId: '',
-      branchId: '',
-      orderNo: orderNo,
-      channel: info.channel, // cashier choice
-      provider: null, // offline / walk-in
-      status: OrderStatus.OPEN,
-      tableId: info.tableId, // dine-in table if any
-      customerId: null, // TODO: delivery customer
-      openedByUserId: null,
-      closedByUserId: null,
-      pax: paxToSend,
-      sourceDeviceId: 'flutter-pos',
-      note: null,
-      openedAt: DateTime.now(),
-      closedAt: null,
-    );
-
-    late final Order opened;
+    // 2. create order using lightweight route
+    late final String orderId;
     try {
-      opened = await client.createOrder(draftOrder);
+      final created = await client.openOrderOffline(
+        tenantId: tenantId,
+        branchId: branchId,
+        orderNo: orderNo,
+        channel: info.channel.name, // "DINE_IN"/"TAKEAWAY"/etc.
+        pax: paxToSend,
+        tableId: info.tableId,
+        customerId: null,
+        note: null,
+      );
+      orderId = created['id']?.toString() ?? '';
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1183,17 +1173,15 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       return;
     }
 
-    final orderId = opened.id ?? '';
     if (orderId.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('No order ID from backend')),
+        const SnackBar(content: Text('No order ID from backend')),
       );
       return;
     }
 
-    // 3. add each cart line as an order_item
+    // 3. add each cart line as an order_item (with modifiers!)
     for (final line in cart.lines) {
       final itemId = line.item.id;
       if (itemId == null) continue;
@@ -1214,24 +1202,25 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
         taxableValue: 0,
       );
 
+      // Convert selected Menu Modifiers -> OrderItemModifier payloads (qty=1)
+      final mods = line.modifiers
+          .map(
+            (m) => OrderItemModifier(
+          id: null,
+          orderItemId: '', // ignored on create
+          modifierId: m.id ?? '',
+          qty: 1,
+          priceDelta: m.priceDelta,
+        ),
+      )
+          .toList();
+
       try {
-        // We don't actually use the returned value here,
-        // just ensure it succeeds.
-        await client.addOrderItem(orderId, orderItem);
-
-        // (future)
-        // await client.addOrderItemModifiers(
-        //   orderId,
-        //   thatCreatedItemId,
-        //   line.modifiers,
-        // );
-
+        await client.addOrderItem(orderId, orderItem, modifiers: mods);
       } catch (e) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content:
-              Text('Failed to add line item: $e')),
+          SnackBar(content: Text('Failed to add line item: $e')),
         );
         return;
       }
@@ -1244,9 +1233,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content:
-            Text('Failed to load totals: $e')),
+        SnackBar(content: Text('Failed to load totals: $e')),
       );
       return;
     }
@@ -1271,8 +1258,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       // non-blocking
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text('Invoice issue: $e')),
+          SnackBar(content: Text('Invoice issue: $e')),
         );
       }
     }
@@ -1294,9 +1280,12 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       }
     }
 
-    // 8. pop cash drawer
+    // 8. pop cash drawer (best-effort; send tenant/branch)
     try {
-      await client.openDrawer();
+      await client.openDrawer(
+        tenantId: tenantId,
+        branchId: branchId,
+      );
     } catch (_) {
       // drawer might not be configured; ignore
     }
@@ -1326,8 +1315,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
     try {
       final req = await _askCheckoutInfo(widget.cart);
       if (req == null) {
-        // user cancelled dialog OR widget unmounted before dialog
-        return;
+        return; // user cancelled
       }
 
       await _performCheckout(ref, widget.cart, req);
@@ -1362,19 +1350,16 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
                 child: ListView.separated(
                   shrinkWrap: true,
                   itemCount: lines.length,
-                  separatorBuilder: (_, __) =>
-                  const Divider(height: 8),
+                  separatorBuilder: (_, __) => const Divider(height: 8),
                   itemBuilder: (context, i) {
                     final ln = lines[i];
                     return Row(
-                      crossAxisAlignment:
-                      CrossAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         // name + modifiers + unit price
                         Expanded(
                           child: Column(
-                            crossAxisAlignment:
-                            CrossAxisAlignment.start,
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
                                 ln.displayName,
@@ -1387,16 +1372,14 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
                                   ln.modifiersSummary,
                                   style: TextStyle(
                                     fontSize: 12,
-                                    color:
-                                    Colors.grey.shade600,
+                                    color: Colors.grey.shade600,
                                   ),
                                 ),
                               Text(
                                 '₹ ${ln.unitPrice.toStringAsFixed(2)}',
                                 style: TextStyle(
                                   fontSize: 12,
-                                  color:
-                                  Colors.grey.shade700,
+                                  color: Colors.grey.shade700,
                                 ),
                               ),
                             ],
@@ -1408,35 +1391,28 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
-                              icon: const Icon(Icons
-                                  .remove_circle_outline),
+                              icon: const Icon(Icons.remove_circle_outline),
                               onPressed: _busy
                                   ? null
                                   : () {
                                 ref
-                                    .read(
-                                    posCartProvider
-                                        .notifier)
+                                    .read(posCartProvider.notifier)
                                     .decQty(i);
                               },
                             ),
                             Text(
                               ln.qty.toStringAsFixed(0),
                               style: const TextStyle(
-                                fontWeight:
-                                FontWeight.w600,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
                             IconButton(
-                              icon: const Icon(Icons
-                                  .add_circle_outline),
+                              icon: const Icon(Icons.add_circle_outline),
                               onPressed: _busy
                                   ? null
                                   : () {
                                 ref
-                                    .read(
-                                    posCartProvider
-                                        .notifier)
+                                    .read(posCartProvider.notifier)
                                     .incQty(i);
                               },
                             ),
@@ -1446,8 +1422,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
 
                         // line total + delete button
                         Column(
-                          crossAxisAlignment:
-                          CrossAxisAlignment.end,
+                          crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
                             Text(
                               '₹ ${ln.lineTotal.toStringAsFixed(2)}',
@@ -1456,16 +1431,13 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
                               ),
                             ),
                             IconButton(
-                              icon:
-                              const Icon(Icons.close),
+                              icon: const Icon(Icons.close),
                               tooltip: 'Remove line',
                               onPressed: _busy
                                   ? null
                                   : () {
                                 ref
-                                    .read(
-                                    posCartProvider
-                                        .notifier)
+                                    .read(posCartProvider.notifier)
                                     .removeLine(i);
                               },
                             ),
@@ -1518,16 +1490,12 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
                     icon: const Icon(Icons.delete),
                     label: const Text('Clear'),
                     style: FilledButton.styleFrom(
-                      backgroundColor:
-                      Colors.brown.shade200,
+                      backgroundColor: Colors.brown.shade200,
                     ),
                     onPressed: lines.isEmpty || _busy
                         ? null
                         : () {
-                      ref
-                          .read(posCartProvider
-                          .notifier)
-                          .clear();
+                      ref.read(posCartProvider.notifier).clear();
                     },
                   ),
                 ),
@@ -1542,22 +1510,16 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
                         ? const SizedBox(
                       width: 16,
                       height: 16,
-                      child:
-                      CircularProgressIndicator(
-                        strokeWidth: 2,
-                      ),
+                      child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                        : const Icon(
-                        Icons.point_of_sale),
+                        : const Icon(Icons.point_of_sale),
                     label: Text(
                       _busy
                           ? 'Processing...'
                           : 'Checkout ₹ ${total.toStringAsFixed(2)}',
                     ),
                     onPressed:
-                    lines.isEmpty || _busy
-                        ? null
-                        : _startCheckout,
+                    lines.isEmpty || _busy ? null : _startCheckout,
                   ),
                 ),
               ],

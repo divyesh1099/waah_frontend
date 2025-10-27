@@ -4,13 +4,28 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/providers.dart';
 import '../../data/models.dart';
 
-/// Get tickets for a given status from backend
+/// ------------------------------------------------------------------
+/// Session/Context: tenant & branch (plug your auth/session later)
+/// ------------------------------------------------------------------
+final kotTenantIdProvider = StateProvider<String>((_) => '');
+final kotBranchIdProvider = StateProvider<String>((_) => '');
+
+/// ------------------------------------------------------------------
+/// Data: tickets per status (tenant/branch aware)
+/// ------------------------------------------------------------------
 final kotTicketsProvider = FutureProvider.family
     .autoDispose<List<KitchenTicket>, KOTStatus>((ref, status) async {
   final api = ref.watch(apiClientProvider);
-  final list = await api.fetchKitchenTickets(status: status);
+  final tenantId = ref.watch(kotTenantIdProvider);
+  final branchId = ref.watch(kotBranchIdProvider);
 
-  // sort newest ticket first
+  final list = await api.fetchKitchenTickets(
+    status: status,
+    tenantId: tenantId,
+    branchId: branchId,
+  );
+
+  // newest first
   list.sort((a, b) => b.ticketNo.compareTo(a.ticketNo));
   return list;
 });
@@ -22,26 +37,52 @@ class KotPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return Padding(
       padding: const EdgeInsets.all(12),
-      child: Row(
-        children: const [
-          Expanded(
-            child: _KotColumn(
-              title: 'New',
-              status: KOTStatus.NEW,
-            ),
+      child: Column(
+        children: [
+          // Tiny filter/header row (tenant/branch placeholders for now)
+          Row(
+            children: [
+              const Text(
+                'Kitchen Tickets',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const Spacer(),
+              IconButton(
+                tooltip: 'Refresh all',
+                icon: const Icon(Icons.refresh),
+                onPressed: () {
+                  for (final st in KOTStatus.values) {
+                    ref.invalidate(kotTicketsProvider(st));
+                  }
+                },
+              ),
+            ],
           ),
-          VerticalDivider(width: 1),
+          const SizedBox(height: 8),
           Expanded(
-            child: _KotColumn(
-              title: 'In Progress',
-              status: KOTStatus.IN_PROGRESS,
-            ),
-          ),
-          VerticalDivider(width: 1),
-          Expanded(
-            child: _KotColumn(
-              title: 'Ready',
-              status: KOTStatus.READY,
+            child: Row(
+              children: const [
+                Expanded(
+                  child: _KotColumn(
+                    title: 'New',
+                    status: KOTStatus.NEW,
+                  ),
+                ),
+                VerticalDivider(width: 1),
+                Expanded(
+                  child: _KotColumn(
+                    title: 'In Progress',
+                    status: KOTStatus.IN_PROGRESS,
+                  ),
+                ),
+                VerticalDivider(width: 1),
+                Expanded(
+                  child: _KotColumn(
+                    title: 'Ready',
+                    status: KOTStatus.READY,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -102,10 +143,8 @@ class _KotColumn extends ConsumerWidget {
                 },
               );
             },
-            loading: () => const Center(
-              child: CircularProgressIndicator(),
-            ),
-            error: (e, st) => Center(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (e, _) => Center(
               child: Text(
                 'Failed:\n$e',
                 textAlign: TextAlign.center,
@@ -121,7 +160,6 @@ class _KotColumn extends ConsumerWidget {
 
 class _TicketCard extends ConsumerWidget {
   const _TicketCard({required this.ticket});
-
   final KitchenTicket ticket;
 
   @override
@@ -131,38 +169,37 @@ class _TicketCard extends ConsumerWidget {
 
     return Card(
       color: bgColor,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       child: InkWell(
         onTap: () async {
           // tap card = advance to next status in the kitchen workflow
-          if (next == null) return;
+          if (next == null || (ticket.id ?? '').isEmpty) return;
           try {
-            await ref
-                .read(apiClientProvider)
-                .patchKitchenTicketStatus(ticket.id!, next);
+            final api = ref.read(apiClientProvider);
+            final tenantId = ref.read(kotTenantIdProvider);
+            final branchId = ref.read(kotBranchIdProvider);
 
-            // refresh all the visible columns since card moves
-            ref.invalidate(kotTicketsProvider(KOTStatus.NEW));
-            ref.invalidate(kotTicketsProvider(KOTStatus.IN_PROGRESS));
-            ref.invalidate(kotTicketsProvider(KOTStatus.READY));
+            await api.patchKitchenTicketStatus(
+              ticket.id!,
+              next,
+              tenantId: tenantId,
+              branchId: branchId,
+            );
+
+            // refresh all boards since the card moves columns
+            for (final st in KOTStatus.values) {
+              ref.invalidate(kotTicketsProvider(st));
+            }
 
             if (context.mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    'KOT #${ticket.ticketNo} -> ${next.name}',
-                  ),
-                ),
+                SnackBar(content: Text('KOT #${ticket.ticketNo} → ${next.name}')),
               );
             }
           } catch (err) {
             if (context.mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Update failed: $err'),
-                ),
+                SnackBar(content: Text('Update failed: $err')),
               );
             }
           }
@@ -170,10 +207,7 @@ class _TicketCard extends ConsumerWidget {
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: DefaultTextStyle(
-            style: const TextStyle(
-              fontSize: 13,
-              color: Colors.black,
-            ),
+            style: const TextStyle(fontSize: 13, color: Colors.black),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -185,10 +219,7 @@ class _TicketCard extends ConsumerWidget {
                       child: Text(
                         'KOT #${ticket.ticketNo}'
                             '${ticket.stationName != null ? " • ${ticket.stationName}" : ""}',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
                       ),
                     ),
                     PopupMenuButton<String>(
@@ -203,14 +234,8 @@ class _TicketCard extends ConsumerWidget {
                         }
                       },
                       itemBuilder: (_) => const [
-                        PopupMenuItem<String>(
-                          value: 'reprint',
-                          child: Text('Reprint'),
-                        ),
-                        PopupMenuItem<String>(
-                          value: 'cancel',
-                          child: Text('Cancel'),
-                        ),
+                        PopupMenuItem<String>(value: 'reprint', child: Text('Reprint')),
+                        PopupMenuItem<String>(value: 'cancel', child: Text('Cancel')),
                       ],
                     ),
                   ],
@@ -221,11 +246,9 @@ class _TicketCard extends ConsumerWidget {
                 // table / waiter row
                 Text(
                   [
-                    if (ticket.tableCode != null &&
-                        ticket.tableCode!.trim().isNotEmpty)
+                    if (ticket.tableCode != null && ticket.tableCode!.trim().isNotEmpty)
                       'Table ${ticket.tableCode}',
-                    if (ticket.waiterName != null &&
-                        ticket.waiterName!.trim().isNotEmpty)
+                    if (ticket.waiterName != null && ticket.waiterName!.trim().isNotEmpty)
                       'By ${ticket.waiterName}',
                   ].join(' • '),
                   style: const TextStyle(fontSize: 12),
@@ -235,29 +258,29 @@ class _TicketCard extends ConsumerWidget {
 
                 // order no row
                 Text(
-                  ticket.orderNo != null && ticket.orderNo!.isNotEmpty
+                  (ticket.orderNo != null && ticket.orderNo!.isNotEmpty)
                       ? 'Order ${ticket.orderNo}'
                       : 'Order ${ticket.orderId}',
                   style: const TextStyle(fontSize: 12),
                 ),
 
-                if (ticket.orderNote != null &&
-                    ticket.orderNote!.trim().isNotEmpty) ...[
+                if (ticket.orderNote != null && ticket.orderNote!.trim().isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Text(
                     'Note: ${ticket.orderNote}',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontStyle: FontStyle.italic,
-                    ),
+                    style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic),
                   ),
                 ],
 
-                const SizedBox(height: 6),
+                // line items (if backend returns them)
+                if ((ticket.lines?.isNotEmpty ?? false)) ...[
+                  const SizedBox(height: 8),
+                  ...ticket.lines!.map((ln) => _TicketLineRow(line: ln)).toList(),
+                ],
+
+                const SizedBox(height: 8),
                 Text(
-                  next == null
-                      ? 'Done'
-                      : 'Tap to mark ${next.name}',
+                  next == null ? 'Done' : 'Tap to mark ${next.name}',
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w500,
@@ -307,23 +330,26 @@ class _TicketCard extends ConsumerWidget {
       KitchenTicket t,
       ) async {
     try {
-      await ref
-          .read(apiClientProvider)
-          .reprintKitchenTicket(t.id!, reason: 'Reprint from tablet');
+      final api = ref.read(apiClientProvider);
+      final tenantId = ref.read(kotTenantIdProvider);
+      final branchId = ref.read(kotBranchIdProvider);
+
+      await api.reprintKitchenTicket(
+        t.id!,
+        reason: 'Reprint from tablet',
+        tenantId: tenantId,
+        branchId: branchId,
+      );
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Reprinted KOT #${t.ticketNo}'),
-          ),
+          SnackBar(content: Text('Reprinted KOT #${t.ticketNo}')),
         );
       }
     } catch (err) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Reprint failed: $err'),
-          ),
+          SnackBar(content: Text('Reprint failed: $err')),
         );
       }
     }
@@ -334,44 +360,41 @@ class _TicketCard extends ConsumerWidget {
       WidgetRef ref,
       KitchenTicket t,
       ) async {
-    final reason = await _askReason(
-      context,
-      'Cancel KOT #${t.ticketNo}? Reason (optional)',
-    );
+    final reason = await _askReason(context, 'Cancel KOT #${t.ticketNo}? Reason (optional)');
     if (reason == null) return;
 
     try {
-      await ref
-          .read(apiClientProvider)
-          .cancelKitchenTicket(t.id!, reason: reason);
+      final api = ref.read(apiClientProvider);
+      final tenantId = ref.read(kotTenantIdProvider);
+      final branchId = ref.read(kotBranchIdProvider);
+
+      await api.cancelKitchenTicket(
+        t.id!,
+        reason: reason,
+        tenantId: tenantId,
+        branchId: branchId,
+      );
 
       // cancelled ticket should disappear from all visible boards
-      ref.invalidate(kotTicketsProvider(KOTStatus.NEW));
-      ref.invalidate(kotTicketsProvider(KOTStatus.IN_PROGRESS));
-      ref.invalidate(kotTicketsProvider(KOTStatus.READY));
+      for (final st in KOTStatus.values) {
+        ref.invalidate(kotTicketsProvider(st));
+      }
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Cancelled KOT #${t.ticketNo}'),
-          ),
+          SnackBar(content: Text('Cancelled KOT #${t.ticketNo}')),
         );
       }
     } catch (err) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Cancel failed: $err'),
-          ),
+          SnackBar(content: Text('Cancel failed: $err')),
         );
       }
     }
   }
 
-  Future<String?> _askReason(
-      BuildContext ctx,
-      String prompt,
-      ) async {
+  Future<String?> _askReason(BuildContext ctx, String prompt) async {
     final ctl = TextEditingController();
     final res = await showDialog<String>(
       context: ctx,
@@ -380,15 +403,10 @@ class _TicketCard extends ConsumerWidget {
           title: Text(prompt),
           content: TextField(
             controller: ctl,
-            decoration: const InputDecoration(
-              labelText: 'Reason',
-            ),
+            decoration: const InputDecoration(labelText: 'Reason'),
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('No'),
-            ),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('No')),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, ctl.text.trim()),
               child: const Text('OK'),
@@ -398,5 +416,56 @@ class _TicketCard extends ConsumerWidget {
       },
     );
     return res;
+  }
+}
+
+/// Render one ticket line (qty × name [+ variant/mods])
+class _TicketLineRow extends StatelessWidget {
+  const _TicketLineRow({required this.line});
+  final KitchenTicketLine line; // make sure models.dart exposes this
+
+  String _modsSummary(KitchenTicketLine ln) {
+    // Accept either List<String> or List<ModifierLike>
+    final mods = ln.modifiers ?? const [];
+    if (mods.isEmpty) return '';
+    final parts = <String>[];
+    for (final m in mods) {
+      if (m is String) {
+        parts.add(m);
+      } else {
+        // fallback: try common keys
+        final name = (m as dynamic).name ?? (m as dynamic)['name'];
+        if (name != null) parts.add(name.toString());
+      }
+    }
+    return parts.isEmpty ? '' : ' • ${parts.join(", ")}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final variant = (line.variantLabel != null && line.variantLabel!.isNotEmpty)
+        ? ' (${line.variantLabel})'
+        : '';
+    final mods = _modsSummary(line);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${line.qty}× ',
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          Expanded(
+            child: Text(
+              '${line.name}$variant$mods',
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
