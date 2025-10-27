@@ -1,25 +1,32 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:waah_frontend/app/providers.dart';
 import 'package:waah_frontend/data/models.dart';
 import 'package:waah_frontend/data/repo/catalog_repo.dart';
 
 import 'menu_item_detail_page.dart';
 
-/// Provider that loads items for a given category.
-final categoryItemsProvider =
-FutureProvider.family.autoDispose<List<MenuItem>, String>((ref, categoryId) async {
+/// Items for a given category, scoped to current tenant/branch.
+final categoryItemsProvider = FutureProvider.family
+    .autoDispose<List<MenuItem>, String>((ref, categoryId) async {
   final repo = ref.watch(catalogRepoProvider);
+
+  final me = ref.watch(authControllerProvider).me;
+  final tenantId = me?.tenantId ?? '';
+  final branchId = ref.watch(activeBranchIdProvider);
+
+  if (tenantId.isEmpty || branchId.isEmpty || categoryId.isEmpty) {
+    return <MenuItem>[];
+  }
 
   final list = await repo.loadItems(
     categoryId: categoryId,
-    tenantId: '', // staying consistent with how POS calls backend
+    tenantId: tenantId,
   );
 
   final sorted = [...list]
-    ..sort(
-          (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-    );
+    ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 
   return sorted;
 });
@@ -34,23 +41,16 @@ class MenuItemsPage extends ConsumerWidget {
     final catId = category.id;
 
     if (catId == null) {
-      // Shouldn't really happen for saved categories, but just in case
       return Scaffold(
-        appBar: AppBar(
-          title: Text(category.name),
-        ),
-        body: const Center(
-          child: Text('Category not saved yet'),
-        ),
+        appBar: AppBar(title: Text(category.name)),
+        body: const Center(child: Text('Category not saved yet')),
       );
     }
 
     final itemsAsync = ref.watch(categoryItemsProvider(catId));
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(category.name),
-      ),
+      appBar: AppBar(title: Text(category.name)),
       body: itemsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, st) => Padding(
@@ -59,9 +59,7 @@ class MenuItemsPage extends ConsumerWidget {
         ),
         data: (items) {
           if (items.isEmpty) {
-            return const Center(
-              child: Text('No items in this category'),
-            );
+            return const Center(child: Text('No items in this category'));
           }
 
           return ListView.separated(
@@ -72,14 +70,12 @@ class MenuItemsPage extends ConsumerWidget {
 
               return ListTile(
                 title: Text(it.name),
-                subtitle: Text(
-                  [
-                    if (it.description != null && it.description!.trim().isNotEmpty)
-                      it.description!.trim(),
-                    'GST ${it.gstRate.toStringAsFixed(2)}%',
-                    it.stockOut ? 'OUT OF STOCK' : 'In stock',
-                  ].join(' • '),
-                ),
+                subtitle: Text([
+                  if (it.description != null && it.description!.trim().isNotEmpty)
+                    it.description!.trim(),
+                  'GST ${it.gstRate.toStringAsFixed(2)}%',
+                  it.stockOut ? 'OUT OF STOCK' : 'In stock',
+                ].join(' • ')),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -92,8 +88,6 @@ class MenuItemsPage extends ConsumerWidget {
                             builder: (_) => MenuItemDetailPage(item: it),
                           ),
                         );
-
-                        // If edited or deleted, reload this list.
                         if (changed == true) {
                           ref.invalidate(categoryItemsProvider(catId));
                         }
@@ -107,29 +101,20 @@ class MenuItemsPage extends ConsumerWidget {
                           context,
                           'Delete "${it.name}"?\n(Soft delete, hides in POS)',
                         );
-                        if (!ok) return;
-                        if (it.id == null) return;
+                        if (!ok || it.id == null) return;
 
                         try {
-                          await ref
-                              .read(catalogRepoProvider)
-                              .deleteItem(it.id!);
-
+                          await ref.read(catalogRepoProvider).deleteItem(it.id!);
                           if (context.mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Deleted ${it.name}'),
-                              ),
+                              SnackBar(content: Text('Deleted ${it.name}')),
                             );
                           }
-
                           ref.invalidate(categoryItemsProvider(catId));
                         } catch (err) {
                           if (!context.mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Delete failed: $err'),
-                            ),
+                            SnackBar(content: Text('Delete failed: $err')),
                           );
                         }
                       },
@@ -137,7 +122,6 @@ class MenuItemsPage extends ConsumerWidget {
                   ],
                 ),
                 onTap: () async {
-                  // tapping row == edit as well
                   final changed = await Navigator.of(context).push<bool>(
                     MaterialPageRoute(
                       builder: (_) => MenuItemDetailPage(item: it),
@@ -156,7 +140,6 @@ class MenuItemsPage extends ConsumerWidget {
   }
 }
 
-/// confirm dialog reused here
 Future<bool> _confirm(BuildContext context, String message) async {
   final res = await showDialog<bool>(
     context: context,
@@ -174,5 +157,5 @@ Future<bool> _confirm(BuildContext context, String message) async {
       ],
     ),
   );
-  return res ?? false;
+  return (res ?? false);
 }

@@ -5,7 +5,6 @@ import 'package:dio/dio.dart';
 
 import 'package:waah_frontend/data/api_client.dart';
 import 'package:waah_frontend/features/auth/auth_controller.dart';
-
 import '../data/models.dart';
 
 /// ---- Base URL (edit if you use another env) ----
@@ -19,27 +18,16 @@ final prefsProvider = Provider<SharedPreferences>((ref) {
   throw UnimplementedError('prefsProvider overridden in main()');
 });
 
-/// Bare ApiClient that does NOT depend on auth state.
-/// Used by AuthController.login() before we even have a token.
+/// Bare ApiClient (no auth)
 final apiBaseClientProvider = Provider<ApiClient>((ref) {
   final dio = Dio(
     BaseOptions(
       baseUrl: kBaseUrl,
-      headers: const {
-        'Content-Type': 'application/json',
-      },
+      headers: const {'Content-Type': 'application/json'},
     ),
   );
-
-  final client = ApiClient(
-    dio,
-    baseUrl: kBaseUrl,
-    // no onUnauthorized -> we don't want to auto-logout here
-  );
-
-  // make sure internal http.* helpers don't try to send a stale token
+  final client = ApiClient(dio, baseUrl: kBaseUrl);
   client.updateAuthToken(null);
-
   return client;
 });
 
@@ -57,14 +45,8 @@ final isAuthedProvider = Provider<bool>((ref) {
 });
 
 /// Authed ApiClient that carries the latest token.
-/// Rebuilds whenever the token changes.
 final apiClientProvider = Provider<ApiClient>((ref) {
-  // current token from auth state
-  final token = ref.watch(
-    authControllerProvider.select((s) => s.token),
-  );
-
-  // we'll need this to force logout if backend says 401
+  final token = ref.watch(authControllerProvider.select((s) => s.token));
   final authNotifier = ref.read(authControllerProvider.notifier);
 
   final dio = Dio(
@@ -72,18 +54,15 @@ final apiClientProvider = Provider<ApiClient>((ref) {
       baseUrl: kBaseUrl,
       headers: {
         'Content-Type': 'application/json',
-        if (token != null && token.isNotEmpty)
-          'Authorization': 'Bearer $token',
+        if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
       },
     ),
   );
 
-  // Any 401 that comes back from Dio-based calls will trigger logout.
   dio.interceptors.add(
     InterceptorsWrapper(
       onError: (err, handler) {
-        final status = err.response?.statusCode;
-        if (status == 401) {
+        if (err.response?.statusCode == 401) {
           authNotifier.logout();
         }
         handler.next(err);
@@ -91,55 +70,100 @@ final apiClientProvider = Provider<ApiClient>((ref) {
     ),
   );
 
-  // Build the ApiClient wrapper we use everywhere else.
   final client = ApiClient(
     dio,
     baseUrl: kBaseUrl,
-    onUnauthorized: () {
-      // This is called by the http.* code paths (_get/_post/etc)
-      // when they see a 401. We mirror Dio's behavior.
-      authNotifier.logout();
-    },
+    onUnauthorized: () => authNotifier.logout(),
   );
-
-  // CRUCIAL:
-  // Tell ApiClient about the token so that its http.* helpers
-  // (which use `http` package, not Dio) will also send Authorization.
   client.updateAuthToken(token);
-
   return client;
 });
-// Which branch this device is currently operating on.
-// Defaults to whatever /auth/me said, but user can change it via picker.
-final activeBranchIdProvider = StateProvider<String>((ref) {
-  final me = ref.watch(authControllerProvider).me;
-  return me?.branchId ?? '';
+
+/// ===== Persisted tenant/branch selection =====
+
+class _IdNotifier extends StateNotifier<String> {
+  _IdNotifier(this._prefs, this._key, String initial) : super(initial);
+  final SharedPreferences _prefs;
+  final String _key;
+  void set(String v) {
+    state = v.trim();
+    _prefs.setString(_key, state);
+  }
+  void clear() {
+    state = '';
+    _prefs.remove(_key);
+  }
+}
+
+final activeTenantIdProvider =
+StateNotifierProvider<_IdNotifier, String>((ref) {
+  final prefs = ref.watch(prefsProvider);
+  final stored = prefs.getString('active_tenant_id') ?? '';
+  final n = _IdNotifier(prefs, 'active_tenant_id', stored);
+
+  // NEW: adopt tenant_id from /auth/me when token/me changes
+  ref.listen<AuthState>(authControllerProvider, (prev, next) {
+    final prevToken = prev?.token ?? '';
+    final nextToken = next.token ?? '';
+
+    if (prevToken.isNotEmpty && nextToken.isEmpty) {
+      n.clear(); // logout => clear tenant
+    }
+
+    final prevTenant = prev?.me?.tenantId ?? '';
+    final nextTenant = next.me?.tenantId ?? '';
+    if (prevTenant != nextTenant && n.state.isEmpty && nextTenant.isNotEmpty) {
+      n.set(nextTenant);
+    }
+  });
+
+  return n;
 });
 
-// All branches for this tenant (used by branch picker UI)
-final branchesProvider =
-FutureProvider.autoDispose<List<BranchInfo>>((ref) async {
+final activeBranchIdProvider =
+StateNotifierProvider<_IdNotifier, String>((ref) {
+  final prefs = ref.watch(prefsProvider);
+  final stored = prefs.getString('active_branch_id') ?? '';
+  final n = _IdNotifier(prefs, 'active_branch_id', stored);
+
+  // React to auth state changes to auto-adopt branch from /auth/me
+  ref.listen<AuthState>(authControllerProvider, (prev, next) {
+    final prevToken = prev?.token ?? '';
+    final nextToken = next.token ?? '';
+
+    if (prevToken.isNotEmpty && nextToken.isEmpty) {
+      n.clear();
+    }
+
+    // When /auth/me arrives with a branch and none is set yet
+    final prevBranch = prev?.me?.branchId ?? '';
+    final nextBranch = next.me?.branchId ?? '';
+    if (prevBranch != nextBranch && n.state.isEmpty && nextBranch.isNotEmpty) {
+      n.set(nextBranch);
+    }
+  });
+
+  return n;
+});
+
+/// All branches for the active tenant (used by branch picker UI)
+final branchesProvider = FutureProvider.autoDispose<List<BranchInfo>>((ref) async {
   final api = ref.watch(apiClientProvider);
-  final me = ref.watch(authControllerProvider).me;
-  final tenantId = me?.tenantId ?? '';
+  final tenantId = ref.watch(activeTenantIdProvider);
   if (tenantId.isEmpty) return <BranchInfo>[];
   return api.fetchBranches(tenantId: tenantId);
 });
 
-// Restaurant settings (branding: name, logo, etc) for the active branch.
+/// Restaurant settings (branding) for active tenant+branch
 final restaurantSettingsProvider =
 FutureProvider.autoDispose<RestaurantSettings?>((ref) async {
   final api = ref.watch(apiClientProvider);
-  final me = ref.watch(authControllerProvider).me;
-
-  final tenantId = me?.tenantId ?? '';
+  final tenantId = ref.watch(activeTenantIdProvider);
   final branchId = ref.watch(activeBranchIdProvider);
 
   if (tenantId.isEmpty || branchId.isEmpty) {
     return null;
   }
-
-  // This calls GET /settings/restaurant and maps it to RestaurantSettings model
   return api.getRestaurantSettings(
     tenantId: tenantId,
     branchId: branchId,

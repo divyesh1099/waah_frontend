@@ -9,35 +9,48 @@ import 'package:waah_frontend/data/models.dart';
 /// PROVIDERS
 /// ---------------------------------------------------------------------------
 
-/// All categories for tenant/branch (right now we send "")
+/// All categories for the ACTIVE tenant/branch
 final menuCategoriesProvider =
-FutureProvider<List<MenuCategory>>((ref) async {
+FutureProvider.autoDispose<List<MenuCategory>>((ref) async {
   final repo = ref.watch(catalogRepoProvider);
-  final cats =
-  await repo.loadCategories(tenantId: '', branchId: '');
+
+  // read current tenant + branch
+  final me = ref.watch(authControllerProvider).me;
+  final tenantId = me?.tenantId ?? '';
+  final branchId = ref.watch(activeBranchIdProvider);
+
+  if (tenantId.isEmpty || branchId.isEmpty) return <MenuCategory>[];
+
+  final cats = await repo.loadCategories(
+    tenantId: tenantId,
+    branchId: branchId,
+  );
   cats.sort((a, b) => a.position.compareTo(b.position));
   return cats;
 });
 
-/// Items for a given category
-final categoryItemsProvider = FutureProvider.family<
-    List<MenuItem>,
-    String>((ref, categoryId) async {
+/// Items for a given category (tenant passed for backend filters where needed)
+final categoryItemsProvider =
+FutureProvider.family.autoDispose<List<MenuItem>, String>((ref, categoryId) async {
   final repo = ref.watch(catalogRepoProvider);
+  final me = ref.watch(authControllerProvider).me;
+  final tenantId = me?.tenantId ?? '';
+
+  if (tenantId.isEmpty || categoryId.isEmpty) return <MenuItem>[];
+
   final items = await repo.loadItems(
     categoryId: categoryId,
-    tenantId: '',
+    tenantId: tenantId,
   );
-  items.sort((a, b) =>
-      a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  items.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
   return items;
 });
 
 /// Variants for a given item (used to show/manage prices)
-final itemVariantsProvider = FutureProvider.family<
-    List<ItemVariant>,
-    String>((ref, itemId) async {
+final itemVariantsProvider =
+FutureProvider.family.autoDispose<List<ItemVariant>, String>((ref, itemId) async {
   final repo = ref.watch(catalogRepoProvider);
+  if (itemId.isEmpty) return <ItemVariant>[];
   final vars = await repo.loadVariants(itemId);
   vars.sort((a, b) {
     // default first, then label
@@ -95,29 +108,22 @@ class MenuPage extends ConsumerWidget {
               final cat = cats[i];
               final catId = cat.id ?? '';
 
-              final itemsAsync =
-              ref.watch(categoryItemsProvider(catId));
+              final itemsAsync = ref.watch(categoryItemsProvider(catId));
 
               return Card(
-                margin:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: ExpansionTile(
-                  tilePadding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 8),
-                  childrenPadding: const EdgeInsets.only(
-                      left: 16, right: 16, bottom: 12),
+                  tilePadding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  childrenPadding:
+                  const EdgeInsets.only(left: 16, right: 16, bottom: 12),
                   title: Text(
                     cat.name,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                    ),
+                    style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                   subtitle: Text(
                     'Position ${cat.position}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey.shade600,
-                    ),
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                   ),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -182,8 +188,7 @@ class MenuPage extends ConsumerWidget {
                       data: (items) {
                         if (items.isEmpty) {
                           return Padding(
-                            padding: const EdgeInsets.symmetric(
-                                vertical: 8.0),
+                            padding: const EdgeInsets.symmetric(vertical: 8.0),
                             child: Text(
                               'No items under "${cat.name}". Add one with the + button.',
                               style: TextStyle(
@@ -197,9 +202,8 @@ class MenuPage extends ConsumerWidget {
                         return Column(
                           children: items.map((it) {
                             final itemId = it.id ?? '';
-                            final varsAsync = ref.watch(
-                              itemVariantsProvider(itemId),
-                            );
+                            final varsAsync =
+                            ref.watch(itemVariantsProvider(itemId));
 
                             return ListTile(
                               contentPadding:
@@ -211,13 +215,10 @@ class MenuPage extends ConsumerWidget {
                                 ),
                               ),
                               subtitle: Column(
-                                crossAxisAlignment:
-                                CrossAxisAlignment.start,
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   if (it.description != null &&
-                                      it.description!
-                                          .trim()
-                                          .isNotEmpty)
+                                      it.description!.trim().isNotEmpty)
                                     Text(
                                       it.description!,
                                       maxLines: 2,
@@ -230,8 +231,7 @@ class MenuPage extends ConsumerWidget {
                                           'No variants yet',
                                           style: TextStyle(
                                             fontSize: 12,
-                                            color:
-                                            Colors.grey.shade600,
+                                            color: Colors.grey.shade600,
                                           ),
                                         );
                                       }
@@ -243,8 +243,7 @@ class MenuPage extends ConsumerWidget {
                                         _variantSummary(def),
                                         style: TextStyle(
                                           fontSize: 12,
-                                          color:
-                                          Colors.grey.shade800,
+                                          color: Colors.grey.shade800,
                                         ),
                                       );
                                     },
@@ -252,16 +251,14 @@ class MenuPage extends ConsumerWidget {
                                       'Loading price…',
                                       style: TextStyle(
                                         fontSize: 12,
-                                        color: Colors
-                                            .grey.shade600,
+                                        color: Colors.grey.shade600,
                                       ),
                                     ),
                                     error: (e, st) => Text(
                                       'Variant load failed: $e',
                                       style: TextStyle(
                                         fontSize: 12,
-                                        color:
-                                        Colors.red.shade700,
+                                        color: Colors.red.shade700,
                                       ),
                                     ),
                                   ),
@@ -272,64 +269,49 @@ class MenuPage extends ConsumerWidget {
                                 children: [
                                   IconButton(
                                     tooltip: 'Variants / Prices',
-                                    icon: const Icon(
-                                        Icons.price_change),
+                                    icon: const Icon(Icons.price_change),
                                     onPressed: it.id == null
                                         ? null
                                         : () async {
                                       final updated =
-                                      await showModalBottomSheet<
-                                          bool>(
+                                      await showModalBottomSheet<bool>(
                                         context: context,
-                                        isScrollControlled:
-                                        true,
-                                        builder: (_) =>
-                                            _ManageVariantsSheet(
-                                              itemId: it.id!,
-                                              itemName:
-                                              it.name,
-                                            ),
+                                        isScrollControlled: true,
+                                        builder: (_) => _ManageVariantsSheet(
+                                          itemId: it.id!,
+                                          itemName: it.name,
+                                        ),
                                       );
-                                      if (updated ==
-                                          true) {
+                                      if (updated == true) {
                                         ref.invalidate(
-                                          itemVariantsProvider(
-                                              it.id!),
+                                          itemVariantsProvider(it.id!),
                                         );
                                       }
                                     },
                                   ),
                                   IconButton(
                                     tooltip: 'Delete Item',
-                                    icon: const Icon(
-                                        Icons.delete_outline),
+                                    icon: const Icon(Icons.delete_outline),
                                     onPressed: it.id == null
                                         ? null
                                         : () async {
-                                      final ok =
-                                      await _confirmYesNo(
+                                      final ok = await _confirmYesNo(
                                         context,
                                         'Delete "${it.name}"?',
                                       );
-                                      if (ok != true)
-                                        return;
+                                      if (ok != true) return;
 
                                       try {
-                                        final repo = ref.read(
-                                            catalogRepoProvider);
-                                        await repo
-                                            .deleteItem(
-                                            it.id!);
+                                        final repo =
+                                        ref.read(catalogRepoProvider);
+                                        await repo.deleteItem(it.id!);
 
                                         ref.invalidate(
-                                          categoryItemsProvider(
-                                              catId),
+                                          categoryItemsProvider(catId),
                                         );
                                       } catch (e) {
-                                        if (context
-                                            .mounted) {
-                                          ScaffoldMessenger.of(
-                                              context)
+                                        if (context.mounted) {
+                                          ScaffoldMessenger.of(context)
                                               .showSnackBar(
                                             SnackBar(
                                               content: Text(
@@ -348,9 +330,7 @@ class MenuPage extends ConsumerWidget {
                       },
                       loading: () => const Padding(
                         padding: EdgeInsets.all(16),
-                        child: Center(
-                          child: CircularProgressIndicator(),
-                        ),
+                        child: Center(child: CircularProgressIndicator()),
                       ),
                       error: (e, st) => Padding(
                         padding: const EdgeInsets.all(16),
@@ -366,9 +346,7 @@ class MenuPage extends ConsumerWidget {
             },
           );
         },
-        loading: () => const Center(
-          child: CircularProgressIndicator(),
-        ),
+        loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, st) => Padding(
           padding: const EdgeInsets.all(16),
           child: Text(
@@ -391,7 +369,6 @@ Future<bool?> _confirmYesNo(BuildContext context, String msg) {
         content: Text(msg),
         actions: [
           TextButton(
-            // POP THE DIALOG, not the page
             onPressed: () => Navigator.of(dialogCtx).pop(false),
             child: const Text('Cancel'),
           ),
@@ -405,14 +382,10 @@ Future<bool?> _confirmYesNo(BuildContext context, String msg) {
   );
 }
 
-/// nice variant summary like "Regular • ₹120.00 (default)"
 String _variantSummary(ItemVariant v) {
   final price = v.basePrice.toStringAsFixed(2);
   final lbl = v.label.isEmpty ? 'Default' : v.label;
-  if (v.isDefault) {
-    return '$lbl • ₹$price (default)';
-  }
-  return '$lbl • ₹$price';
+  return v.isDefault ? '$lbl • ₹$price (default)' : '$lbl • ₹$price';
 }
 
 /// ---------------------------------------------------------------------------
@@ -423,12 +396,10 @@ class _AddCategoryDialog extends ConsumerStatefulWidget {
   const _AddCategoryDialog();
 
   @override
-  ConsumerState<_AddCategoryDialog> createState() =>
-      _AddCategoryDialogState();
+  ConsumerState<_AddCategoryDialog> createState() => _AddCategoryDialogState();
 }
 
-class _AddCategoryDialogState
-    extends ConsumerState<_AddCategoryDialog> {
+class _AddCategoryDialogState extends ConsumerState<_AddCategoryDialog> {
   final _nameCtl = TextEditingController();
   final _posCtl = TextEditingController(text: '0');
   bool _busy = false;
@@ -445,14 +416,28 @@ class _AddCategoryDialogState
     final pos = int.tryParse(_posCtl.text.trim()) ?? 0;
     if (name.isEmpty) return;
 
+    // pull tenant/branch from providers
+    final me = ref.read(authControllerProvider).me;
+    final tenantId = me?.tenantId ?? '';
+    final branchId = ref.read(activeBranchIdProvider);
+
+    if (tenantId.isEmpty || branchId.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Select a branch first')),
+        );
+      }
+      return;
+    }
+
     setState(() => _busy = true);
 
     try {
       final repo = ref.read(catalogRepoProvider);
       await repo.addCategory(
         name,
-        tenantId: '',
-        branchId: '',
+        tenantId: tenantId,
+        branchId: branchId,
         position: pos,
       );
 
@@ -462,15 +447,11 @@ class _AddCategoryDialogState
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to add category: $e'),
-          ),
+          SnackBar(content: Text('Failed to add category: $e')),
         );
       }
     } finally {
-      if (mounted) {
-        setState(() => _busy = false);
-      }
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -483,27 +464,23 @@ class _AddCategoryDialogState
         children: [
           TextField(
             controller: _nameCtl,
-            decoration: const InputDecoration(
-              labelText: 'Category name',
-            ),
+            decoration: const InputDecoration(labelText: 'Category name'),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _posCtl,
-            keyboardType:
-            const TextInputType.numberWithOptions(
-                signed: false, decimal: false),
-            decoration: const InputDecoration(
-              labelText: 'Display position (0,1,2...)',
+            keyboardType: const TextInputType.numberWithOptions(
+              signed: false,
+              decimal: false,
             ),
+            decoration:
+            const InputDecoration(labelText: 'Display position (0,1,2...)'),
           ),
         ],
       ),
       actions: [
         TextButton(
-          onPressed: _busy
-              ? null
-              : () => Navigator.pop(context, false),
+          onPressed: _busy ? null : () => Navigator.pop(context, false),
           child: const Text('Cancel'),
         ),
         FilledButton(
@@ -512,9 +489,7 @@ class _AddCategoryDialogState
               ? const SizedBox(
             width: 16,
             height: 16,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-            ),
+            child: CircularProgressIndicator(strokeWidth: 2),
           )
               : const Text('Save'),
         ),
@@ -522,17 +497,16 @@ class _AddCategoryDialogState
     );
   }
 }
+
 class _EditCategoryDialog extends ConsumerStatefulWidget {
   const _EditCategoryDialog({required this.category});
   final MenuCategory category;
 
   @override
-  ConsumerState<_EditCategoryDialog> createState() =>
-      _EditCategoryDialogState();
+  ConsumerState<_EditCategoryDialog> createState() => _EditCategoryDialogState();
 }
 
-class _EditCategoryDialogState
-    extends ConsumerState<_EditCategoryDialog> {
+class _EditCategoryDialogState extends ConsumerState<_EditCategoryDialog> {
   late TextEditingController _nameCtl;
   late TextEditingController _posCtl;
   bool _busy = false;
@@ -541,9 +515,7 @@ class _EditCategoryDialogState
   void initState() {
     super.initState();
     _nameCtl = TextEditingController(text: widget.category.name);
-    _posCtl = TextEditingController(
-      text: widget.category.position.toString(),
-    );
+    _posCtl = TextEditingController(text: widget.category.position.toString());
   }
 
   @override
@@ -575,9 +547,7 @@ class _EditCategoryDialogState
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to update category: $e'),
-          ),
+          SnackBar(content: Text('Failed to update category: $e')),
         );
       }
     } finally {
@@ -594,9 +564,7 @@ class _EditCategoryDialogState
         children: [
           TextField(
             controller: _nameCtl,
-            decoration: const InputDecoration(
-              labelText: 'Category name',
-            ),
+            decoration: const InputDecoration(labelText: 'Category name'),
           ),
           const SizedBox(height: 12),
           TextField(
@@ -605,16 +573,13 @@ class _EditCategoryDialogState
               signed: false,
               decimal: false,
             ),
-            decoration: const InputDecoration(
-              labelText: 'Display position',
-            ),
+            decoration: const InputDecoration(labelText: 'Display position'),
           ),
         ],
       ),
       actions: [
         TextButton(
-          onPressed:
-          _busy ? null : () => Navigator.pop(context, false),
+          onPressed: _busy ? null : () => Navigator.pop(context, false),
           child: const Text('Cancel'),
         ),
         FilledButton(
@@ -633,8 +598,7 @@ class _EditCategoryDialogState
 }
 
 /// ---------------------------------------------------------------------------
-/// ADD ITEM DIALOG
-/// Creates MenuItem AND its first/default Variant (with price).
+/// ADD ITEM DIALOG  (creates MenuItem + first/default Variant)
 /// ---------------------------------------------------------------------------
 
 class _AddItemDialog extends ConsumerStatefulWidget {
@@ -642,22 +606,19 @@ class _AddItemDialog extends ConsumerStatefulWidget {
   final MenuCategory category;
 
   @override
-  ConsumerState<_AddItemDialog> createState() =>
-      _AddItemDialogState();
+  ConsumerState<_AddItemDialog> createState() => _AddItemDialogState();
 }
 
-class _AddItemDialogState
-    extends ConsumerState<_AddItemDialog> {
+class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
   final _nameCtl = TextEditingController();
   final _descCtl = TextEditingController();
   final _gstCtl = TextEditingController(text: '5.0');
 
   // default variant info
-  final _variantLabelCtl =
-  TextEditingController(text: 'Regular');
+  final _variantLabelCtl = TextEditingController(text: 'Regular');
   final _priceCtl = TextEditingController();
 
-  // future enhancement: image URL (not wired to backend yet)
+  // future enhancement: image URL
   final _imageCtl = TextEditingController();
 
   bool _busy = false;
@@ -679,28 +640,18 @@ class _AddItemDialogState
     final name = _nameCtl.text.trim();
     if (name.isEmpty) return;
 
-    final desc =
-    _descCtl.text.trim().isEmpty ? null : _descCtl.text.trim();
-
-    final gstRate =
-        double.tryParse(_gstCtl.text.trim()) ?? 5.0;
-
-    final variantLabel =
-    _variantLabelCtl.text.trim();
-    final priceVal =
-        double.tryParse(_priceCtl.text.trim()) ?? 0.0;
-
-    // NOTE: _imageCtl.text is ignored for now because backend
-    // doesn't expose an image field on MenuItem yet.
-    // We'll store/use it later once backend supports item images.
+    final desc = _descCtl.text.trim().isEmpty ? null : _descCtl.text.trim();
+    final gstRate = double.tryParse(_gstCtl.text.trim()) ?? 5.0;
+    final variantLabel = _variantLabelCtl.text.trim();
+    final priceVal = double.tryParse(_priceCtl.text.trim()) ?? 0.0;
 
     setState(() => _busy = true);
 
     try {
-      // 1. create the menu item
+      // 1. create the menu item (use category's tenant/branch)
       final newItem = MenuItem(
         id: null,
-        tenantId: '',
+        tenantId: widget.category.tenantId,
         name: name,
         description: desc,
         categoryId: widget.category.id ?? '',
@@ -743,15 +694,11 @@ class _AddItemDialogState
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to add item: $e'),
-          ),
+          SnackBar(content: Text('Failed to add item: $e')),
         );
       }
     } finally {
-      if (mounted) {
-        setState(() => _busy = false);
-      }
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -765,25 +712,19 @@ class _AddItemDialogState
           children: [
             TextField(
               controller: _nameCtl,
-              decoration: const InputDecoration(
-                labelText: 'Item name *',
-              ),
+              decoration: const InputDecoration(labelText: 'Item name *'),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: _descCtl,
-              decoration: const InputDecoration(
-                labelText: 'Description',
-              ),
+              decoration: const InputDecoration(labelText: 'Description'),
               maxLines: 2,
             ),
             const SizedBox(height: 12),
             TextField(
               controller: _gstCtl,
               keyboardType:
-              const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
+              const TextInputType.numberWithOptions(decimal: true),
               decoration: const InputDecoration(
                 labelText: 'GST %',
                 helperText: 'ex: 5.0',
@@ -812,12 +753,9 @@ class _AddItemDialogState
             TextField(
               controller: _priceCtl,
               keyboardType:
-              const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              decoration: const InputDecoration(
-                labelText: 'Base price (₹) *',
-              ),
+              const TextInputType.numberWithOptions(decimal: true),
+              decoration:
+              const InputDecoration(labelText: 'Base price (₹) *'),
             ),
             const Divider(height: 24),
             TextField(
@@ -833,8 +771,7 @@ class _AddItemDialogState
       ),
       actions: [
         TextButton(
-          onPressed:
-          _busy ? null : () => Navigator.pop(context, false),
+          onPressed: _busy ? null : () => Navigator.pop(context, false),
           child: const Text('Cancel'),
         ),
         FilledButton(
@@ -843,9 +780,7 @@ class _AddItemDialogState
               ? const SizedBox(
             width: 16,
             height: 16,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-            ),
+            child: CircularProgressIndicator(strokeWidth: 2),
           )
               : const Text('Save'),
         ),
@@ -856,7 +791,6 @@ class _AddItemDialogState
 
 /// ---------------------------------------------------------------------------
 /// MANAGE VARIANTS SHEET
-/// Lets you view all variants of an item and add a new one.
 /// ---------------------------------------------------------------------------
 
 class _ManageVariantsSheet extends ConsumerStatefulWidget {
@@ -921,25 +855,17 @@ class _ManageVariantsSheetState
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Variant added to ${widget.itemName}',
-            ),
-          ),
+          SnackBar(content: Text('Variant added to ${widget.itemName}')),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to add variant: $e'),
-          ),
+          SnackBar(content: Text('Failed to add variant: $e')),
         );
       }
     } finally {
-      if (mounted) {
-        setState(() => _saving = false);
-      }
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -947,9 +873,7 @@ class _ManageVariantsSheetState
     final lblCtl = TextEditingController(text: v.label);
     final priceCtl =
     TextEditingController(text: v.basePrice.toStringAsFixed(2));
-    final mrpCtl = TextEditingController(
-      text: v.mrp?.toStringAsFixed(2) ?? '',
-    );
+    final mrpCtl = TextEditingController(text: v.mrp?.toStringAsFixed(2) ?? '');
     bool isDef = v.isDefault;
     bool savingLocal = false;
 
@@ -979,23 +903,17 @@ class _ManageVariantsSheetState
                 await repo.updateVariant(updated);
 
                 // refresh main list
-                ref.invalidate(
-                  itemVariantsProvider(widget.itemId),
-                );
+                ref.invalidate(itemVariantsProvider(widget.itemId));
 
                 if (ctx.mounted) Navigator.pop(ctx, true);
               } catch (e) {
                 if (ctx.mounted) {
                   ScaffoldMessenger.of(ctx).showSnackBar(
-                    SnackBar(
-                      content: Text('Update failed: $e'),
-                    ),
+                    SnackBar(content: Text('Update failed: $e')),
                   );
                 }
               } finally {
-                if (ctx.mounted) {
-                  setSt(() => savingLocal = false);
-                }
+                if (ctx.mounted) setSt(() => savingLocal = false);
               }
             }
 
@@ -1004,36 +922,28 @@ class _ManageVariantsSheetState
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment:
-                  CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     TextField(
                       controller: lblCtl,
-                      decoration: const InputDecoration(
-                        labelText: 'Variant label',
-                      ),
+                      decoration:
+                      const InputDecoration(labelText: 'Variant label'),
                     ),
                     const SizedBox(height: 12),
                     TextField(
                       controller: priceCtl,
                       keyboardType:
-                      const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'Base price (₹)',
-                      ),
+                      const TextInputType.numberWithOptions(decimal: true),
+                      decoration:
+                      const InputDecoration(labelText: 'Base price (₹)'),
                     ),
                     const SizedBox(height: 12),
                     TextField(
                       controller: mrpCtl,
                       keyboardType:
-                      const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'MRP (optional)',
-                      ),
+                      const TextInputType.numberWithOptions(decimal: true),
+                      decoration:
+                      const InputDecoration(labelText: 'MRP (optional)'),
                     ),
                     const SizedBox(height: 12),
                     Row(
@@ -1054,9 +964,8 @@ class _ManageVariantsSheetState
               ),
               actions: [
                 TextButton(
-                  onPressed: savingLocal
-                      ? null
-                      : () => Navigator.pop(ctx, false),
+                  onPressed:
+                  savingLocal ? null : () => Navigator.pop(ctx, false),
                   child: const Text('Cancel'),
                 ),
                 FilledButton(
@@ -1065,9 +974,7 @@ class _ManageVariantsSheetState
                       ? const SizedBox(
                     width: 16,
                     height: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                    ),
+                    child: CircularProgressIndicator(strokeWidth: 2),
                   )
                       : const Text('Save'),
                 ),
@@ -1079,17 +986,13 @@ class _ManageVariantsSheetState
     );
 
     if (changed == true && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Variant updated')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Variant updated')));
     }
   }
 
   Future<void> _deleteVariant(ItemVariant v) async {
-    final ok = await _confirmYesNo(
-      context,
-      'Delete variant "${v.label}"?',
-    );
+    final ok = await _confirmYesNo(context, 'Delete variant "${v.label}"?');
     if (ok != true) return;
 
     try {
@@ -1097,25 +1000,20 @@ class _ManageVariantsSheetState
       ref.invalidate(itemVariantsProvider(widget.itemId));
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Deleted ${v.label}'),
-          ),
+          SnackBar(content: Text('Deleted ${v.label}')),
         );
       }
     } catch (err) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Delete failed: $err'),
-        ),
+        SnackBar(content: Text('Delete failed: $err')),
       );
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final varsAsync =
-    ref.watch(itemVariantsProvider(widget.itemId));
+    final varsAsync = ref.watch(itemVariantsProvider(widget.itemId));
 
     return SafeArea(
       child: Padding(
@@ -1123,21 +1021,16 @@ class _ManageVariantsSheetState
           left: 16,
           right: 16,
           top: 16,
-          bottom:
-          MediaQuery.of(context).viewInsets.bottom + 16,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
         ),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment:
-            CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 'Variants for "${widget.itemName}"',
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 12),
 
@@ -1147,56 +1040,36 @@ class _ManageVariantsSheetState
                   if (vars.isEmpty) {
                     return Text(
                       'No variants yet.',
-                      style: TextStyle(
-                        color: Colors.grey.shade600,
-                      ),
+                      style: TextStyle(color: Colors.grey.shade600),
                     );
                   }
                   return Column(
                     children: vars.map((v) {
-                      final price =
-                      v.basePrice.toStringAsFixed(2);
-                      final mrp =
-                      v.mrp?.toStringAsFixed(2);
+                      final price = v.basePrice.toStringAsFixed(2);
+                      final mrp = v.mrp?.toStringAsFixed(2);
                       final txt = v.isDefault
                           ? '₹$price (default)'
                           : '₹$price${mrp != null ? ' MRP ₹$mrp' : ''}';
                       return ListTile(
                         dense: true,
-                        contentPadding:
-                        EdgeInsets.zero,
+                        contentPadding: EdgeInsets.zero,
                         title: Text(
-                          v.label.isEmpty
-                              ? '(no label)'
-                              : v.label,
-                          style: const TextStyle(
-                            fontWeight:
-                            FontWeight.w600,
-                          ),
+                          v.label.isEmpty ? '(no label)' : v.label,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                         subtitle: Text(txt),
                         trailing: Row(
-                          mainAxisSize:
-                          MainAxisSize.min,
+                          mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
-                              icon: const Icon(
-                                  Icons.edit),
+                              icon: const Icon(Icons.edit),
                               tooltip: 'Edit',
-                              onPressed: () =>
-                                  _editVariantDialog(
-                                      v),
+                              onPressed: () => _editVariantDialog(v),
                             ),
                             IconButton(
-                              icon: const Icon(
-                                Icons
-                                    .delete_outline,
-                                color:
-                                Colors.red,
-                              ),
+                              icon: const Icon(Icons.delete_outline, color: Colors.red),
                               tooltip: 'Delete',
-                              onPressed: () =>
-                                  _deleteVariant(v),
+                              onPressed: () => _deleteVariant(v),
                             ),
                           ],
                         ),
@@ -1205,22 +1078,14 @@ class _ManageVariantsSheetState
                   );
                 },
                 loading: () => const Padding(
-                  padding:
-                  EdgeInsets.symmetric(vertical: 8),
-                  child: Center(
-                    child:
-                    CircularProgressIndicator(),
-                  ),
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Center(child: CircularProgressIndicator()),
                 ),
                 error: (e, st) => Padding(
-                  padding:
-                  const EdgeInsets.symmetric(
-                      vertical: 8),
+                  padding: const EdgeInsets.symmetric(vertical: 8),
                   child: Text(
                     'Failed to load variants: $e',
-                    style: const TextStyle(
-                      color: Colors.red,
-                    ),
+                    style: const TextStyle(color: Colors.red),
                   ),
                 ),
               ),
@@ -1240,8 +1105,7 @@ class _ManageVariantsSheetState
                 controller: _labelCtl,
                 decoration: const InputDecoration(
                   labelText: 'Variant label',
-                  helperText:
-                  'e.g. Regular / Large / Half Plate',
+                  helperText: 'e.g. Regular / Large / Half Plate',
                 ),
               ),
               const SizedBox(height: 12),
@@ -1249,28 +1113,16 @@ class _ManageVariantsSheetState
               TextField(
                 controller: _priceCtl,
                 keyboardType:
-                const TextInputType
-                    .numberWithOptions(
-                  decimal: true,
-                ),
-                decoration:
-                const InputDecoration(
-                  labelText: 'Base price (₹)',
-                ),
+                const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Base price (₹)'),
               ),
               const SizedBox(height: 12),
 
               TextField(
                 controller: _mrpCtl,
                 keyboardType:
-                const TextInputType
-                    .numberWithOptions(
-                  decimal: true,
-                ),
-                decoration:
-                const InputDecoration(
-                  labelText: 'MRP (optional)',
-                ),
+                const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'MRP (optional)'),
               ),
               const SizedBox(height: 12),
 
@@ -1280,8 +1132,7 @@ class _ManageVariantsSheetState
                     value: _isDefault,
                     onChanged: (val) {
                       setState(() {
-                        _isDefault =
-                            val ?? false;
+                        _isDefault = val ?? false;
                       });
                     },
                   ),
@@ -1295,29 +1146,19 @@ class _ManageVariantsSheetState
                 children: [
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: _saving
-                          ? null
-                          : () {
-                        Navigator.pop(
-                            context,
-                            true);
-                      },
+                      onPressed: _saving ? null : () => Navigator.pop(context, true),
                       child: const Text('Done'),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: FilledButton(
-                      onPressed:
-                      _saving ? null : _addVariant,
+                      onPressed: _saving ? null : _addVariant,
                       child: _saving
                           ? const SizedBox(
                         width: 16,
                         height: 16,
-                        child:
-                        CircularProgressIndicator(
-                          strokeWidth: 2,
-                        ),
+                        child: CircularProgressIndicator(strokeWidth: 2),
                       )
                           : const Text('Add'),
                     ),

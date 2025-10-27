@@ -34,6 +34,16 @@ class ApiClient {
   void setToken(String? t) => _token = t;
   void updateAuthToken(String? token) {
     _token = token;
+
+    // Keep Dio in sync for endpoints that use Dio directly
+    try {
+      _dio.options.headers.remove('Authorization');
+      if (token != null && token.isNotEmpty) {
+        _dio.options.headers['Authorization'] = 'Bearer $token';
+      }
+    } catch (_) {
+      // no-op: very defensive, shouldn't throw
+    }
   }
 
   Map<String, String> _headers([Map<String, String>? extra]) {
@@ -226,36 +236,23 @@ class ApiClient {
 
   Future<String> login({
     required String mobile,
-    required String password,
+    String? password,   // <- make optional
     String? pin,
   }) async {
-    // Build query params dynamically so we only send pin if it's provided
-    final qp = <String, String>{
-      'mobile': mobile,
-      'password': password,
-    };
-    if (pin != null && pin.isNotEmpty) {
-      qp['pin'] = pin;
-    }
+    final qp = <String, String>{'mobile': mobile};
+    if (password != null && password.isNotEmpty) qp['password'] = password;
+    if (pin != null && pin.isNotEmpty) qp['pin'] = pin;
 
-    final uri = Uri.parse('$baseUrl/auth/login').replace(
-      queryParameters: qp,
-    );
-
+    final uri = Uri.parse('$baseUrl/auth/login').replace(queryParameters: qp);
     final r = await http.post(uri, headers: _headers());
     final data = _decodeOrThrow(r);
-
     if (data is Map) {
-      for (final k in ['access_token', 'token', 'jwt', 'id_token']) {
+      for (final k in ['access_token','token','jwt','id_token']) {
         final v = data[k];
         if (v is String && v.isNotEmpty) return v;
       }
     }
-
-    throw ApiException(
-      'Token not found in login response',
-      r.statusCode,
-    );
+    throw ApiException('Token not found in login response', r.statusCode);
   }
 
   Future<dynamic> healthz() => _get('/healthz');

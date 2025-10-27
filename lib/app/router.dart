@@ -36,17 +36,33 @@ import 'package:waah_frontend/features/settings/printer_settings_page.dart';
 import 'package:waah_frontend/features/settings/branch_select_page.dart';
 
 /// Small gate that redirects after the first frame based on auth state.
+/// Ensures /auth/me is fetched and adopts me.branchId into activeBranchId.
 class HomeGate extends ConsumerWidget {
   const HomeGate({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final authed = ref.watch(isAuthedProvider);
-    final hasBranch =
-        ref.watch(activeBranchIdProvider).trim().isNotEmpty;
+    final authed    = ref.watch(isAuthedProvider);
+    final authState = ref.watch(authControllerProvider);
+    final me        = authState.me;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!context.mounted) return;
+
+      // 1) Ensure /auth/me on cold start or immediately after login
+      if (authed && me == null) {
+        ref.read(authControllerProvider.notifier).refreshMe();
+      }
+
+      // 2) If no active branch chosen yet, adopt branch from /auth/me
+      final branchNow = ref.read(activeBranchIdProvider).trim();
+      final meBranch  = ref.read(authControllerProvider).me?.branchId ?? '';
+      if (authed && branchNow.isEmpty && meBranch.isNotEmpty) {
+        ref.read(activeBranchIdProvider.notifier).set(meBranch);
+      }
+
+      // 3) Navigate after the above adjustments
+      final hasBranch = ref.read(activeBranchIdProvider).trim().isNotEmpty;
       if (!authed) {
         context.go('/login');
       } else if (!hasBranch) {
@@ -132,9 +148,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: '/users/:id',
             builder: (c, s) {
               final id = s.pathParameters['id']!;
-              final initial = s.extra is UserSummary
-                  ? s.extra as UserSummary
-                  : null;
+              final initial = s.extra is UserSummary ? s.extra as UserSummary : null;
               return UserDetailPage(
                 userId: id,
                 initialUser: initial,
@@ -153,9 +167,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: '/roles/:roleId',
             builder: (c, s) {
               final rid = s.pathParameters['roleId']!;
-              final initialRole = s.extra is RoleInfo
-                  ? s.extra as RoleInfo
-                  : null;
+              final initialRole = s.extra is RoleInfo ? s.extra as RoleInfo : null;
               return RoleDetailPage(
                 roleId: rid,
                 initialRole: initialRole,
@@ -187,6 +199,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             name: 'orders',
             builder: (c, s) => const OrdersPage(),
           ),
+
+          // Choose/Change Branch
           GoRoute(
             path: '/branch/select',
             builder: (c, s) => const BranchSelectPage(),
@@ -197,27 +211,21 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 
     // auth + RBAC guard
     redirect: (context, state) {
-      final authed = ref.read(isAuthedProvider);
-      final path = state.uri.path;
-      final branchIdNow =
-      ref.read(activeBranchIdProvider).trim();
-      final hasBranch = branchIdNow.isNotEmpty;
+      final authed      = ref.read(isAuthedProvider);
+      final path        = state.uri.path;
+      final branchIdNow = ref.read(activeBranchIdProvider).trim();
+      final hasBranch   = branchIdNow.isNotEmpty;
 
-      final isPublic = path == '/login' ||
-          path == '/onboarding' ||
-          path == '/';
+      final isPublic = path == '/login' || path == '/onboarding' || path == '/';
 
       // not logged in -> force /login (unless already public)
       if (!authed && !isPublic) {
         return '/login';
       }
 
-      // logged in but NO branch yet:
-      // only let them sit on /branch/select
+      // logged in but NO branch yet: only allow /branch/select
       if (authed && !hasBranch) {
-        if (path != '/branch/select') {
-          return '/branch/select';
-        }
+        if (path != '/branch/select') return '/branch/select';
         return null;
       }
 
@@ -234,11 +242,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       // lock down /users* and /roles* to SETTINGS_EDIT
       if (path.startsWith('/users') || path.startsWith('/roles')) {
         final me = ref.read(authControllerProvider).me;
-        final canManage =
-            me?.permissions.contains('SETTINGS_EDIT') ?? false;
-        if (!canManage) {
-          return '/menu';
-        }
+        final canManage = me?.permissions.contains('SETTINGS_EDIT') ?? false;
+        if (!canManage) return '/menu';
       }
 
       return null;

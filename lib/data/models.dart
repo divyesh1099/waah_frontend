@@ -1234,6 +1234,7 @@ class KitchenTicket {
 /// ---------------------------------------------------------------------------
 
 /// Data returned by GET /auth/me
+/// Data returned by GET /auth/me
 class MeInfo {
   final String id;
   final String tenantId;
@@ -1261,10 +1262,16 @@ class MeInfo {
     final rawRoles = (j['roles'] as List<dynamic>? ?? const []);
     final rawPerms = (j['permissions'] as List<dynamic>? ?? const []);
 
+    // Be defensive about key names (server is stable, but future-proof this)
+    final tenantId =
+        _str(j['tenant_id']) ?? _str(j['tenantId']) ?? _str(j['tid']) ?? '';
+    final branchId =
+        _str(j['branch_id']) ?? _str(j['branchId']) ?? _str(j['bid']);
+
     return MeInfo(
       id: _str(j['id']) ?? '',
-      tenantId: _str(j['tenant_id']) ?? '',
-      branchId: _str(j['branch_id']) ?? '',
+      tenantId: tenantId,
+      branchId: branchId,
       name: _str(j['name']) ?? '',
       mobile: _str(j['mobile']),
       email: _str(j['email']),
@@ -1277,6 +1284,7 @@ class MeInfo {
   Map<String, dynamic> toJson() => {
     'id': id,
     'tenant_id': tenantId,
+    'branch_id': branchId, // <— add this
     'name': name,
     'mobile': mobile,
     'email': email,
@@ -1285,18 +1293,13 @@ class MeInfo {
     'permissions': permissions,
   };
 
-  /// Convenience so UI can do:
-  ///   if (authState.me?.hasPerm('SETTINGS_EDIT') ?? false) { ... }
   bool hasPerm(String code) => permissions.contains(code);
-
   bool hasRole(String code) => roles.contains(code);
 
   bool get canCloseShift =>
-      permissions.contains('SHIFT_CLOSE') ||
-          permissions.contains('MANAGER_APPROVE');
+      permissions.contains('SHIFT_CLOSE') || permissions.contains('MANAGER_APPROVE');
 
-  bool get canSettingsEdit =>
-      permissions.contains('SETTINGS_EDIT');
+  bool get canSettingsEdit => permissions.contains('SETTINGS_EDIT');
 }
 
 /// Row returned by GET /users/ (list of all staff for a tenant).
