@@ -2,6 +2,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:waah_frontend/app/providers.dart';
 import 'package:waah_frontend/data/models.dart';
+import 'package:waah_frontend/widgets/menu_media.dart';
 
 /// ------------------------------------------------------------
 /// PROVIDERS: categories, items, tables, cart
@@ -13,7 +14,7 @@ final selectedCategoryIdProvider = StateProvider<String?>((ref) => null);
 /// Load menu categories for the ACTIVE tenant/branch.
 final posCategoriesProvider =
 FutureProvider.autoDispose<List<MenuCategory>>((ref) async {
-  final client   = ref.watch(apiClientProvider);
+  final client = ref.watch(apiClientProvider);
   final tenantId = ref.watch(activeTenantIdProvider);
   final branchId = ref.watch(activeBranchIdProvider);
 
@@ -32,14 +33,17 @@ FutureProvider.autoDispose<List<MenuCategory>>((ref) async {
 /// Load menu items for currently selected category for the ACTIVE tenant.
 final posItemsProvider =
 FutureProvider.autoDispose<List<MenuItem>>((ref) async {
-  final client   = ref.watch(apiClientProvider);
+  final client = ref.watch(apiClientProvider);
   final tenantId = ref.watch(activeTenantIdProvider);
-  final catId    = ref.watch(selectedCategoryIdProvider);
+  final catId = ref.watch(selectedCategoryIdProvider);
 
   if (tenantId.isEmpty) return <MenuItem>[];
 
   final items = await client.fetchItems(
-    categoryId: catId,
+    // treat empty-string like null
+    categoryId: (catId == null || (catId.isNotEmpty && catId.trim().isEmpty))
+        ? null
+        : catId,
     tenantId: tenantId,
   );
 
@@ -55,7 +59,7 @@ FutureProvider.autoDispose<List<MenuItem>>((ref) async {
 
 /// Load dining tables for ACTIVE branch.
 final diningTablesProvider = FutureProvider<List<DiningTable>>((ref) async {
-  final client   = ref.watch(apiClientProvider);
+  final client = ref.watch(apiClientProvider);
   final branchId = ref.watch(activeBranchIdProvider);
 
   if (branchId.isEmpty) return <DiningTable>[];
@@ -352,9 +356,9 @@ class PosPage extends ConsumerWidget {
       );
     }
 
-    final catsAsync  = ref.watch(posCategoriesProvider);
+    final catsAsync = ref.watch(posCategoriesProvider);
     final itemsAsync = ref.watch(posItemsProvider);
-    final cart       = ref.watch(posCartProvider);
+    final cart = ref.watch(posCartProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -433,70 +437,92 @@ class PosPage extends ConsumerWidget {
                   );
                 }
 
-                // Grid of tappable menu items
-                return GridView.builder(
-                  padding: const EdgeInsets.all(12),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    mainAxisSpacing: 12,
-                    crossAxisSpacing: 12,
-                    childAspectRatio: 4 / 3,
-                  ),
-                  itemCount: items.length,
-                  itemBuilder: (_, i) {
-                    final it = items[i];
-                    return _ItemCard(
-                      item: it,
-                      onTap: () async {
-                        final client = ref.read(apiClientProvider);
+                return LayoutBuilder(
+                  builder: (context, cs) {
+                    // Responsive grid: wider screens show more columns
+                    final maxWidth = cs.maxWidth;
+                    final cross = maxWidth >= 1200
+                        ? 6
+                        : maxWidth >= 992
+                        ? 5
+                        : maxWidth >= 768
+                        ? 4
+                        : maxWidth >= 560
+                        ? 3
+                        : 2;
 
-                        // 1. fetch variants
-                        final variants =
-                        await client.fetchVariants(it.id ?? '');
-
-                        // 2. fetch modifier groups (+mods) from backend
-                        final rawGroups =
-                        await client.fetchItemModifierGroups(it.id ?? '');
-                        final modifierGroups = rawGroups
-                            .map<_ItemModifierGroupData>(
-                              (g) => _ItemModifierGroupData.fromRaw(
-                            Map<String, dynamic>.from(g),
-                          ),
-                        )
-                            .toList();
-
-                        // 3. bottom sheet (variant + modifiers + qty)
-                        if (!context.mounted) return;
-                        final res = await showModalBottomSheet<_AddResult>(
-                          context: context,
-                          isScrollControlled: true,
-                          builder: (_) => _AddToCartSheet(
+                    return Scrollbar(
+                      child: GridView.builder(
+                        padding: const EdgeInsets.all(12),
+                        gridDelegate:
+                        SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: cross,
+                          mainAxisSpacing: 12,
+                          crossAxisSpacing: 12,
+                          // Compact card to avoid covering background visually
+                          childAspectRatio: 3 / 4,
+                        ),
+                        itemCount: items.length,
+                        itemBuilder: (_, i) {
+                          final it = items[i];
+                          return _ItemCard(
                             item: it,
-                            variants: variants,
-                            modifierGroups: modifierGroups,
-                          ),
-                        );
-                        if (res == null) return;
+                            onTap: () async {
+                              final client = ref.read(apiClientProvider);
 
-                        // 4. add to cart
-                        ref.read(posCartProvider.notifier).addItem(
-                          item: it,
-                          variant: res.variant,
-                          modifiers: res.modifiers,
-                          qty: res.qty.toDouble(),
-                        );
+                              // 1. fetch variants
+                              final variants =
+                              await client.fetchVariants(it.id ?? '');
 
-                        // 5. toast
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content:
-                              Text('${it.name} x${res.qty} added to cart'),
-                              duration: const Duration(milliseconds: 800),
-                            ),
+                              // 2. fetch modifier groups (+mods) from backend
+                              final rawGroups =
+                              await client.fetchItemModifierGroups(
+                                  it.id ?? '');
+                              final modifierGroups = rawGroups
+                                  .map<_ItemModifierGroupData>(
+                                    (g) => _ItemModifierGroupData.fromRaw(
+                                  Map<String, dynamic>.from(g),
+                                ),
+                              )
+                                  .toList();
+
+                              // 3. bottom sheet (variant + modifiers + qty)
+                              if (!context.mounted) return;
+                              final res =
+                              await showModalBottomSheet<_AddResult>(
+                                context: context,
+                                isScrollControlled: true,
+                                builder: (_) => _AddToCartSheet(
+                                  item: it,
+                                  variants: variants,
+                                  modifierGroups: modifierGroups,
+                                ),
+                              );
+                              if (res == null) return;
+
+                              // 4. add to cart
+                              ref.read(posCartProvider.notifier).addItem(
+                                item: it,
+                                variant: res.variant,
+                                modifiers: res.modifiers,
+                                qty: res.qty.toDouble(),
+                              );
+
+                              // 5. toast
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                        '${it.name} x${res.qty} added to cart'),
+                                    duration:
+                                    const Duration(milliseconds: 800),
+                                  ),
+                                );
+                              }
+                            },
                           );
-                        }
-                      },
+                        },
+                      ),
                     );
                   },
                 );
@@ -526,7 +552,7 @@ class PosPage extends ConsumerWidget {
             ),
           ),
 
-          // CART SUMMARY
+          // CART SUMMARY (capped height so it never "covers" the screen)
           _CartSummary(cart: cart),
         ],
       ),
@@ -583,7 +609,7 @@ class _CategoryBar extends ConsumerWidget {
   }
 }
 
-/// One menu item card in the grid
+/// One menu item card in the grid (shows image if available)
 class _ItemCard extends StatelessWidget {
   const _ItemCard({required this.item, required this.onTap});
   final MenuItem item;
@@ -591,59 +617,89 @@ class _ItemCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hasImg = (item.imageUrl != null && item.imageUrl!.trim().isNotEmpty);
+
     return Material(
       color: Colors.brown.shade50,
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(10),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                item.name,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Image area
+            AspectRatio(
+              aspectRatio: 4 / 3,
+              child: hasImg
+                  ? MenuBannerImage(
+                path: item.imageUrl,
+                // Banner widget already handles fit/placeholder
+              )
+                  : Container(
+                color: Colors.brown.shade100,
+                child: const Center(
+                  child: Icon(Icons.image_outlined, size: 36),
                 ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
               ),
-              if (item.description != null &&
-                  item.description!.trim().isNotEmpty)
-                Text(
-                  item.description!,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey.shade700,
-                  ),
-                ),
-              Align(
-                alignment: Alignment.bottomRight,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.brown.shade200,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: const Text(
-                    'Add +',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
+            ),
+
+            // Texts
+            Expanded(
+              child: Padding(
+                padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.name,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                  ),
+                    if (item.description != null &&
+                        item.description!.trim().isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          item.description!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+                      ),
+                    const Spacer(),
+                    Align(
+                      alignment: Alignment.bottomRight,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.brown.shade300,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text(
+                          'Add +',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -750,6 +806,9 @@ class _AddToCartSheetState extends State<_AddToCartSheet> {
     final perUnit = _perUnitPrice();
     final total = _totalPrice();
 
+    final hasImg =
+        widget.item.imageUrl != null && widget.item.imageUrl!.trim().isNotEmpty;
+
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.only(
@@ -763,7 +822,14 @@ class _AddToCartSheetState extends State<_AddToCartSheet> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Title / desc
+              // Image + Title / desc
+              if (hasImg) ...[
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: MenuBannerImage(path: widget.item.imageUrl),
+                ),
+                const SizedBox(height: 8),
+              ],
               Text(
                 widget.item.name,
                 style: const TextStyle(
@@ -1131,7 +1197,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       PosCartState cart,
       _CheckoutRequest info,
       ) async {
-    final client   = ref.read(apiClientProvider);
+    final client = ref.read(apiClientProvider);
     final tenantId = ref.read(activeTenantIdProvider);
     final branchId = ref.read(activeBranchIdProvider);
 
@@ -1148,8 +1214,9 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
 
     // pax fallback
     final paxFromCart = _paxGuess(cart);
-    final int? paxToSend =
-    (info.pax != null && info.pax! > 0) ? info.pax : (paxFromCart == 0 ? null : paxFromCart);
+    final int? paxToSend = (info.pax != null && info.pax! > 0)
+        ? info.pax
+        : (paxFromCart == 0 ? null : paxFromCart);
 
     // 2. create order using lightweight route
     late final String orderId;
@@ -1334,197 +1401,230 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
     final total = widget.cart.subTotal;
 
     return Material(
-      elevation: 8,
+      elevation: 10,
       color: Colors.brown.shade50,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Cart lines list
-            if (lines.isNotEmpty)
-              ConstrainedBox(
-                constraints: const BoxConstraints(
-                  maxHeight: 200,
-                ),
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: lines.length,
-                  separatorBuilder: (_, __) => const Divider(height: 8),
-                  itemBuilder: (context, i) {
-                    final ln = lines[i];
-                    return Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // name + modifiers + unit price
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                ln.displayName,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              if (ln.modifiers.isNotEmpty)
-                                Text(
-                                  ln.modifiersSummary,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey.shade600,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Cart lines list (capped height so it never overgrows)
+              if (lines.isNotEmpty)
+                ConstrainedBox(
+                  constraints: const BoxConstraints(
+                    maxHeight: 180,
+                  ),
+                  child: Scrollbar(
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: lines.length,
+                      separatorBuilder: (_, __) => const Divider(height: 8),
+                      itemBuilder: (context, i) {
+                        final ln = lines[i];
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // optional thumbnail (uses item.imageUrl)
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(6),
+                              child: SizedBox(
+                                width: 44,
+                                height: 44,
+                                child: (ln.item.imageUrl != null &&
+                                    ln.item.imageUrl!.trim().isNotEmpty)
+                                    ? MenuBannerImage(path: ln.item.imageUrl)
+                                    : Container(
+                                  color: Colors.brown.shade100,
+                                  child: const Icon(
+                                    Icons.fastfood_outlined,
+                                    size: 22,
                                   ),
                                 ),
-                              Text(
-                                '₹ ${ln.unitPrice.toStringAsFixed(2)}',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey.shade700,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+
+                            // name + modifiers + unit price
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    ln.displayName,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  if (ln.modifiers.isNotEmpty)
+                                    Text(
+                                      ln.modifiersSummary,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey.shade600,
+                                      ),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  Text(
+                                    '₹ ${ln.unitPrice.toStringAsFixed(2)}',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey.shade700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+
+                            // qty stepper
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon:
+                                  const Icon(Icons.remove_circle_outline),
+                                  onPressed: _busy
+                                      ? null
+                                      : () {
+                                    ref
+                                        .read(
+                                        posCartProvider.notifier)
+                                        .decQty(i);
+                                  },
                                 ),
-                              ),
-                            ],
-                          ),
-                        ),
+                                Text(
+                                  ln.qty.toStringAsFixed(0),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.add_circle_outline),
+                                  onPressed: _busy
+                                      ? null
+                                      : () {
+                                    ref
+                                        .read(
+                                        posCartProvider.notifier)
+                                        .incQty(i);
+                                  },
+                                ),
+                              ],
+                            ),
+                            const SizedBox(width: 8),
 
-                        // qty stepper
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.remove_circle_outline),
-                              onPressed: _busy
-                                  ? null
-                                  : () {
-                                ref
-                                    .read(posCartProvider.notifier)
-                                    .decQty(i);
-                              },
-                            ),
-                            Text(
-                              ln.qty.toStringAsFixed(0),
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.add_circle_outline),
-                              onPressed: _busy
-                                  ? null
-                                  : () {
-                                ref
-                                    .read(posCartProvider.notifier)
-                                    .incQty(i);
-                              },
+                            // line total + delete button
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(
+                                  '₹ ${ln.lineTotal.toStringAsFixed(2)}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.close),
+                                  tooltip: 'Remove line',
+                                  onPressed: _busy
+                                      ? null
+                                      : () {
+                                    ref
+                                        .read(
+                                        posCartProvider.notifier)
+                                        .removeLine(i);
+                                  },
+                                ),
+                              ],
                             ),
                           ],
-                        ),
-                        const SizedBox(width: 8),
+                        );
+                      },
+                    ),
+                  ),
+                )
+              else
+                const Text(
+                  'Cart is empty',
+                  style: TextStyle(
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
 
-                        // line total + delete button
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                              '₹ ${ln.lineTotal.toStringAsFixed(2)}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.close),
-                              tooltip: 'Remove line',
-                              onPressed: _busy
-                                  ? null
-                                  : () {
-                                ref
-                                    .read(posCartProvider.notifier)
-                                    .removeLine(i);
-                              },
-                            ),
-                          ],
-                        ),
-                      ],
-                    );
-                  },
-                ),
-              )
-            else
-              const Text(
-                'Cart is empty',
-                style: TextStyle(
-                  fontStyle: FontStyle.italic,
-                ),
+              const SizedBox(height: 12),
+              const Divider(),
+              const SizedBox(height: 8),
+
+              // subtotal row
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Subtotal',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '₹ ${total.toStringAsFixed(2)}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
               ),
 
-            const SizedBox(height: 12),
-            const Divider(),
-            const SizedBox(height: 8),
+              const SizedBox(height: 12),
 
-            // subtotal row
-            Row(
-              children: [
-                const Expanded(
-                  child: Text(
-                    'Subtotal',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w500,
+              Row(
+                children: [
+                  // CLEAR CART
+                  Expanded(
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.delete),
+                      label: const Text('Clear'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.brown.shade200,
+                      ),
+                      onPressed: lines.isEmpty || _busy
+                          ? null
+                          : () {
+                        ref.read(posCartProvider.notifier).clear();
+                      },
                     ),
                   ),
-                ),
-                Text(
-                  '₹ ${total.toStringAsFixed(2)}',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
 
-            const SizedBox(height: 12),
+                  const SizedBox(width: 12),
 
-            Row(
-              children: [
-                // CLEAR CART
-                Expanded(
-                  child: FilledButton.icon(
-                    icon: const Icon(Icons.delete),
-                    label: const Text('Clear'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: Colors.brown.shade200,
+                  // CHECKOUT
+                  Expanded(
+                    flex: 2,
+                    child: FilledButton.icon(
+                      icon: _busy
+                          ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child:
+                        CircularProgressIndicator(strokeWidth: 2),
+                      )
+                          : const Icon(Icons.point_of_sale),
+                      label: Text(
+                        _busy
+                            ? 'Processing...'
+                            : 'Checkout ₹ ${total.toStringAsFixed(2)}',
+                      ),
+                      onPressed: lines.isEmpty || _busy ? null : _startCheckout,
                     ),
-                    onPressed: lines.isEmpty || _busy
-                        ? null
-                        : () {
-                      ref.read(posCartProvider.notifier).clear();
-                    },
                   ),
-                ),
-
-                const SizedBox(width: 12),
-
-                // CHECKOUT
-                Expanded(
-                  flex: 2,
-                  child: FilledButton.icon(
-                    icon: _busy
-                        ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                        : const Icon(Icons.point_of_sale),
-                    label: Text(
-                      _busy
-                          ? 'Processing...'
-                          : 'Checkout ₹ ${total.toStringAsFixed(2)}',
-                    ),
-                    onPressed:
-                    lines.isEmpty || _busy ? null : _startCheckout,
-                  ),
-                ),
-              ],
-            ),
-          ],
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

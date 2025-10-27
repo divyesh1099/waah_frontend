@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:waah_frontend/app/providers.dart';
 import 'package:waah_frontend/data/repo/catalog_repo.dart';
 import 'package:waah_frontend/data/models.dart';
+import 'package:waah_frontend/features/menu/menu_item_detail_page.dart';
+import 'package:waah_frontend/widgets/menu_media.dart';
 
 /// ---------------------------------------------------------------------------
 /// PROVIDERS
@@ -30,8 +32,8 @@ FutureProvider.autoDispose<List<MenuCategory>>((ref) async {
 });
 
 /// Items for a given category (tenant passed for backend filters where needed)
-final categoryItemsProvider =
-FutureProvider.family.autoDispose<List<MenuItem>, String>((ref, categoryId) async {
+final categoryItemsProvider = FutureProvider.family
+    .autoDispose<List<MenuItem>, String>((ref, categoryId) async {
   final repo = ref.watch(catalogRepoProvider);
   final me = ref.watch(authControllerProvider).me;
   final tenantId = me?.tenantId ?? '';
@@ -47,8 +49,8 @@ FutureProvider.family.autoDispose<List<MenuItem>, String>((ref, categoryId) asyn
 });
 
 /// Variants for a given item (used to show/manage prices)
-final itemVariantsProvider =
-FutureProvider.family.autoDispose<List<ItemVariant>, String>((ref, itemId) async {
+final itemVariantsProvider = FutureProvider.family
+    .autoDispose<List<ItemVariant>, String>((ref, itemId) async {
   final repo = ref.watch(catalogRepoProvider);
   if (itemId.isEmpty) return <ItemVariant>[];
   final vars = await repo.loadVariants(itemId);
@@ -60,6 +62,27 @@ FutureProvider.family.autoDispose<List<ItemVariant>, String>((ref, itemId) async
   });
   return vars;
 });
+
+// Minimal extension so we don't touch your models everywhere
+extension _MenuItemCopyImage on MenuItem {
+  MenuItem copyWithImage({String? imageUrl}) => MenuItem(
+    id: id,
+    tenantId: tenantId,
+    name: name,
+    description: description,
+    categoryId: categoryId,
+    sku: sku,
+    hsn: hsn,
+    isActive: isActive,
+    stockOut: stockOut,
+    taxInclusive: taxInclusive,
+    gstRate: gstRate,
+    kitchenStationId: kitchenStationId,
+    createdAt: createdAt,
+    updatedAt: updatedAt,
+    imageUrl: imageUrl ?? this.imageUrl,
+  );
+}
 
 /// ---------------------------------------------------------------------------
 /// MAIN PAGE
@@ -208,6 +231,10 @@ class MenuPage extends ConsumerWidget {
                             return ListTile(
                               contentPadding:
                               const EdgeInsets.only(left: 0, right: 0),
+                              leading: Padding(
+                                padding: const EdgeInsets.only(right: 8.0),
+                                child: MenuImage(path: it.imageUrl, size: 56),
+                              ),
                               title: Text(
                                 it.name,
                                 style: const TextStyle(
@@ -598,7 +625,7 @@ class _EditCategoryDialogState extends ConsumerState<_EditCategoryDialog> {
 }
 
 /// ---------------------------------------------------------------------------
-/// ADD ITEM DIALOG  (creates MenuItem + first/default Variant)
+/// ADD ITEM DIALOG  (creates MenuItem + first/default Variant) + saves image URL
 /// ---------------------------------------------------------------------------
 
 class _AddItemDialog extends ConsumerStatefulWidget {
@@ -618,7 +645,7 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
   final _variantLabelCtl = TextEditingController(text: 'Regular');
   final _priceCtl = TextEditingController();
 
-  // future enhancement: image URL
+  // image URL (optional) — replaces MenuImageUploaderField
   final _imageCtl = TextEditingController();
 
   bool _busy = false;
@@ -644,11 +671,12 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
     final gstRate = double.tryParse(_gstCtl.text.trim()) ?? 5.0;
     final variantLabel = _variantLabelCtl.text.trim();
     final priceVal = double.tryParse(_priceCtl.text.trim()) ?? 0.0;
+    final img = _imageCtl.text.trim();
 
     setState(() => _busy = true);
 
     try {
-      // 1. create the menu item (use category's tenant/branch)
+      // 1) Create the item (keep imageUrl null first — we patch it after create)
       final newItem = MenuItem(
         id: null,
         tenantId: widget.category.tenantId,
@@ -664,12 +692,13 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
         kitchenStationId: null,
         createdAt: null,
         updatedAt: null,
+        imageUrl: null,
       );
 
       final createdItem = await repo.createItem(newItem);
       final newItemId = createdItem.id ?? '';
 
-      // 2. create the default variant with a price
+      // 2) Create the default variant
       final newVar = ItemVariant(
         id: null,
         itemId: newItemId,
@@ -678,17 +707,20 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
         basePrice: priceVal,
         isDefault: true,
       );
-
       await repo.createVariant(newItemId, newVar);
+
+      // 3) Optional: set imageUrl if user provided one (URL or /media path)
+      if (img.isNotEmpty) {
+        await repo.updateItem(
+          newItemId,
+          createdItem.copyWith(imageUrl: img),
+        );
+      }
 
       if (mounted) {
         Navigator.pop(context, true);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '"${createdItem.name}" added under ${widget.category.name}',
-            ),
-          ),
+          SnackBar(content: Text('"$name" added under ${widget.category.name}')),
         );
       }
     } catch (e) {
@@ -709,6 +741,7 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             TextField(
               controller: _nameCtl,
@@ -723,8 +756,7 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
             const SizedBox(height: 12),
             TextField(
               controller: _gstCtl,
-              keyboardType:
-              const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
               decoration: const InputDecoration(
                 labelText: 'GST %',
                 helperText: 'ex: 5.0',
@@ -735,10 +767,7 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
               alignment: Alignment.centerLeft,
               child: Text(
                 'Default Variant / Price',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: Colors.brown.shade700,
-                ),
+                style: TextStyle(fontWeight: FontWeight.w600, color: Colors.brown.shade700),
               ),
             ),
             const SizedBox(height: 8),
@@ -752,36 +781,28 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
             const SizedBox(height: 12),
             TextField(
               controller: _priceCtl,
-              keyboardType:
-              const TextInputType.numberWithOptions(decimal: true),
-              decoration:
-              const InputDecoration(labelText: 'Base price (₹) *'),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'Base price (₹) *'),
             ),
             const Divider(height: 24),
+
+            // NEW: paste a URL or /media path instead of picking files
             TextField(
               controller: _imageCtl,
               decoration: const InputDecoration(
                 labelText: 'Image URL (optional)',
-                helperText:
-                'Not sent to backend yet, placeholder for future.',
+                helperText: 'Full URL (https://...) or /media/items/xyz.jpg',
               ),
             ),
           ],
         ),
       ),
       actions: [
-        TextButton(
-          onPressed: _busy ? null : () => Navigator.pop(context, false),
-          child: const Text('Cancel'),
-        ),
+        TextButton(onPressed: _busy ? null : () => Navigator.pop(context, false), child: const Text('Cancel')),
         FilledButton(
           onPressed: _busy ? null : _save,
           child: _busy
-              ? const SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          )
+              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
               : const Text('Save'),
         ),
       ],

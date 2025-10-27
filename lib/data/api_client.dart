@@ -1654,4 +1654,100 @@ class ApiClient {
     );
   }
 
+  // ===== Menu Item image =====
+  Future<String> uploadItemImage({
+    required String itemId,
+    required List<int> bytes,
+    required String filename,
+    required String contentType, // e.g. "image/png"
+  }) async {
+    final mediaType = MediaType.parse(contentType);
+    final formData = FormData.fromMap({
+      'file': MultipartFile.fromBytes(bytes, filename: filename, contentType: mediaType),
+    });
+
+    final resp = await _dio.post(
+      '/menu/items/$itemId/image',
+      data: formData,
+      options: Options(headers: {
+        'Content-Type': 'multipart/form-data',
+        if (_token != null && _token!.isNotEmpty) 'Authorization': 'Bearer $_token',
+      }),
+    );
+
+    final data = resp.data;
+    if (data is Map && data['image_url'] is String) {
+      return data['image_url'] as String;
+    }
+    throw ApiException('uploadItemImage: unexpected response', resp.statusCode);
+  }
+
+  Future<void> deleteItemImage(String itemId) async {
+    await _delete('/menu/items/$itemId/image');
+  }
+
+  // ===== Item Variant image =====
+  Future<String> uploadVariantImage({
+    required String variantId,
+    required List<int> bytes,
+    required String filename,
+    required String contentType,
+  }) async {
+    final mediaType = MediaType.parse(contentType);
+    final formData = FormData.fromMap({
+      'file': MultipartFile.fromBytes(bytes, filename: filename, contentType: mediaType),
+    });
+
+    final resp = await _dio.post(
+      '/menu/variants/$variantId/image',
+      data: formData,
+      options: Options(headers: {
+        'Content-Type': 'multipart/form-data',
+        if (_token != null && _token!.isNotEmpty) 'Authorization': 'Bearer $_token',
+      }),
+    );
+
+    final data = resp.data;
+    if (data is Map && data['image_url'] is String) {
+      return data['image_url'] as String;
+    }
+    throw ApiException('uploadVariantImage: unexpected response', resp.statusCode);
+  }
+
+  Future<void> deleteVariantImage(String variantId) async {
+    await _delete('/menu/variants/$variantId/image');
+  }
+
+  // ===== Ingredient image =====
+  Future<String> uploadIngredientImage({
+    required String ingredientId,
+    required List<int> bytes,
+    required String filename,
+    required String contentType,
+  }) async {
+    final mediaType = MediaType.parse(contentType);
+    final formData = FormData.fromMap({
+      'file': MultipartFile.fromBytes(bytes, filename: filename, contentType: mediaType),
+    });
+
+    final resp = await _dio.post(
+      '/inventory/ingredients/$ingredientId/image',
+      data: formData,
+      options: Options(headers: {
+        'Content-Type': 'multipart/form-data',
+        if (_token != null && _token!.isNotEmpty) 'Authorization': 'Bearer $_token',
+      }),
+    );
+
+    final data = resp.data;
+    if (data is Map && data['image_url'] is String) {
+      return data['image_url'] as String;
+    }
+    throw ApiException('uploadIngredientImage: unexpected response', resp.statusCode);
+  }
+
+  Future<void> deleteIngredientImage(String ingredientId) async {
+    await _delete('/inventory/ingredients/$ingredientId/image');
+  }
+
 }

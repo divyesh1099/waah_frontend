@@ -7,6 +7,8 @@ import 'package:waah_frontend/data/api_client.dart';
 import 'package:waah_frontend/features/auth/auth_controller.dart';
 import '../data/models.dart';
 
+final mediaBaseUrlProvider = Provider<String>((ref) => '$kBaseUrl/media/');
+
 /// ---- Base URL (edit if you use another env) ----
 const kBaseUrl = String.fromEnvironment(
   'WAAH_BASE_URL',

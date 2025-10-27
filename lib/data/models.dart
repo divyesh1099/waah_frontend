@@ -416,6 +416,7 @@ class MenuItem {
   final bool taxInclusive;
   final double gstRate;
   final String? kitchenStationId;
+  final String? imageUrl; // NEW
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
@@ -432,6 +433,7 @@ class MenuItem {
     this.taxInclusive = true,
     this.gstRate = 5.0,
     this.kitchenStationId,
+    this.imageUrl, // NEW
     this.createdAt,
     this.updatedAt,
   });
@@ -449,6 +451,7 @@ class MenuItem {
     taxInclusive: (j['tax_inclusive'] as bool?) ?? true,
     gstRate: _numToDouble(j['gst_rate']) ?? 5.0,
     kitchenStationId: _str(j['kitchen_station_id']),
+    imageUrl: _str(j['image_url']), // NEW
     createdAt: _dt(j['created_at']),
     updatedAt: _dt(j['updated_at']),
   );
@@ -466,11 +469,13 @@ class MenuItem {
     'tax_inclusive': taxInclusive,
     'gst_rate': gstRate,
     'kitchen_station_id': kitchenStationId,
+    'image_url': imageUrl, // NEW (optional)
     'created_at': createdAt?.toIso8601String(),
     'updated_at': updatedAt?.toIso8601String(),
   };
 }
 
+// --- ItemVariant (replace your class with this) ---
 class ItemVariant {
   final String? id;
   final String itemId;
@@ -478,6 +483,7 @@ class ItemVariant {
   final double? mrp;
   final double basePrice;
   final bool isDefault;
+  final String? imageUrl; // NEW
 
   ItemVariant({
     this.id,
@@ -486,6 +492,7 @@ class ItemVariant {
     this.mrp,
     required this.basePrice,
     this.isDefault = false,
+    this.imageUrl, // NEW
   });
 
   factory ItemVariant.fromJson(Map<String, dynamic> j) => ItemVariant(
@@ -495,6 +502,7 @@ class ItemVariant {
     mrp: _numToDouble(j['mrp']),
     basePrice: _numToDouble(j['base_price']) ?? 0,
     isDefault: (j['is_default'] as bool?) ?? false,
+    imageUrl: _str(j['image_url']), // NEW
   );
 
   Map<String, dynamic> toJson() => {
@@ -504,6 +512,7 @@ class ItemVariant {
     'mrp': mrp,
     'base_price': basePrice,
     'is_default': isDefault,
+    'image_url': imageUrl, // NEW (optional)
   };
 }
 
@@ -921,6 +930,7 @@ class Ingredient {
   final String uom;
   final double minLevel;
   final double? qtyOnHand;
+  final String? imageUrl; // NEW
 
   Ingredient({
     required this.id,
@@ -929,6 +939,7 @@ class Ingredient {
     required this.uom,
     required this.minLevel,
     required this.qtyOnHand,
+    this.imageUrl, // NEW
   });
 
   factory Ingredient.fromJson(Map<String, dynamic> json) {
@@ -944,9 +955,8 @@ class Ingredient {
       name: (json['name'] ?? '') as String,
       uom: (json['uom'] ?? '') as String,
       minLevel: _asDouble(json['min_level']),
-      qtyOnHand: json['qty_on_hand'] == null
-          ? null
-          : _asDouble(json['qty_on_hand']),
+      qtyOnHand: json['qty_on_hand'] == null ? null : _asDouble(json['qty_on_hand']),
+      imageUrl: _str(json['image_url']), // NEW
     );
   }
 
@@ -956,6 +966,7 @@ class Ingredient {
     'name': name,
     'uom': uom,
     'min_level': minLevel,
+    'image_url': imageUrl, // NEW (optional)
   };
 }
 

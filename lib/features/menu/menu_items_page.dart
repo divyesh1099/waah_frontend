@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:waah_frontend/app/providers.dart';
 import 'package:waah_frontend/data/models.dart';
 import 'package:waah_frontend/data/repo/catalog_repo.dart';
+import 'package:waah_frontend/widgets/menu_media.dart';
 
 import 'menu_item_detail_page.dart';
 
@@ -69,6 +70,7 @@ class MenuItemsPage extends ConsumerWidget {
               final it = items[i];
 
               return ListTile(
+                leading: MenuImage(path: it.imageUrl, size: 56),
                 title: Text(it.name),
                 subtitle: Text([
                   if (it.description != null && it.description!.trim().isNotEmpty)
