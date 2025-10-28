@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:dio/dio.dart';
 import 'package:http_parser/http_parser.dart';
+import 'package:file_picker/file_picker.dart';
 import 'models.dart';
 import '../../env.dart';
 
@@ -1206,38 +1207,70 @@ class ApiClient {
     String? tenantId,
     String? branchId,
   }) {
+    final params = <String, dynamic>{
+      'status': status?.name,
+    };
+
+    // only include if it's a real value
+    if (tenantId != null && tenantId.trim().isNotEmpty) {
+      params['tenant_id'] = tenantId.trim();
+    }
+    if (branchId != null && branchId.trim().isNotEmpty) {
+      params['branch_id'] = branchId.trim();
+    }
+
     return listAll<KitchenTicket>(
       path: '/kot/tickets',
-      params: {
-        'status': status?.name,
-        if (tenantId != null) 'tenant_id': tenantId,
-        if (branchId != null) 'branch_id': branchId,
-      }..removeWhere((k, v) => v == null),
+      params: params,
       fromJson: KitchenTicket.fromJson,
     );
   }
 
-  Future<KitchenTicket> createKitchenTicket({
+  Future<Map<String, dynamic>> createKitchenTicket({
     required String orderId,
     required int ticketNo,
-    String? targetStation,
-    String? tenantId,
-    String? branchId,
+    String? targetStation, // pass null to include ALL items regardless of station
   }) async {
+    final params = <String, dynamic>{
+      'order_id': orderId,
+      'ticket_no': ticketNo,
+      if (targetStation != null && targetStation.isNotEmpty)
+        'target_station': targetStation,
+    };
+
     final r = await _post(
       '/kot/tickets',
-      params: {
-        'order_id': orderId,
-        'ticket_no': ticketNo,
-        'target_station': targetStation,
-        if (tenantId != null) 'tenant_id': tenantId,
-        if (branchId != null) 'branch_id': branchId,
-      }..removeWhere((k, v) => v == null),
+      params: params,
     );
-    return KitchenTicket.fromJson(
-      Map<String, dynamic>.from(r as Map),
-    );
+
+    return Map<String, dynamic>.from(r as Map);
   }
+
+  /// Convenience: generate a ticket number, call /kot/tickets,
+  /// and mark the order as in-kitchen (optional last step below).
+  Future<void> fireKotForOrder({
+    required String orderId,
+    String? stationId, // pass null to send all items in one ticket
+  }) async {
+    // ticket_no is required by backend right now.
+    // We'll just use epoch seconds, which is monotonic enough for dev.
+    final ticketNo = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+    await createKitchenTicket(
+      orderId: orderId,
+      ticketNo: ticketNo,
+      targetStation: stationId,
+    );
+
+    // OPTIONAL BUT NICE:
+    // flip the order status to KITCHEN so POS UI shows "sent"
+    try {
+      await patchOrderStatus(orderId, OrderStatus.KITCHEN);
+    } catch (_) {
+      // don't block KOT if this fails
+    }
+  }
+
 
   Future<void> reprintKitchenTicket(
       String ticketId, {
@@ -1750,4 +1783,55 @@ class ApiClient {
     await _delete('/inventory/ingredients/$ingredientId/image');
   }
 
+  String _guessExt(String name) {
+    final lower = name.toLowerCase();
+    if (lower.endsWith('.png')) return 'png';
+    if (lower.endsWith('.gif')) return 'gif';
+    if (lower.endsWith('.webp')) return 'webp';
+    // default
+    return 'jpeg';
+  }
+
+  /// Upload an image file to the backend.
+  /// Returns the server path (e.g. "/media/items/xyz.jpg").
+  Future<String> uploadMedia(PlatformFile file) async {
+    // Build the MultipartFile:
+    MultipartFile multipart;
+    if (file.bytes != null) {
+      // Works for Web and Desktop (bytes in memory)
+      multipart = MultipartFile.fromBytes(
+        file.bytes!,
+        filename: file.name,
+        contentType: MediaType('image', _guessExt(file.name)),
+      );
+    } else if (file.path != null) {
+      // Works for mobile/desktop (has a temp path on disk)
+      multipart = await MultipartFile.fromFile(
+        file.path!,
+        filename: file.name,
+        contentType: MediaType('image', _guessExt(file.name)),
+      );
+    } else {
+      throw Exception('No bytes/path for picked file');
+    }
+
+    final form = FormData.fromMap({
+      'file': multipart, // <- match your backend field name
+    });
+
+    final resp = await _dio.post(
+      '/media/upload',
+      data: form,
+      options: Options(
+        contentType: 'multipart/form-data',
+      ),
+    );
+
+    // Expecting { "path": "/media/items/abc.jpg" }
+    final data = resp.data;
+    if (data is Map && data['path'] is String) {
+      return data['path'] as String;
+    }
+    throw Exception('Upload did not return a "path" field');
+  }
 }

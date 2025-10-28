@@ -5,27 +5,38 @@ import '../../app/providers.dart';
 import '../../data/models.dart';
 
 /// ------------------------------------------------------------------
-/// Session/Context: tenant & branch (plug your auth/session later)
+/// Session/Context: tenant & branch
+/// We just mirror the global activeTenantIdProvider / activeBranchIdProvider
+/// so KOT always calls backend with the correct IDs.
 /// ------------------------------------------------------------------
-final kotTenantIdProvider = StateProvider<String>((_) => '');
-final kotBranchIdProvider = StateProvider<String>((_) => '');
+final kotTenantIdProvider = Provider<String>((ref) {
+  return ref.watch(activeTenantIdProvider); // from app/providers.dart
+});
+
+final kotBranchIdProvider = Provider<String>((ref) {
+  return ref.watch(activeBranchIdProvider); // from app/providers.dart
+});
+
 
 /// ------------------------------------------------------------------
 /// Data: tickets per status (tenant/branch aware)
 /// ------------------------------------------------------------------
-final kotTicketsProvider = FutureProvider.family
-    .autoDispose<List<KitchenTicket>, KOTStatus>((ref, status) async {
+final kotTicketsProvider =
+FutureProvider.family.autoDispose<List<KitchenTicket>, KOTStatus>((ref, status) async {
   final api = ref.watch(apiClientProvider);
   final tenantId = ref.watch(kotTenantIdProvider);
   final branchId = ref.watch(kotBranchIdProvider);
 
+  debugPrint('[KOT:${status.name}] tenant="$tenantId" branch="$branchId"');
+
   final list = await api.fetchKitchenTickets(
     status: status,
-    tenantId: tenantId,
-    branchId: branchId,
+    tenantId: tenantId.isEmpty ? null : tenantId,
+    branchId: branchId.isEmpty ? null : branchId,
   );
 
-  // newest first
+  debugPrint('[KOT:${status.name}] got ${list.length} tickets');
+
   list.sort((a, b) => b.ticketNo.compareTo(a.ticketNo));
   return list;
 });

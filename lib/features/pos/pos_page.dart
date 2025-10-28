@@ -1192,6 +1192,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
   }
 
   // talk to backend: create order, add items, take cash, invoice, print
+  // talk to backend: create order, add items, SEND KOT, take cash, invoice, print
   Future<void> _performCheckout(
       WidgetRef ref,
       PosCartState cart,
@@ -1293,7 +1294,26 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       }
     }
 
-    // 4. totals (to know how much to collect)
+    // 4. SEND KOT TO KITCHEN (create /kot/tickets and print)
+    try {
+      await client.fireKotForOrder(
+        orderId: orderId,
+        stationId: null, // null => send ALL items in one ticket
+      );
+    } catch (e) {
+      // Do NOT block billing if the kitchen printer is offline.
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('KOT not sent: $e'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+      // continue anyway
+    }
+
+    // 5. totals (to know how much to collect)
     late final OrderDetail detail;
     try {
       detail = await client.getOrderDetail(orderId);
@@ -1306,7 +1326,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
     }
     final amountDue = detail.totals.due;
 
-    // 5. pay in full CASH
+    // 6. pay in full CASH
     try {
       await client.pay(orderId, PayMode.CASH, amountDue);
     } catch (e) {
@@ -1317,7 +1337,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       return;
     }
 
-    // 6. create invoice (DB row + invoice number)
+    // 7. create invoice (DB row + invoice number)
     Map<String, dynamic> invoiceResp = {};
     try {
       invoiceResp = await client.createInvoice(orderId);
@@ -1330,7 +1350,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       }
     }
 
-    // 7. print invoice if we got invoice_id
+    // 8. print invoice if we got invoice_id
     final invoiceId = invoiceResp['invoice_id']?.toString();
     if (invoiceId != null && invoiceId.isNotEmpty) {
       try {
@@ -1347,7 +1367,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       }
     }
 
-    // 8. pop cash drawer (best-effort; send tenant/branch)
+    // 9. pop cash drawer (best-effort)
     try {
       await client.openDrawer(
         tenantId: tenantId,
@@ -1357,10 +1377,10 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       // drawer might not be configured; ignore
     }
 
-    // 9. clear cart
+    // 10. clear cart
     ref.read(posCartProvider.notifier).clear();
 
-    // 10. success toast
+    // 11. success toast
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(

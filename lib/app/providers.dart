@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:waah_frontend/data/api_client.dart';
 import 'package:waah_frontend/features/auth/auth_controller.dart';
 import '../data/models.dart';
+import 'package:file_picker/file_picker.dart';
 
 final mediaBaseUrlProvider = Provider<String>((ref) => '$kBaseUrl/media/');
 
@@ -171,3 +172,4 @@ FutureProvider.autoDispose<RestaurantSettings?>((ref) async {
     branchId: branchId,
   );
 });
+

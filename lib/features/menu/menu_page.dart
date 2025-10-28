@@ -1,6 +1,8 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
+import 'package:file_picker/file_picker.dart';
+import 'dart:typed_data';
+import 'package:flutter/services.dart';
 import 'package:waah_frontend/app/providers.dart';
 import 'package:waah_frontend/data/repo/catalog_repo.dart';
 import 'package:waah_frontend/data/models.dart';
@@ -98,21 +100,20 @@ class MenuPage extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Menu Categories'),
-        actions: [
-          IconButton(
-            tooltip: 'Add Category',
-            icon: const Icon(Icons.add),
-            onPressed: () async {
-              final saved = await showDialog<bool>(
-                context: context,
-                builder: (_) => const _AddCategoryDialog(),
-              );
-              if (saved == true) {
-                ref.invalidate(menuCategoriesProvider);
-              }
-            },
-          ),
-        ],
+
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () async {
+          final saved = await showDialog<bool>(
+            context: context,
+            builder: (_) => const _AddCategoryDialog(),
+          );
+          if (saved == true) {
+            ref.invalidate(menuCategoriesProvider);
+          }
+        },
+        tooltip: 'Add Category',
+        child: const Icon(Icons.add),
       ),
       body: catsAsync.when(
         data: (cats) {
@@ -143,10 +144,6 @@ class MenuPage extends ConsumerWidget {
                   title: Text(
                     cat.name,
                     style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  subtitle: Text(
-                    'Position ${cat.position}',
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                   ),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -645,8 +642,9 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
   final _variantLabelCtl = TextEditingController(text: 'Regular');
   final _priceCtl = TextEditingController();
 
-  // image URL (optional) — replaces MenuImageUploaderField
-  final _imageCtl = TextEditingController();
+  // NEW: file picker state
+  PlatformFile? _pickedFile;
+  Uint8List? _previewBytes; // for showing thumbnail in dialog
 
   bool _busy = false;
 
@@ -657,8 +655,38 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
     _gstCtl.dispose();
     _variantLabelCtl.dispose();
     _priceCtl.dispose();
-    _imageCtl.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickImage() async {
+    // Open native file picker
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: false,
+      withData: true, // we want bytes for preview
+    );
+
+    if (!mounted) return;
+
+    if (result != null && result.files.isNotEmpty) {
+      final file = result.files.first;
+      setState(() {
+        _pickedFile = file;
+        _previewBytes = file.bytes; // may be null on some platforms, that's ok
+      });
+    }
+
+    // On Windows debug you may still see the "Alt Left already pressed" assert.
+    // That's a Flutter desktop quirk after native dialogs. It's safe to ignore
+    // in debug and it won't show up in release builds.
+  }
+
+
+  void _clearImage() {
+    setState(() {
+      _pickedFile = null;
+      _previewBytes = null;
+    });
   }
 
   Future<void> _save() async {
@@ -671,12 +699,11 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
     final gstRate = double.tryParse(_gstCtl.text.trim()) ?? 5.0;
     final variantLabel = _variantLabelCtl.text.trim();
     final priceVal = double.tryParse(_priceCtl.text.trim()) ?? 0.0;
-    final img = _imageCtl.text.trim();
 
     setState(() => _busy = true);
 
     try {
-      // 1) Create the item (keep imageUrl null first — we patch it after create)
+      // 1) Create the bare item first (no image yet)
       final newItem = MenuItem(
         id: null,
         tenantId: widget.category.tenantId,
@@ -698,7 +725,7 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
       final createdItem = await repo.createItem(newItem);
       final newItemId = createdItem.id ?? '';
 
-      // 2) Create the default variant
+      // 2) Create the default variant (price)
       final newVar = ItemVariant(
         id: null,
         itemId: newItemId,
@@ -709,11 +736,14 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
       );
       await repo.createVariant(newItemId, newVar);
 
-      // 3) Optional: set imageUrl if user provided one (URL or /media path)
-      if (img.isNotEmpty) {
+      // 3) If user picked an image, upload it now and PATCH the item
+      if (_pickedFile != null) {
+        final uploadedPath = await repo.uploadMedia(_pickedFile!);
+        // uploadedPath should be something like "/media/items/abc.jpg"
+
         await repo.updateItem(
           newItemId,
-          createdItem.copyWith(imageUrl: img),
+          createdItem.copyWithImage(imageUrl: uploadedPath),
         );
       }
 
@@ -743,6 +773,7 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Item basics
             TextField(
               controller: _nameCtl,
               decoration: const InputDecoration(labelText: 'Item name *'),
@@ -762,12 +793,95 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
                 helperText: 'ex: 5.0',
               ),
             ),
+
             const Divider(height: 24),
+
+            // IMAGE PICKER BLOCK
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Item Photo (optional)',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.brown.shade700,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Preview box
+                Container(
+                  width: 72,
+                  height: 72,
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey.shade400),
+                    borderRadius: BorderRadius.circular(8),
+                    color: Colors.grey.shade100,
+                  ),
+                  child: _previewBytes != null
+                      ? Image.memory(
+                    _previewBytes!,
+                    fit: BoxFit.cover,
+                  )
+                      : const Icon(
+                    Icons.image,
+                    size: 32,
+                    color: Colors.grey,
+                  ),
+                ),
+                const SizedBox(width: 12),
+
+                // Buttons + filename
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: _busy ? null : _pickImage,
+                        icon: const Icon(Icons.upload_file),
+                        label: const Text('Choose Image'),
+                      ),
+                      if (_pickedFile != null) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          _pickedFile!.name,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                        TextButton.icon(
+                          onPressed: _busy ? null : _clearImage,
+                          icon: const Icon(Icons.clear, size: 16),
+                          label: const Text('Remove'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.red,
+                            padding: EdgeInsets.zero,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+
+            const Divider(height: 24),
+
+            // Default variant / price block
             Align(
               alignment: Alignment.centerLeft,
               child: Text(
                 'Default Variant / Price',
-                style: TextStyle(fontWeight: FontWeight.w600, color: Colors.brown.shade700),
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.brown.shade700,
+                ),
               ),
             ),
             const SizedBox(height: 8),
@@ -781,28 +895,27 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
             const SizedBox(height: 12),
             TextField(
               controller: _priceCtl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Base price (₹) *'),
-            ),
-            const Divider(height: 24),
-
-            // NEW: paste a URL or /media path instead of picking files
-            TextField(
-              controller: _imageCtl,
-              decoration: const InputDecoration(
-                labelText: 'Image URL (optional)',
-                helperText: 'Full URL (https://...) or /media/items/xyz.jpg',
-              ),
+              keyboardType:
+              const TextInputType.numberWithOptions(decimal: true),
+              decoration:
+              const InputDecoration(labelText: 'Base price (₹) *'),
             ),
           ],
         ),
       ),
       actions: [
-        TextButton(onPressed: _busy ? null : () => Navigator.pop(context, false), child: const Text('Cancel')),
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
         FilledButton(
           onPressed: _busy ? null : _save,
           child: _busy
-              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+              ? const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
               : const Text('Save'),
         ),
       ],

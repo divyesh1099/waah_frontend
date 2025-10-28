@@ -2,6 +2,7 @@
 import 'package:waah_frontend/app/providers.dart'; // apiClientProvider
 import 'package:waah_frontend/data/api_client.dart';
 import 'package:waah_frontend/data/models.dart';
+import 'package:file_picker/file_picker.dart';
 
 class CatalogRepo {
   CatalogRepo(this._client);
@@ -126,6 +127,15 @@ class CatalogRepo {
   // NOTE: We intentionally REMOVED setStockOut() and assignKitchenStation()
   // because ApiClient doesn't have them and current UI doesn't use them.
 
+  /// Upload an image file to the backend and get back the server path
+  /// (e.g. "/media/items/xyz.jpg").
+  ///
+  /// NOTE: You must also add a matching `uploadMedia` method in ApiClient
+  /// that actually does the multipart/form-data POST.
+  Future<String> uploadMedia(PlatformFile file) {
+    return _client.uploadMedia(file);
+  }
+
   // ------------------ Variants ------------------
 
   Future<List<ItemVariant>> loadVariants(String itemId) {
@@ -170,3 +180,4 @@ final catalogRepoProvider = Provider<CatalogRepo>((ref) {
   final client = ref.watch(apiClientProvider);
   return CatalogRepo(client);
 });
+
