@@ -631,16 +631,9 @@ class _ItemCard extends StatelessWidget {
             // Image area
             AspectRatio(
               aspectRatio: 4 / 3,
-              child: hasImg
-                  ? MenuBannerImage(
+              child: MenuBannerImage(
                 path: item.imageUrl,
-                // Banner widget already handles fit/placeholder
-              )
-                  : Container(
-                color: Colors.brown.shade100,
-                child: const Center(
-                  child: Icon(Icons.image_outlined, size: 36),
-                ),
+                borderRadius: 0, // leave square corners in the grid card header
               ),
             ),
 
@@ -824,9 +817,9 @@ class _AddToCartSheetState extends State<_AddToCartSheet> {
             children: [
               // Image + Title / desc
               if (hasImg) ...[
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: MenuBannerImage(path: widget.item.imageUrl),
+                MenuBannerImage(
+                  path: widget.item.imageUrl,
+                  borderRadius: 8,
                 ),
                 const SizedBox(height: 8),
               ],
@@ -1454,7 +1447,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
                                 height: 44,
                                 child: (ln.item.imageUrl != null &&
                                     ln.item.imageUrl!.trim().isNotEmpty)
-                                    ? MenuBannerImage(path: ln.item.imageUrl)
+                                    ? MenuBannerImage(path: ln.item.imageUrl, borderRadius: 8,)
                                     : Container(
                                   color: Colors.brown.shade100,
                                   child: const Icon(

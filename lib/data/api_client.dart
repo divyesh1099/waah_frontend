@@ -590,14 +590,25 @@ class ApiClient {
     OrderStatus? status,
     int page = 1,
     int size = 20,
+    // NEW filters:
+    OrderChannel? channel,            // e.g. OrderChannel.ONLINE
+    String? tenantId,                 // current tenant
+    String? branchId,                 // current branch
+    OnlineProvider? provider,         // e.g. OnlineProvider.ZOMATO
   }) {
+    final params = <String, dynamic>{
+      'status': status?.name,
+      'page': page,
+      'size': size,
+      if (channel != null) 'channel': channel.name,
+      if (tenantId != null && tenantId.isNotEmpty) 'tenant_id': tenantId,
+      if (branchId != null && branchId.isNotEmpty) 'branch_id': branchId,
+      if (provider != null) 'provider': provider.name,
+    };
+
     return listPage<Order>(
       path: '/orders/',
-      params: {
-        'status': status?.name,
-        'page': page,
-        'size': size,
-      }..removeWhere((k, v) => v == null),
+      params: params..removeWhere((k, v) => v == null),
       fromJson: Order.fromJson,
     );
   }

@@ -736,15 +736,16 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
       );
       await repo.createVariant(newItemId, newVar);
 
-      // 3) If user picked an image, upload it now and PATCH the item
+      // 3) If user picked an image, upload it using the *item-specific* endpoint
+      //    This hits: POST /menu/items/{itemId}/image
+      //    which should both save the file AND update image_url in DB.
       if (_pickedFile != null) {
-        final uploadedPath = await repo.uploadMedia(_pickedFile!);
-        // uploadedPath should be something like "/media/items/abc.jpg"
-
-        await repo.updateItem(
-          newItemId,
-          createdItem.copyWithImage(imageUrl: uploadedPath),
+        await repo.uploadItemImage(
+          itemId: newItemId,
+          file: _pickedFile!,
         );
+        // We do NOT call repo.updateItem(...) here anymore.
+        // Backend upload route is expected to set image_url on that item.
       }
 
       if (mounted) {

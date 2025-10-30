@@ -173,3 +173,20 @@ FutureProvider.autoDispose<RestaurantSettings?>((ref) async {
   );
 });
 
+/// Build a full URL for images that may come as absolute, relative, or /media/…
+/// - If already absolute (http/https), return as-is
+/// - If starts with /media/, prefix with kBaseUrl
+/// - Else treat as relative and join with media base
+String resolveMediaUrl(String? input) {
+  if (input == null || input.isEmpty) return '';
+  final s = input.trim();
+  if (s.startsWith('http://') || s.startsWith('https://')) return s;
+  if (s.startsWith('/media/')) return '$kBaseUrl$s';
+  // fallback: your generic media base
+  return '$kBaseUrl/media/$s';
+}
+
+/// Expose the resolver in DI for widgets that prefer reading from ref
+final mediaResolverProvider = Provider<Uri Function(String?)>((ref) {
+  return (s) => Uri.parse(resolveMediaUrl(s));
+});

@@ -1,232 +1,330 @@
-
-import 'dart:convert';
 import 'dart:typed_data';
-import 'package:flutter/foundation.dart';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:file_picker/file_picker.dart';
-import 'package:http/http.dart' as http;
 
-import 'package:waah_frontend/app/providers.dart';
+import '../app/providers.dart';
+import '../data/repo/catalog_repo.dart';
 
-// ---- URL helpers ----
-String _resolveMediaUrl(String? path, WidgetRef ref) {
-  if (path == null) return '';
+/// ------------------------------------------------------------
+/// Helper: robust media URL resolver
+/// ------------------------------------------------------------
+String? _resolveMediaUrl(String? path, String mediaBaseUrl, String baseUrl) {
+  if (path == null) return null;
   final p = path.trim();
-  if (p.isEmpty) return '';
+  if (p.isEmpty) return null;
+
+  // Already absolute
   if (p.startsWith('http://') || p.startsWith('https://')) return p;
 
-  final baseRaw = ref.read(mediaBaseUrlProvider);
-  final base = baseRaw.endsWith('/') ? baseRaw.substring(0, baseRaw.length - 1) : baseRaw;
-  final right = p.startsWith('/') ? p : '/$p';
-  return '$base$right';
-}
+  // Common backend returns
+  // 1) "/media/uuid.jpg"  2) "media/uuid.jpg"  3) "uuid.jpg"
+  final mb = mediaBaseUrl.endsWith('/') ? mediaBaseUrl : '$mediaBaseUrl/';
+  if (p.startsWith('/media/')) return mb + p.substring('/media/'.length);
+  if (p.startsWith('media/')) return mb + p.substring('media/'.length);
 
-String _resolveUploadEndpoint(WidgetRef ref) {
-  // Uses mediaBaseUrlProvider origin and posts to /api/media/upload
-  // Example: https://api.example.com/api/media/upload
-  final baseRaw = ref.read(mediaBaseUrlProvider);
-  try {
-    final u = Uri.parse(baseRaw);
-    final origin = '${u.scheme}://${u.host}${u.hasPort ? ':${u.port}' : ''}';
-    return '$origin/api/media/upload';
-  } catch (_) {
-    // Fallback if baseRaw isn't a full URI
-    return '/api/media/upload';
+  // If server ever returned a root-relative path ("/something.jpg") that's
+  // not under /media, fall back to baseUrl + p
+  if (p.startsWith('/')) {
+    final b = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+    return '$b$p';
   }
+
+  // Bare filename -> treat as media path
+  return mb + p;
 }
 
-// ---- Display Widgets ----
+Widget _placeholderBox({double? radius, double? size, BorderRadius? r}) {
+  final child = Icon(Icons.image, size: (size ?? 48) * 0.66, color: Colors.grey);
+  return DecoratedBox(
+    decoration: BoxDecoration(
+      color: Colors.grey.shade200,
+      borderRadius: r ?? (radius != null ? BorderRadius.circular(radius) : null),
+      border: Border.all(color: Colors.grey.shade300),
+    ),
+    child: Center(child: child),
+  );
+}
+
+/// ------------------------------------------------------------
+/// MenuImage: square thumbnail with rounded corners
+/// ------------------------------------------------------------
 class MenuImage extends ConsumerWidget {
-  const MenuImage({super.key, required this.path, this.size = 56, this.radius = 10});
+  const MenuImage({super.key, required this.path, this.size = 56, this.radius = 8});
   final String? path;
   final double size;
   final double radius;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final url = _resolveMediaUrl(path, ref);
-    final placeholder = Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceVariant,
-        borderRadius: BorderRadius.circular(radius),
-      ),
-      alignment: Alignment.center,
-      child: Icon(Icons.image_not_supported_outlined, size: size * .42, color: Colors.grey.shade600),
-    );
-
-    if (url.isEmpty) return placeholder;
+    final mediaBase = ref.watch(mediaBaseUrlProvider);
+    final baseUrl = kBaseUrl; // from providers.dart
+    final url = _resolveMediaUrl(path, mediaBase, baseUrl);
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),
-      child: Image.network(
-        url,
+      child: SizedBox(
         width: size,
         height: size,
-        fit: BoxFit.cover,
-        filterQuality: FilterQuality.low,
-        loadingBuilder: (ctx, child, progress) {
-          if (progress == null) return child;
-          return SizedBox(
-            width: size,
-            height: size,
-            child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
-          );
-        },
-        errorBuilder: (ctx, err, st) => placeholder,
+        child: url == null
+            ? _placeholderBox(size: size)
+            : Image.network(
+          url,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          errorBuilder: (_, __, ___) => _placeholderBox(size: size),
+        ),
       ),
     );
   }
 }
 
-class MenuBannerImage extends ConsumerWidget {
-  const MenuBannerImage({super.key, required this.path, this.height = 180});
+/// ------------------------------------------------------------
+/// MenuAvatar: circular variant for tiny avatars
+/// ------------------------------------------------------------
+class MenuAvatar extends ConsumerWidget {
+  const MenuAvatar({super.key, required this.path, this.size = 32});
   final String? path;
-  final double height;
+  final double size;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final url = _resolveMediaUrl(path, ref);
-    final border = BorderRadius.circular(14);
+    final mediaBase = ref.watch(mediaBaseUrlProvider);
+    final baseUrl = kBaseUrl;
+    final url = _resolveMediaUrl(path, mediaBase, baseUrl);
 
-    final placeholder = Container(
-      height: height,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceVariant,
-        borderRadius: border,
+    return ClipOval(
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: url == null
+            ? _placeholderBox(size: size)
+            : Image.network(
+          url,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          errorBuilder: (_, __, ___) => _placeholderBox(size: size),
+        ),
       ),
-      alignment: Alignment.center,
-      child: const Icon(Icons.image_outlined, size: 40),
     );
+  }
+}
 
-    if (url.isEmpty) return placeholder;
+/// ------------------------------------------------------------
+/// MenuBannerImage: full-width banner style with optional radius
+/// ------------------------------------------------------------
+class MenuBannerImage extends ConsumerWidget {
+  const MenuBannerImage({super.key, required this.path, this.borderRadius = 8});
+  final String? path;
+  final double borderRadius;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final mediaBase = ref.watch(mediaBaseUrlProvider);
+    final baseUrl = kBaseUrl;
+    final url = _resolveMediaUrl(path, mediaBase, baseUrl);
+
+    final radius = BorderRadius.circular(borderRadius);
 
     return ClipRRect(
-      borderRadius: border,
-      child: Image.network(
-        url,
-        height: height,
-        width: double.infinity,
-        fit: BoxFit.cover,
-        filterQuality: FilterQuality.low,
-        errorBuilder: (c, e, s) => placeholder,
-        loadingBuilder: (c, child, prog) => prog == null
-            ? child
-            : SizedBox(height: height, child: const Center(child: CircularProgressIndicator(strokeWidth: 2))),
+      borderRadius: radius,
+      child: AspectRatio(
+        aspectRatio: 4 / 3,
+        child: url == null
+            ? _placeholderBox(r: radius)
+            : Image.network(
+          url,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          errorBuilder: (_, __, ___) => _placeholderBox(r: radius),
+        ),
       ),
     );
   }
 }
 
-// ---- Upload helpers & field ----
-Future<String?> pickAndUploadMenuImage(WidgetRef ref) async {
-  final res = await FilePicker.platform.pickFiles(type: FileType.image, allowMultiple: false, withData: true);
-  if (res == null || res.files.isEmpty) return null;
-  final f = res.files.first;
-  final bytes = f.bytes; // withData: true ensures bytes on all platforms (avoid dart:io)
-  if (bytes == null) return null;
-
-  final uploadUrl = _resolveUploadEndpoint(ref);
-  final req = http.MultipartRequest('POST', Uri.parse(uploadUrl));
-  req.files.add(http.MultipartFile.fromBytes('file', bytes as Uint8List, filename: f.name));
-
-  // Optional: send a tag to let backend group items under a folder
-  req.fields['bucket'] = 'items';
-
-  final streamed = await req.send();
-  final body = await streamed.stream.bytesToString();
-  if (streamed.statusCode >= 200 && streamed.statusCode < 300) {
-    try {
-      final map = jsonDecode(body) as Map<String, dynamic>;
-      // Expecting { path: "/media/items/xxx.jpg", url?: "https://..." }
-      final path = (map['path'] ?? map['url'])?.toString();
-      return path;
-    } catch (_) {
-      // If backend just returns the path as a string
-      return body.trim().isNotEmpty ? body.trim() : null;
-    }
-  }
-  throw Exception('Upload failed (${streamed.statusCode}): $body');
-}
-
+/// ------------------------------------------------------------
+/// MenuImageUploaderField
+/// - Shows a preview
+/// - Lets user paste/edit a URL
+/// - Optional: if itemId provided, will upload a picked file via CatalogRepo
+///   using repo.uploadItemImage(itemId: itemId, file: PlatformFile)
+///   and then call onChanged(newUrl?)
+/// ------------------------------------------------------------
 class MenuImageUploaderField extends ConsumerStatefulWidget {
-  const MenuImageUploaderField({super.key, required this.value, required this.onChanged});
-  final String? value; // current path or URL
+  const MenuImageUploaderField({
+    super.key,
+    required this.value,
+    required this.onChanged,
+    this.itemId,
+    this.label = 'Item Photo',
+  });
+
+  final String? value;
   final ValueChanged<String?> onChanged;
+  final String? itemId; // pass item.id here to enable uploads
+  final String label;
 
   @override
   ConsumerState<MenuImageUploaderField> createState() => _MenuImageUploaderFieldState();
 }
 
 class _MenuImageUploaderFieldState extends ConsumerState<MenuImageUploaderField> {
+  late TextEditingController _urlCtl;
+  Uint8List? _localPreviewBytes; // for picked file preview before/after upload
   bool _busy = false;
 
-  Future<void> _doUpload() async {
-    if (_busy) return;
+  @override
+  void initState() {
+    super.initState();
+    _urlCtl = TextEditingController(text: widget.value ?? '');
+  }
+
+  @override
+  void didUpdateWidget(covariant MenuImageUploaderField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.value != widget.value && (_urlCtl.text != (widget.value ?? ''))) {
+      _urlCtl.text = widget.value ?? '';
+    }
+  }
+
+  @override
+  void dispose() {
+    _urlCtl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickAndMaybeUpload() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: false,
+      withData: true,
+    );
+    if (!mounted || result == null || result.files.isEmpty) return;
+
+    final file = result.files.first;
+    setState(() => _localPreviewBytes = file.bytes);
+
+    // If no itemId, we can only preview; user should paste a URL or
+    // re-open this widget with itemId to enable upload.
+    if (widget.itemId == null || widget.itemId!.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Previewing selected image. To upload, provide itemId to MenuImageUploaderField.'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+      return;
+    }
+
     setState(() => _busy = true);
     try {
-      final path = await pickAndUploadMenuImage(ref);
-      if (path != null) widget.onChanged(path);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+      final repo = ref.read(catalogRepoProvider);
+      final dynamic resp = await repo.uploadItemImage(itemId: widget.itemId!, file: file);
+
+      // Try to use returned URL if available
+      String? newUrl;
+      if (resp is String && resp.trim().isNotEmpty) {
+        newUrl = resp.trim();
+      } else if (resp is Map && resp['image_url'] is String) {
+        newUrl = (resp['image_url'] as String).trim();
       }
+
+      // If backend doesn't return URL, we still trigger change so that
+      // caller can re-fetch the item and get the updated imageUrl.
+      widget.onChanged(newUrl ?? _urlCtl.text);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Image uploaded ✅')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Upload failed: $e')),
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _pasteUrl() async {
-    final ctl = TextEditingController(text: widget.value ?? '');
-    final res = await showDialog<String?>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Image URL or /media path'),
-        content: TextField(
-          controller: ctl,
-          decoration: const InputDecoration(hintText: 'https://...  or  /media/items/xyz.jpg'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, ctl.text.trim()), child: const Text('Use')),
-        ],
-      ),
-    );
-    if (res != null) widget.onChanged(res.isEmpty ? null : res);
+  void _clear() {
+    setState(() => _localPreviewBytes = null);
+    _urlCtl.clear();
+    widget.onChanged(null);
   }
 
   @override
   Widget build(BuildContext context) {
+    final mediaBase = ref.watch(mediaBaseUrlProvider);
+    final baseUrl = kBaseUrl;
+
+    final resolvedUrl = _resolveMediaUrl(_urlCtl.text, mediaBase, baseUrl);
+
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        MenuBannerImage(path: widget.value),
+        Text(
+          widget.label,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: AspectRatio(
+            aspectRatio: 4 / 3,
+            child: _localPreviewBytes != null
+                ? Image.memory(_localPreviewBytes!, fit: BoxFit.cover)
+                : (resolvedUrl == null
+                ? _placeholderBox(r: BorderRadius.circular(8))
+                : Image.network(
+              resolvedUrl,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+              errorBuilder: (_, __, ___) => _placeholderBox(r: BorderRadius.circular(8)),
+            )),
+          ),
+        ),
         const SizedBox(height: 8),
         Row(
           children: [
-            ElevatedButton.icon(
-              onPressed: _busy ? null : _doUpload,
-              icon: _busy
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.upload_file),
-              label: const Text('Upload image'),
+            Expanded(
+              child: TextField(
+                controller: _urlCtl,
+                enabled: !_busy,
+                decoration: const InputDecoration(
+                  labelText: 'Image URL (or leave blank)',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (v) => widget.onChanged(v.trim().isEmpty ? null : v.trim()),
+              ),
             ),
             const SizedBox(width: 8),
             OutlinedButton.icon(
-              onPressed: _busy ? null : _pasteUrl,
-              icon: const Icon(Icons.link),
-              label: const Text('Paste URL'),
+              onPressed: _busy ? null : _pickAndMaybeUpload,
+              icon: const Icon(Icons.upload_file),
+              label: const Text('Pick Image'),
             ),
             const SizedBox(width: 8),
-            OutlinedButton.icon(
-              onPressed: _busy ? null : () => widget.onChanged(null),
-              icon: const Icon(Icons.delete_outline),
-              label: const Text('Remove'),
+            IconButton(
+              tooltip: 'Clear',
+              onPressed: _busy ? null : _clear,
+              icon: const Icon(Icons.clear),
             ),
           ],
         ),
+        if (widget.itemId == null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              'Tip: To enable direct upload, pass itemId: MenuImageUploaderField(itemId: item.id, …)',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+            ),
+          ),
       ],
     );
   }

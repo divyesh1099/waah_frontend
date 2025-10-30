@@ -25,11 +25,10 @@ class AppShell extends ConsumerWidget {
     (rs != null && rs.name.isNotEmpty) ? rs.name : 'dPOS';
 
     // build absolute logo URL if we have a /media/... path
-    final logoFullUrl = (rs != null &&
-        rs.logoUrl != null &&
-        rs.logoUrl!.isNotEmpty)
-        ? '$kBaseUrl${rs.logoUrl}'
-        : null;
+        final buildUri = ref.read(mediaResolverProvider);
+        final logoFullUrl = (rs != null && (rs.logoUrl?.isNotEmpty ?? false))
+            ? buildUri(rs.logoUrl).toString()
+            : null;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!context.mounted) return;

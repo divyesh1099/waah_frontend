@@ -3,6 +3,7 @@ import 'package:waah_frontend/app/providers.dart'; // apiClientProvider
 import 'package:waah_frontend/data/api_client.dart';
 import 'package:waah_frontend/data/models.dart';
 import 'package:file_picker/file_picker.dart';
+import 'dart:io' as io;
 
 class CatalogRepo {
   CatalogRepo(this._client);
@@ -173,6 +174,39 @@ class CatalogRepo {
 
   Future<void> linkItemModifierGroup(String itemId, String groupId) {
     return _client.linkItemModifierGroup(itemId, groupId);
+  }
+  // Upload image for a specific menu item.
+  // This uses ApiClient.uploadItemImage(), which POSTs to
+  //   /menu/items/{itemId}/image
+  // and expects the backend to update the item's image_url.
+  Future<String> uploadItemImage({
+    required String itemId,
+    required PlatformFile file,
+  }) async {
+    // get file bytes (web/desktop gives .bytes, mobile/desktop can give path)
+    final bytes = file.bytes ??
+        await io.File(file.path!).readAsBytes();
+
+    // guess MIME type from filename
+    String _inferMime(String name) {
+      final lower = name.toLowerCase();
+      if (lower.endsWith('.png')) return 'image/png';
+      if (lower.endsWith('.webp')) return 'image/webp';
+      if (lower.endsWith('.gif')) return 'image/gif';
+      // default
+      return 'image/jpeg';
+    }
+
+    final contentType = _inferMime(file.name);
+
+    final url = await _client.uploadItemImage(
+      itemId: itemId,
+      bytes: bytes,
+      filename: file.name,
+      contentType: contentType,
+    );
+
+    return url; // backend returns the public/served image_url
   }
 }
 
