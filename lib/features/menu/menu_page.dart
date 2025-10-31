@@ -321,6 +321,7 @@ class MenuPage extends ConsumerWidget {
                                         final repo =
                                         ref.read(catalogRepoProvider);
                                         await repo.deleteItem(it.remoteId!);
+                                        await ref.read(localDatabaseProvider).deleteMenuItemByRemoteId(it.remoteId!);
                                         await ref.read(syncControllerProvider.notifier).syncNow();
                                       } catch (e) {
                                         if (context.mounted) {
@@ -713,12 +714,12 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
     setState(() => _busy = true);
 
     try {
-      // 1) Create the bare item first (API model)
+      // 1) Create item on server
       final catRid = widget.category.remoteId ?? '';
       if (catRid.isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Please Sync first — this category isn’t linked to the server yet.'))
+            const SnackBar(content: Text('Please Sync first — this category isn’t linked to the server yet.')),
           );
         }
         setState(() => _busy = false);
@@ -728,7 +729,7 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
       final newItem = api.MenuItem(
         id: null,
         tenantId: tenantId,
-        categoryId: catRid, // safe now
+        categoryId: catRid,
         name: name,
         description: desc,
         isActive: true,
@@ -738,7 +739,10 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
       final createdItem = await repo.createItem(newItem);
       final newItemRemoteId = createdItem.id ?? '';
 
-      // 2) Create the default variant (API model)
+      // 1.5) Pull it so the local row exists before any local-only updates
+      await ref.read(syncControllerProvider.notifier).syncNow();
+
+      // 2) Create default variant (server; local comes via sync)
       final newVar = api.ItemVariant(
         id: null,
         itemId: newItemRemoteId,
@@ -749,7 +753,7 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
       );
       await repo.createVariant(newItemRemoteId, newVar);
 
-      // 3) If user picked an image, upload it
+      // 3) Upload image (repo will update-only locally)
       if (_pickedFile != null) {
         await repo.uploadItemImage(
           itemId: newItemRemoteId,
@@ -757,7 +761,7 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
         );
       }
 
-      // 4) Manually trigger sync to pull changes
+      // 4) Final sync so UI reflects variant + image
       await ref.read(syncControllerProvider.notifier).syncNow();
 
       if (mounted) {

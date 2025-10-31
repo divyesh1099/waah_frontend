@@ -200,10 +200,12 @@ class CatalogRepo {
   }
 
   Future<String> uploadItemImage({
-    required String itemId,
+    required String itemId,        // remote item id
     required PlatformFile file,
   }) async {
+    // Read bytes (supports web/desktop)
     final bytes = file.bytes ?? await io.File(file.path!).readAsBytes();
+
     String _inferMime(String name) {
       final lower = name.toLowerCase();
       if (lower.endsWith('.png')) return 'image/png';
@@ -212,21 +214,20 @@ class CatalogRepo {
       return 'image/jpeg';
     }
 
-    final contentType = _inferMime(file.name);
+    // Upload via ApiClient (single source of truth)
     final url = await _client.uploadItemImage(
       itemId: itemId,
       bytes: bytes,
       filename: file.name,
-      contentType: contentType,
+      contentType: _inferMime(file.name),
     );
 
-    // reflect locally
-    final localItemId = await _db.localItemIdForRid(itemId);
-    if (localItemId != null) {
-      await _db.upsertMenuItem(MenuItemsCompanion(
-        id: Value(localItemId),
-        imageUrl: Value(url),
-      ));
+    // Update-only local write; do NOT insert partial rows
+    // (Requires the helper in AppDatabase: setItemImageByRemoteId)
+    try {
+      await _db.setItemImageByRemoteId(itemId, url);
+    } catch (_) {
+      // Non-fatal; next sync will reconcile anyway
     }
 
     return url;

@@ -3,7 +3,7 @@
 part of 'app_db.dart';
 
 // ignore_for_file: type=lint
-class $MenuCategoriesTable extends MenuCategories
+class $MenuCategoriesTable extends db.MenuCategories
     with TableInfo<$MenuCategoriesTable, MenuCategory> {
   @override
   final GeneratedDatabase attachedDatabase;
@@ -265,7 +265,7 @@ class MenuCategoriesCompanion extends UpdateCompanion<MenuCategory> {
   }
 }
 
-class $MenuItemsTable extends MenuItems
+class $MenuItemsTable extends db.MenuItems
     with TableInfo<$MenuItemsTable, MenuItem> {
   @override
   final GeneratedDatabase attachedDatabase;
@@ -908,7 +908,7 @@ class MenuItemsCompanion extends UpdateCompanion<MenuItem> {
   }
 }
 
-class $ItemVariantsTable extends ItemVariants
+class $ItemVariantsTable extends db.ItemVariants
     with TableInfo<$ItemVariantsTable, ItemVariant> {
   @override
   final GeneratedDatabase attachedDatabase;
@@ -1323,7 +1323,7 @@ class ItemVariantsCompanion extends UpdateCompanion<ItemVariant> {
   }
 }
 
-class $DiningTablesTable extends DiningTables
+class $DiningTablesTable extends db.DiningTables
     with TableInfo<$DiningTablesTable, DiningTable> {
   @override
   final GeneratedDatabase attachedDatabase;
@@ -1584,7 +1584,7 @@ class DiningTablesCompanion extends UpdateCompanion<DiningTable> {
   }
 }
 
-class $OpsJournalTable extends OpsJournal
+class $OpsJournalTable extends db.OpsJournal
     with TableInfo<$OpsJournalTable, OpsJournalEntry> {
   @override
   final GeneratedDatabase attachedDatabase;
@@ -1841,7 +1841,7 @@ class OpsJournalCompanion extends UpdateCompanion<OpsJournalEntry> {
   }
 }
 
-class $RestaurantSettingsTable extends RestaurantSettings
+class $RestaurantSettingsTable extends db.RestaurantSettings
     with TableInfo<$RestaurantSettingsTable, RestaurantSetting> {
   @override
   final GeneratedDatabase attachedDatabase;

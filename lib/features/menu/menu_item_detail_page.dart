@@ -1,23 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:drift/drift.dart' show Value; // <-- for Value()
 import 'package:waah_frontend/app/providers.dart';
-// Import the API models with an alias
+// API models
 import 'package:waah_frontend/data/models.dart' as api;
-// Import the local DB models
+// Local DB (generated types live under this alias)
 import 'package:waah_frontend/data/local/app_db.dart' as db;
+
 import 'package:waah_frontend/data/repo/catalog_repo.dart';
 import 'package:waah_frontend/features/sync/sync_controller.dart';
 import 'package:waah_frontend/widgets/menu_media.dart';
 
-// Common GST presets
 const List<double> _kGstPresets = [0, 5, 12, 18, 28];
-
-// This extension is no longer needed, we will build the API model manually
 
 class MenuItemDetailPage extends ConsumerStatefulWidget {
   const MenuItemDetailPage({super.key, required this.item});
-  // This is now the local database model
-  final db.MenuItem item;
+  final db.MenuItem item; // local DB row
 
   @override
   ConsumerState<MenuItemDetailPage> createState() => _MenuItemDetailPageState();
@@ -33,17 +31,17 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
   late bool _taxInclusive;
 
   String? _imageUrl;
-  double? _gstPresetValue; // null => Custom
-
+  double? _gstPresetValue; // null => custom
   bool _saving = false;
 
   @override
   void initState() {
     super.initState();
-    // Initialize controllers from the local db.MenuItem
     _nameCtl = TextEditingController(text: widget.item.name);
     _descCtl = TextEditingController(text: widget.item.description ?? '');
-    _gstCtl = TextEditingController(text: widget.item.gstRate.toStringAsFixed(2));
+    _gstCtl = TextEditingController(
+      text: (widget.item.gstRate).toStringAsFixed(2),
+    );
 
     _isActive = widget.item.isActive;
     _stockOut = widget.item.stockOut;
@@ -64,34 +62,36 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
 
   Future<void> _saveItem() async {
     if (_saving) return;
-    // We need the remoteId to update the item
+
+    // Need remoteId to PATCH server
     final remoteId = widget.item.remoteId;
     if (remoteId == null || remoteId.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('This item hasn’t synced yet. Tap Sync, then try again.'))
-        );
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This item hasn’t synced yet. Tap Sync, then try again.'),
+        ),
+      );
       return;
     }
 
     final gstParsed = double.tryParse(_gstCtl.text.trim());
     if (gstParsed == null) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Invalid GST rate')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Invalid GST rate')),
+      );
       return;
     }
 
     setState(() => _saving = true);
-
     try {
       final repo = ref.read(catalogRepoProvider);
 
-      // Build the API model to send the update
+      // Build API model for update (omit categoryId to avoid 400/422)
       final updatedDraft = api.MenuItem(
         id: remoteId,
         tenantId: ref.read(activeTenantIdProvider),
-        // categoryId: (omit entirely to avoid server 400/422)
         name: _nameCtl.text.trim(),
         description: _descCtl.text.trim().isEmpty ? null : _descCtl.text.trim(),
         isActive: _isActive,
@@ -103,17 +103,23 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
 
       await repo.updateItem(remoteId, updatedDraft);
 
-      // Trigger a sync to pull changes
+      // Pull fresh data into local DB
       await ref.read(syncControllerProvider.notifier).syncNow();
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved ✅')));
-        Navigator.of(context).pop(true);
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Saved ✅')),
+      );
+
+      // Pop safely after the current frame (prevents !_debugLocked crashes)
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.of(context).maybePop(true);
+      });
     } catch (err) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $err')));
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Save failed: $err')),
+      );
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -122,34 +128,41 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
   Future<void> _deleteItem() async {
     final remoteId = widget.item.remoteId;
     if (remoteId == null || remoteId.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('This item hasn’t synced yet. Tap Sync, then try again.'))
-        );
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This item hasn’t synced yet. Tap Sync, then try again.'),
+        ),
+      );
       return;
     }
 
-    final ok = await _confirm(context, 'Delete "${widget.item.name}"?\n(This will sync with the server)');
+    final ok = await _confirm(
+      context,
+      'Delete "${widget.item.name}"?\n(This will sync with the server)',
+    );
     if (!ok) return;
 
     setState(() => _saving = true);
     try {
       await ref.read(catalogRepoProvider).deleteItem(remoteId);
-
-      // Trigger a sync to update local DB
+      await ref.read(localDatabaseProvider).deleteMenuItemByRemoteId(remoteId);
       await ref.read(syncControllerProvider.notifier).syncNow();
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Deleted ${widget.item.name}')));
-        // Pop twice to go back to the category list
-        Navigator.of(context).pop(true);
-        Navigator.of(context).pop(true);
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Deleted ${widget.item.name}')),
+      );
+
+      // Single safe pop after frame; don’t pop twice
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.of(context).maybePop(true);
+      });
     } catch (err) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $err')));
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Delete failed: $err')),
+      );
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -157,7 +170,6 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    // The widget.item is already the local db.MenuItem
     final it = widget.item;
 
     return Scaffold(
@@ -184,7 +196,10 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
           TextField(
             controller: _nameCtl,
             enabled: !_saving,
-            decoration: const InputDecoration(labelText: 'Item name', border: OutlineInputBorder()),
+            decoration: const InputDecoration(
+              labelText: 'Item name',
+              border: OutlineInputBorder(),
+            ),
           ),
           const SizedBox(height: 16),
 
@@ -192,7 +207,10 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
             controller: _descCtl,
             enabled: !_saving,
             maxLines: 2,
-            decoration: const InputDecoration(labelText: 'Description', border: OutlineInputBorder()),
+            decoration: const InputDecoration(
+              labelText: 'Description',
+              border: OutlineInputBorder(),
+            ),
           ),
           const SizedBox(height: 16),
 
@@ -232,7 +250,6 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
           ),
           const SizedBox(height: 12),
 
-          // GST preset dropdown
           DropdownButtonFormField<double?>(
             value: _gstPresetValue,
             decoration: const InputDecoration(
@@ -256,9 +273,7 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
                 : (val) {
               setState(() {
                 _gstPresetValue = val;
-                if (val != null) {
-                  _gstCtl.text = val.toStringAsFixed(2);
-                }
+                if (val != null) _gstCtl.text = val.toStringAsFixed(2);
               });
             },
           ),
@@ -267,7 +282,7 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
           TextField(
             controller: _gstCtl,
             enabled: !_saving,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: false),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: const InputDecoration(
               labelText: 'GST %',
               hintText: 'e.g. 5.0',
@@ -275,17 +290,116 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
             ),
           ),
 
+          const SizedBox(height: 16),
+
+          // 👇 Price editor for default variant
+          DefaultPriceEditor(itemId: it.id),
+
           const SizedBox(height: 24),
 
           FilledButton.icon(
             icon: _saving
-                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                ? const SizedBox(
+                width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.save),
             label: Text(_saving ? 'Saving...' : 'Save Item'),
             onPressed: _saving ? null : _saveItem,
           ),
         ],
       ),
+    );
+  }
+}
+
+class DefaultPriceEditor extends ConsumerStatefulWidget {
+  final int itemId; // local menu_items.id
+  const DefaultPriceEditor({super.key, required this.itemId});
+
+  @override
+  ConsumerState<DefaultPriceEditor> createState() => _DefaultPriceEditorState();
+}
+
+class _DefaultPriceEditorState extends ConsumerState<DefaultPriceEditor> {
+  final _ctrl = TextEditingController();
+  db.ItemVariant? _variant; // generated row
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final database = ref.read(localDatabaseProvider);
+
+    // Combine conditions by chaining .where(...) (AND)
+    final existing = await (database.select(database.itemVariants)
+      ..where((t) => t.itemId.equals(widget.itemId))
+      ..where((t) => t.isDefault.equals(true)))
+        .getSingleOrNull();
+
+    if (!mounted) return;
+    setState(() {
+      _variant = existing;
+      _ctrl.text = (existing?.basePrice ?? 0).toString();
+    });
+  }
+
+  Future<void> _save() async {
+    final database = ref.read(localDatabaseProvider);
+    final parsed = double.tryParse(_ctrl.text.trim()) ?? 0.0;
+
+    if (_variant == null) {
+      // create default variant
+      await database.upsertItemVariant(
+        db.ItemVariantsCompanion(
+          itemId: Value(widget.itemId),
+          label: const Value('Default'),
+          isDefault: const Value(true),
+          basePrice: Value(parsed),
+        ),
+      );
+    } else {
+      await database.upsertItemVariant(
+        db.ItemVariantsCompanion(
+          remoteId: Value(_variant!.remoteId), // can be null for local-only
+          itemId: Value(widget.itemId),
+          label: Value(_variant!.label),
+          isDefault: const Value(true),
+          basePrice: Value(parsed),
+        ),
+      );
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Price saved')),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const Text('Price'),
+        const SizedBox(width: 12),
+        SizedBox(
+          width: 140,
+          child: TextField(
+            controller: _ctrl,
+            keyboardType:
+            const TextInputType.numberWithOptions(decimal: true, signed: false),
+            decoration: const InputDecoration(
+              hintText: '0.00',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            onSubmitted: (_) => _save(),
+          ),
+        ),
+        const SizedBox(width: 8),
+        FilledButton(onPressed: _save, child: const Text('Update')),
+      ],
     );
   }
 }

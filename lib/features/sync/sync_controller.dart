@@ -99,8 +99,28 @@ class SyncController extends StateNotifier<SyncState> {
           if (remoteId == null) continue;
 
           if (op == 'DELETE') {
-            // TODO: Handle deletes
-            continue;
+            switch (entity) {
+              case 'restaurant_settings':
+                await db.deleteRestaurantSettingsByRemoteId(remoteId);
+                break;
+
+              case 'menu_category':
+                await db.deleteMenuCategoryByRemoteId(remoteId); // cascades items+variants
+                break;
+
+              case 'dining_table':
+                await db.deleteDiningTableByRemoteId(remoteId);
+                break;
+
+              case 'menu_item':
+                await db.deleteMenuItemByRemoteId(remoteId);     // cascades variants
+                break;
+
+              case 'item_variant':
+                await db.deleteItemVariantByRemoteId(remoteId);
+                break;
+            }
+            continue; // done with this event
           }
 
           switch (entity) {

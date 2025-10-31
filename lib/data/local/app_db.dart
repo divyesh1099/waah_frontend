@@ -7,6 +7,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqlite3_flutter_libs/sqlite3_flutter_libs.dart';
 
+import 'app_db.dart' as db;
+
 part 'app_db.g.dart';
 
 @DataClassName('MenuCategory')
@@ -193,14 +195,17 @@ class AppDatabase extends _$AppDatabase {
   }
 
   // VARIANTS
-  Future<void> upsertItemVariant(ItemVariantsCompanion c) async {
-    final String? rid =
-    c.remoteId.present ? c.remoteId.value : null;
+  // Inside AppDatabase (or an extension on it)
+  Future<void> upsertItemVariant(db.ItemVariantsCompanion c) async {
+    final String? rid = c.remoteId.present ? c.remoteId.value : null;
     if (rid == null || rid.isEmpty) {
       await into(itemVariants).insert(c);
       return;
     }
-    final existing = await (select(itemVariants)..where((t) => t.remoteId.equals(rid))).getSingleOrNull();
+    final existing = await (select(itemVariants)
+      ..where((t) => t.remoteId.equals(rid)))
+        .getSingleOrNull();
+
     if (existing == null) {
       await into(itemVariants).insert(c);
     } else {
@@ -295,6 +300,67 @@ class AppDatabase extends _$AppDatabase {
       await (update(diningTables)..where((t) => t.id.equals(existing.id))).write(c);
     }
   }
+
+
+  Future<void> deleteRestaurantSettingsByRemoteId(String rid) async {
+    await (delete(restaurantSettings)..where((t) => t.remoteId.equals(rid))).go();
+  }
+
+  Future<void> deleteDiningTableByRemoteId(String rid) async {
+    await (delete(diningTables)..where((t) => t.remoteId.equals(rid))).go();
+  }
+
+  Future<void> deleteItemVariantByRemoteId(String rid) async {
+    await (delete(itemVariants)..where((t) => t.remoteId.equals(rid))).go();
+  }
+
+  Future<void> deleteMenuItemByRemoteId(String rid) async {
+    await transaction(() async {
+      final it = await (select(menuItems)..where((t) => t.remoteId.equals(rid)))
+          .getSingleOrNull();
+      if (it == null) return;
+
+      // delete variants for this item
+      await (delete(itemVariants)..where((v) => v.itemId.equals(it.id))).go();
+      // delete the item itself
+      await (delete(menuItems)..where((i) => i.id.equals(it.id))).go();
+    });
+  }
+
+  Future<void> deleteMenuCategoryByRemoteId(String rid) async {
+    await transaction(() async {
+      final cat = await (select(menuCategories)
+        ..where((t) => t.remoteId.equals(rid)))
+          .getSingleOrNull();
+      if (cat == null) return;
+
+      // find items under this category
+      final items = await (select(menuItems)
+        ..where((i) => i.categoryId.equals(cat.id)))
+          .get();
+      final ids = items.map((e) => e.id).toList();
+
+      if (ids.isNotEmpty) {
+        await (delete(itemVariants)..where((v) => v.itemId.isIn(ids))).go();
+        await (delete(menuItems)..where((i) => i.id.isIn(ids))).go();
+      }
+
+      await (delete(menuCategories)..where((c) => c.id.equals(cat.id))).go();
+    });
+  }
+
+  Future<void> setItemImageByRemoteId(String remoteId, String? url) async {
+    final row = await (select(menuItems)..where((t) => t.remoteId.equals(remoteId)))
+        .getSingleOrNull();
+    if (row == null) {
+      // Row not in local DB yet; let the next sync bring it.
+      return;
+    }
+    await (update(menuItems)..where((t) => t.id.equals(row.id))).write(
+      MenuItemsCompanion(imageUrl: Value(url)),
+    );
+  }
+
 }
 
 // Keep your provider here or in providers.dart (you already expose one there)
