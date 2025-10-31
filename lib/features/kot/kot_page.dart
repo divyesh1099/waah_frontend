@@ -1,11 +1,12 @@
 ﻿// features/kot/kot_page.dart
-// Fast + Offline‑first KOT board (drop‑in)
-// - Instant SWR (mem -> disk -> network)
-// - Optimistic status changes (forward & backward) with offline queue
-// - Per‑lane refresh; avoids global rebuilds
-// - More details on cards: order type chip, quick item hints, waiter/table, notes, age
-// - Long‑press = move backward; Tap = move forward; also explicit buttons
-// - Reprint / Cancel retained, both offline‑queue aware
+// Fast + Offline‑first KOT board (DROP‑IN v3)
+// Key upgrades vs v2:
+// - Pending overlay: server refreshes can’t undo your local moves.
+// - Queue coalescing: only the latest status per ticket is kept.
+// - Immediate queue push after enqueue (no 15s wait).
+// - Faster polling (6s) + debounced taps + keyed list for stability.
+// - Cancel is instant: removed from all lanes and hidden until server confirms.
+// - More details: order type chip, hints, waiter/table, notes, age.
 
 import 'dart:async';
 import 'dart:convert' as convert;
@@ -16,6 +17,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';
 import '../../data/models.dart';
+
+// ------------------------------------------------------------------
+// Config
+// ------------------------------------------------------------------
+const int _kPollSeconds = 6; // faster refresh
 
 // ------------------------------------------------------------------
 // Types & helpers
@@ -105,7 +111,9 @@ class KotLineLite {
     variantLabel: (m['variantLabel']?.toString().isEmpty ?? true)
         ? null
         : m['variantLabel'].toString(),
-    modifiers: (m['modifiers'] as List?)?.map((e) => e.toString()).toList() ??
+    modifiers: (m['modifiers'] as List?)
+        ?.map((e) => e.toString())
+        .toList() ??
         const <String>[],
   );
 }
@@ -176,10 +184,8 @@ class KotCardData {
         .firstWhere((e) => e.name == m['status'], orElse: () => KOTStatus.NEW),
     stationName:
     (m['stationName']?.toString().isEmpty ?? true) ? null : m['stationName'].toString(),
-    tableCode:
-    (m['tableCode']?.toString().isEmpty ?? true) ? null : m['tableCode'].toString(),
-    waiterName:
-    (m['waiterName']?.toString().isEmpty ?? true) ? null : m['waiterName'].toString(),
+    tableCode: (m['tableCode']?.toString().isEmpty ?? true) ? null : m['tableCode'].toString(),
+    waiterName: (m['waiterName']?.toString().isEmpty ?? true) ? null : m['waiterName'].toString(),
     orderNo: (m['orderNo']?.toString().isEmpty ?? true) ? null : m['orderNo'].toString(),
     orderId: (m['orderId']?.toString().isEmpty ?? true) ? null : m['orderId'].toString(),
     orderNote: (m['orderNote']?.toString().isEmpty ?? true) ? null : m['orderNote'].toString(),
@@ -246,8 +252,7 @@ class KotCardData {
       tableCode: (t.tableCode?.trim().isEmpty ?? true) ? null : t.tableCode,
       waiterName: (t.waiterName?.trim().isNotEmpty ?? false) ? t.waiterName : null,
       orderNo: (t.orderNo?.trim().isNotEmpty ?? false) ? t.orderNo : null,
-      orderId:
-      (t.orderId?.toString().trim().isNotEmpty ?? false) ? t.orderId?.toString() : null,
+      orderId: (t.orderId?.toString().trim().isNotEmpty ?? false) ? t.orderId?.toString() : null,
       orderNote: (t.orderNote?.trim().isNotEmpty ?? false) ? t.orderNote : null,
       channel: _extractChannel(t),
       createdAt: _extractCreatedAt(t),
@@ -277,9 +282,12 @@ final kotTenantIdProvider = Provider<String>((ref) => ref.watch(activeTenantIdPr
 final kotBranchIdProvider = Provider<String>((ref) => ref.watch(activeBranchIdProvider));
 
 // ------------------------------------------------------------------
-// In-memory cache + queued ops
+// In-memory state: caches + registry + pending overlay + queued ops
 // ------------------------------------------------------------------
-final Map<String, List<KotCardData>> _memCache = {};
+final Map<String, List<KotCardData>> _memCache = {}; // per-lane view (overlayed)
+final Map<String, KotCardData> _ticketById = {}; // last known copy (any lane)
+final Map<String, KOTStatus> _pendingStatus = {}; // ticketId -> target
+final Set<String> _pendingCancel = <String>{};
 final Set<String> _busyTickets = <String>{}; // dedupe rapid taps
 
 class _KotOp {
@@ -311,8 +319,38 @@ Future<void> _writeKotQueue(Read read, String tenantId, String branchId, List<_K
 
 Future<void> _enqueueKotOp(Read read, String tenantId, String branchId, _KotOp op) async {
   final cur = await _readKotQueue(read, tenantId, branchId);
+  // Coalesce: keep only the latest status/cancel per ticket
+  if (op.type == 'status') {
+    cur.removeWhere((e) => e.type == 'status' && e.ticketId == op.ticketId);
+  }
+  if (op.type == 'cancel') {
+    cur.removeWhere((e) => e.ticketId == op.ticketId); // cancel overrides any pending status
+  }
   cur.add(op);
   await _writeKotQueue(read, tenantId, branchId, cur);
+}
+
+// Apply overlay + merge in pending items destined for this lane (from registry)
+List<KotCardData> _overlayAndMergeForLane(List<KotCardData> server, KOTStatus lane) {
+  final map = <String, KotCardData>{for (final t in server) t.id: t};
+  // add missing items that are pending into this lane
+  _pendingStatus.forEach((id, st) {
+    if (st == lane) {
+      final t = _ticketById[id];
+      if (t != null) map[id] = t.copyWith(status: st);
+    }
+  });
+  // drop cancels and ensure effective status matches lane
+  map.removeWhere((id, _) => _pendingCancel.contains(id));
+  final out = <KotCardData>[];
+  for (final t in map.values) {
+    final eff = _pendingStatus[t.id] ?? t.status;
+    if (eff == lane) {
+      out.add(_pendingStatus.containsKey(t.id) ? t.copyWith(status: eff) : t);
+    }
+  }
+  out.sort((a, b) => b.ticketNo.compareTo(a.ticketNo));
+  return out;
 }
 
 Future<void> _pushKotQueue(Read read, String tenantId, String branchId) async {
@@ -325,12 +363,14 @@ Future<void> _pushKotQueue(Read read, String tenantId, String branchId) async {
       if (op.type == 'status') {
         final ns = KOTStatus.values.firstWhere((e) => e.name == op.payload['next']);
         await api.patchKitchenTicketStatus(op.ticketId, ns, tenantId: tenantId, branchId: branchId);
+        _pendingStatus.remove(op.ticketId);
       } else if (op.type == 'reprint') {
         await api.reprintKitchenTicket(op.ticketId,
             reason: op.payload['reason']?.toString() ?? 'Queued reprint', tenantId: tenantId, branchId: branchId);
       } else if (op.type == 'cancel') {
         await api.cancelKitchenTicket(op.ticketId,
             reason: op.payload['reason']?.toString(), tenantId: tenantId, branchId: branchId);
+        _pendingCancel.remove(op.ticketId);
       }
     } catch (_) {
       failures.add(op);
@@ -349,16 +389,21 @@ Future<List<KotCardData>> _fetchFresh(Read read, String tenantId, String branchI
     tenantId: tenantId.isEmpty ? null : tenantId,
     branchId: branchId.isEmpty ? null : branchId,
   );
-  final mapped = list.map(KotCardData.fromKitchenTicket).toList()..sort((a, b) => b.ticketNo.compareTo(a.ticketNo));
+  final mapped = list.map(KotCardData.fromKitchenTicket).toList();
+  // update registry
+  for (final t in mapped) {
+    _ticketById[t.id] = t;
+  }
+  final effective = _overlayAndMergeForLane(mapped, status);
 
-  // Write caches
+  // Write caches (overlayed view) + disk
   final key = _kb(tenantId, branchId, status);
-  _memCache[key] = mapped;
+  _memCache[key] = effective;
   final prefs = read(prefsProvider);
   try {
-    await prefs.setString(key, convert.jsonEncode(mapped.map((e) => e.toMap()).toList()));
+    await prefs.setString(key, convert.jsonEncode(effective.map((e) => e.toMap()).toList()));
   } catch (_) {}
-  return mapped;
+  return effective;
 }
 
 Future<void> _refreshKot(Read read, String tenantId, String branchId, KOTStatus status) async {
@@ -368,12 +413,12 @@ Future<void> _refreshKot(Read read, String tenantId, String branchId, KOTStatus 
 }
 
 // ------------------------------------------------------------------
-// Auto-refresh + queue pusher (polling every 15s)
+// Auto-refresh + queue pusher (polling every _kPollSeconds)
 // ------------------------------------------------------------------
 final _kotAutoPollProvider = Provider<void>((ref) {
   final tenantId = ref.watch(kotTenantIdProvider);
   final branchId = ref.watch(kotBranchIdProvider);
-  final t = Timer.periodic(const Duration(seconds: 15), (_) async {
+  final t = Timer.periodic(Duration(seconds: _kPollSeconds), (_) async {
     for (final st in KOTStatus.values) {
       unawaited(_refreshKot(ref.read, tenantId, branchId, st));
     }
@@ -391,24 +436,24 @@ final kotTicketsProvider = FutureProvider.family.autoDispose<List<KotCardData>, 
   ref.watch(_kotAutoPollProvider); // keep poller alive while page open
   final key = _kb(tenantId, branchId, status);
 
-  // 1) Memory cache
+  // 1) Memory cache (already overlayed)
   final mem = _memCache[key];
   if (mem != null) {
-    // schedule background refresh
     unawaited(_refreshKot(ref.read, tenantId, branchId, status));
     return mem;
   }
 
-  // 2) Disk cache
+  // 2) Disk cache -> overlay
   try {
     final prefs = ref.read(prefsProvider);
     final raw = prefs.getString(key);
     if (raw != null && raw.isNotEmpty) {
       final arr = (convert.jsonDecode(raw) as List).cast<Map>();
       final parsed = arr.map((e) => KotCardData.fromMap(Map<String, dynamic>.from(e))).toList();
-      _memCache[key] = parsed;
+      final effective = _overlayAndMergeForLane(parsed, status);
+      _memCache[key] = effective;
       unawaited(_refreshKot(ref.read, tenantId, branchId, status));
-      return parsed;
+      return effective;
     }
   } catch (_) {}
 
@@ -496,10 +541,13 @@ class _KotColumn extends ConsumerWidget {
             data: (tickets) {
               if (tickets.isEmpty) return const Center(child: Text('No tickets'));
               return ListView.separated(
+                key: PageStorageKey('lane_${status.name}'),
                 cacheExtent: 800,
+                addAutomaticKeepAlives: false,
+                addRepaintBoundaries: true,
                 itemCount: tickets.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
-                itemBuilder: (_, i) => _TicketCard(ticket: tickets[i]),
+                itemBuilder: (_, i) => _TicketCard(key: ValueKey(tickets[i].id), ticket: tickets[i]),
               );
             },
             loading: () => const Center(child: CircularProgressIndicator()),
@@ -518,7 +566,7 @@ class _KotColumn extends ConsumerWidget {
 }
 
 class _TicketCard extends ConsumerWidget {
-  const _TicketCard({required this.ticket});
+  const _TicketCard({super.key, required this.ticket});
   final KotCardData ticket;
 
   @override
@@ -647,8 +695,7 @@ class _TicketCard extends ConsumerWidget {
                     if (ticket.lines.length > cap) {
                       shown.add(const Padding(
                         padding: EdgeInsets.only(top: 2),
-                        child: Text('+more…',
-                            style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic)),
+                        child: Text('+more…', style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic)),
                       ));
                     }
                     return shown;
@@ -734,13 +781,16 @@ class _TicketCard extends ConsumerWidget {
         required KOTStatus sourceStatus,
       }) async {
     if (t.id.isEmpty) return;
-    if (_busyTickets.contains(t.id)) return; // debounce
+    if (_busyTickets.contains(t.id)) return; // debounce rapid taps
     _busyTickets.add(t.id);
 
     final tenantId = ref.read(kotTenantIdProvider);
     final branchId = ref.read(kotBranchIdProvider);
 
-    // Optimistic: move immediately
+    // Mark pending + optimistic move
+    _pendingCancel.remove(t.id);
+    _pendingStatus[t.id] = target;
+    _ticketById[t.id] = t.copyWith(status: target);
     _optimisticMove(ref.read, tenantId, branchId, t, target);
 
     // Only refresh source & destination lanes to reduce rebuilds
@@ -748,17 +798,23 @@ class _TicketCard extends ConsumerWidget {
     ref.invalidate(kotTicketsProvider(target));
 
     try {
-      await ref
-          .read(apiClientProvider)
-          .patchKitchenTicketStatus(t.id, target, tenantId: tenantId, branchId: branchId);
+      await ref.read(apiClientProvider).patchKitchenTicketStatus(
+        t.id,
+        target,
+        tenantId: tenantId,
+        branchId: branchId,
+      );
+      _pendingStatus.remove(t.id);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('KOT #${t.ticketNo} → ${target.name}')),
         );
       }
     } catch (_) {
-      // Queue for retry
+      // Queue for retry (coalesced)
       await _enqueueKotOp(ref.read, tenantId, branchId, _KotOp('status', t.id, {'next': target.name}));
+      // Try push immediately to minimize delay
+      unawaited(_pushKotQueue(ref.read, tenantId, branchId));
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Offline: queued status update')),
@@ -773,15 +829,20 @@ class _TicketCard extends ConsumerWidget {
     final tenantId = ref.read(kotTenantIdProvider);
     final branchId = ref.read(kotBranchIdProvider);
     try {
-      await ref
-          .read(apiClientProvider)
-          .reprintKitchenTicket(t.id, reason: 'Reprint from tablet', tenantId: tenantId, branchId: branchId);
+      await ref.read(apiClientProvider).reprintKitchenTicket(
+        t.id,
+        reason: 'Reprint from tablet',
+        tenantId: tenantId,
+        branchId: branchId,
+      );
       if (context.mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('Reprinted KOT #${t.ticketNo}')));
       }
     } catch (_) {
-      await _enqueueKotOp(ref.read, tenantId, branchId, _KotOp('reprint', t.id, {'reason': 'Queued reprint'}));
+      await _enqueueKotOp(
+          ref.read, tenantId, branchId, _KotOp('reprint', t.id, {'reason': 'Queued reprint'}));
+      unawaited(_pushKotQueue(ref.read, tenantId, branchId));
       if (context.mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('Offline: reprint queued')));
@@ -796,25 +857,29 @@ class _TicketCard extends ConsumerWidget {
     final tenantId = ref.read(kotTenantIdProvider);
     final branchId = ref.read(kotBranchIdProvider);
 
+    // Mark pending cancel & optimistic remove
+    _pendingStatus.remove(t.id);
+    _pendingCancel.add(t.id);
+    _optimisticRemove(ref.read, tenantId, branchId, t);
+    for (final st in [KOTStatus.NEW, KOTStatus.IN_PROGRESS, KOTStatus.READY, KOTStatus.DONE]) {
+      ref.invalidate(kotTicketsProvider(st));
+    }
+
     try {
-      await ref
-          .read(apiClientProvider)
-          .cancelKitchenTicket(t.id, reason: reason, tenantId: tenantId, branchId: branchId);
-      _optimisticRemove(ref.read, tenantId, branchId, t);
-      // only lanes that could contain it
-      for (final st in [KOTStatus.NEW, KOTStatus.IN_PROGRESS, KOTStatus.READY, KOTStatus.DONE]) {
-        ref.invalidate(kotTicketsProvider(st));
-      }
+      await ref.read(apiClientProvider).cancelKitchenTicket(
+        t.id,
+        reason: reason,
+        tenantId: tenantId,
+        branchId: branchId,
+      );
+      _pendingCancel.remove(t.id);
       if (context.mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('Cancelled KOT #${t.ticketNo}')));
       }
     } catch (_) {
       await _enqueueKotOp(ref.read, tenantId, branchId, _KotOp('cancel', t.id, {'reason': reason}));
-      _optimisticRemove(ref.read, tenantId, branchId, t);
-      for (final st in [KOTStatus.NEW, KOTStatus.IN_PROGRESS, KOTStatus.READY, KOTStatus.DONE]) {
-        ref.invalidate(kotTicketsProvider(st));
-      }
+      unawaited(_pushKotQueue(ref.read, tenantId, branchId));
       if (context.mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('Offline: cancel queued')));
