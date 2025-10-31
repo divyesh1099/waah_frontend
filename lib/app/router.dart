@@ -1,10 +1,13 @@
-﻿import 'package:flutter/material.dart';
+﻿import 'dart:async';
+
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:waah_frontend/app/providers.dart';
 import 'package:waah_frontend/data/models.dart';
 
+import '../data/repo/catalog_repo.dart';
 import '../features/users/role_detail_page.dart';
 import 'shell.dart';
 
@@ -69,6 +72,10 @@ class HomeGate extends ConsumerWidget {
         context.go('/branch/select');
       } else {
         context.go('/menu');
+        // 🚀 ensure local DB is populated, then go to menu
+        final tenantId = ref.read(activeTenantIdProvider);
+        final branchId = ref.read(activeBranchIdProvider);
+        unawaited(ref.read(catalogRepoProvider).syncDownMenu(tenantId, branchId));
       }
     });
 

@@ -1,54 +1,35 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import 'package:waah_frontend/app/providers.dart';
-import 'package:waah_frontend/data/models.dart';
+// Import the local DB models
+import 'package:waah_frontend/data/local/app_db.dart';
 import 'package:waah_frontend/data/repo/catalog_repo.dart';
+import 'package:waah_frontend/features/menu/menu_page.dart'; // For providers
+import 'package:waah_frontend/features/sync/sync_controller.dart';
 import 'package:waah_frontend/widgets/menu_media.dart';
-
 import 'menu_item_detail_page.dart';
 
-/// Items for a given category, scoped to current tenant/branch.
-final categoryItemsProvider = FutureProvider.family
-    .autoDispose<List<MenuItem>, String>((ref, categoryId) async {
+// This provider now uses the local category ID (int)
+final categoryItemsStreamProvider = StreamProvider.family
+    .autoDispose<List<MenuItem>, int>((ref, localCategoryId) {
   final repo = ref.watch(catalogRepoProvider);
-
-  final me = ref.watch(authControllerProvider).me;
-  final tenantId = me?.tenantId ?? '';
-  final branchId = ref.watch(activeBranchIdProvider);
-
-  if (tenantId.isEmpty || branchId.isEmpty || categoryId.isEmpty) {
-    return <MenuItem>[];
+  if (localCategoryId == 0) {
+    return Stream.value([]);
   }
-
-  final list = await repo.loadItems(
-    categoryId: categoryId,
-    tenantId: tenantId,
-  );
-
-  final sorted = [...list]
-    ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-
-  return sorted;
+  return repo.watchItems(localCategoryId);
 });
 
 class MenuItemsPage extends ConsumerWidget {
   const MenuItemsPage({super.key, required this.category});
 
+// This is now the local DB model
   final MenuCategory category;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+// Use the local int ID
     final catId = category.id;
-
-    if (catId == null) {
-      return Scaffold(
-        appBar: AppBar(title: Text(category.name)),
-        body: const Center(child: Text('Category not saved yet')),
-      );
-    }
-
-    final itemsAsync = ref.watch(categoryItemsProvider(catId));
+    final itemsAsync = ref.watch(categoryItemsStreamProvider(catId));
 
     return Scaffold(
       appBar: AppBar(title: Text(category.name)),
@@ -63,11 +44,14 @@ class MenuItemsPage extends ConsumerWidget {
             return const Center(child: Text('No items in this category'));
           }
 
+// Sort the local data
+          items.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
           return ListView.separated(
             itemCount: items.length,
             separatorBuilder: (_, __) => const Divider(height: 1),
             itemBuilder: (context, i) {
-              final it = items[i];
+              final it = items[i]; // This is now a db.MenuItem
 
               return ListTile(
                 leading: MenuImage(path: it.imageUrl, size: 56),
@@ -84,35 +68,36 @@ class MenuItemsPage extends ConsumerWidget {
                     IconButton(
                       tooltip: 'Edit item',
                       icon: const Icon(Icons.edit),
-                      onPressed: () async {
-                        final changed = await Navigator.of(context).push<bool>(
+                      onPressed: () {
+                        Navigator.of(context).push<bool>(
                           MaterialPageRoute(
+// This now correctly passes the db.MenuItem
                             builder: (_) => MenuItemDetailPage(item: it),
                           ),
                         );
-                        if (changed == true) {
-                          ref.invalidate(categoryItemsProvider(catId));
-                        }
+// No invalidation needed, streams will update
                       },
                     ),
                     IconButton(
                       tooltip: 'Delete item',
                       icon: const Icon(Icons.delete_outline),
-                      onPressed: () async {
+                      onPressed: (it.remoteId == null || it.remoteId!.isEmpty) ? null : () async {
                         final ok = await _confirm(
                           context,
-                          'Delete "${it.name}"?\n(Soft delete, hides in POS)',
+                          'Delete "${it.name}"?\n(This will sync with the server)',
                         );
-                        if (!ok || it.id == null) return;
+                        if (!ok || it.remoteId == null) return;
 
                         try {
-                          await ref.read(catalogRepoProvider).deleteItem(it.id!);
+                          await ref.read(catalogRepoProvider).deleteItem(it.remoteId!);
+// Trigger a sync to update local DB
+                          await ref.read(syncControllerProvider.notifier).syncNow();
+
                           if (context.mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(content: Text('Deleted ${it.name}')),
                             );
                           }
-                          ref.invalidate(categoryItemsProvider(catId));
                         } catch (err) {
                           if (!context.mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -123,15 +108,13 @@ class MenuItemsPage extends ConsumerWidget {
                     ),
                   ],
                 ),
-                onTap: () async {
-                  final changed = await Navigator.of(context).push<bool>(
+                onTap: () {
+                  Navigator.of(context).push<bool>(
                     MaterialPageRoute(
+// This now correctly passes the db.MenuItem
                       builder: (_) => MenuItemDetailPage(item: it),
                     ),
                   );
-                  if (changed == true) {
-                    ref.invalidate(categoryItemsProvider(catId));
-                  }
                 },
               );
             },

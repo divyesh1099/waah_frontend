@@ -2,89 +2,58 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:typed_data';
-import 'package:flutter/services.dart';
 import 'package:waah_frontend/app/providers.dart';
 import 'package:waah_frontend/data/repo/catalog_repo.dart';
-import 'package:waah_frontend/data/models.dart';
+// Import the API models with an alias
+import 'package:waah_frontend/data/models.dart' as api;
+// Import the local DB models
+import 'package:waah_frontend/data/local/app_db.dart';
+// Import the sync controller
+import 'package:waah_frontend/features/sync/sync_controller.dart';
 import 'package:waah_frontend/features/menu/menu_item_detail_page.dart';
 import 'package:waah_frontend/widgets/menu_media.dart';
+import 'dart:async';
 
 /// ---------------------------------------------------------------------------
-/// PROVIDERS
+/// PROVIDERS (Refactored for Offline-First)
 /// ---------------------------------------------------------------------------
 
-/// All categories for the ACTIVE tenant/branch
+/// All categories from the local database
 final menuCategoriesProvider =
-FutureProvider.autoDispose<List<MenuCategory>>((ref) async {
+StreamProvider.autoDispose<List<MenuCategory>>((ref) {
   final repo = ref.watch(catalogRepoProvider);
-
-  // read current tenant + branch
-  final me = ref.watch(authControllerProvider).me;
-  final tenantId = me?.tenantId ?? '';
-  final branchId = ref.watch(activeBranchIdProvider);
-
-  if (tenantId.isEmpty || branchId.isEmpty) return <MenuCategory>[];
-
-  final cats = await repo.loadCategories(
-    tenantId: tenantId,
-    branchId: branchId,
-  );
-  cats.sort((a, b) => a.position.compareTo(b.position));
-  return cats;
+  // This now watches the local database
+  return repo.watchCategories();
 });
 
-/// Items for a given category (tenant passed for backend filters where needed)
-final categoryItemsProvider = FutureProvider.family
-    .autoDispose<List<MenuItem>, String>((ref, categoryId) async {
+/// Items for a given *local* category ID
+final categoryItemsProvider =
+StreamProvider.family.autoDispose<List<MenuItem>, int>((ref, localCategoryId) {
   final repo = ref.watch(catalogRepoProvider);
-  final me = ref.watch(authControllerProvider).me;
-  final tenantId = me?.tenantId ?? '';
 
-  if (tenantId.isEmpty || categoryId.isEmpty) return <MenuItem>[];
-
-  final items = await repo.loadItems(
-    categoryId: categoryId,
-    tenantId: tenantId,
-  );
-  items.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-  return items;
-});
-
-/// Variants for a given item (used to show/manage prices)
-final itemVariantsProvider = FutureProvider.family
-    .autoDispose<List<ItemVariant>, String>((ref, itemId) async {
-  final repo = ref.watch(catalogRepoProvider);
-  if (itemId.isEmpty) return <ItemVariant>[];
-  final vars = await repo.loadVariants(itemId);
-  vars.sort((a, b) {
-    // default first, then label
-    if (a.isDefault && !b.isDefault) return -1;
-    if (!a.isDefault && b.isDefault) return 1;
-    return a.label.toLowerCase().compareTo(b.label.toLowerCase());
+  // Keep the stream alive for a short period after last listener detaches
+  final link = ref.keepAlive();
+  Timer? timer;
+  ref.onCancel(() {
+    timer = Timer(const Duration(seconds: 30), link.close);
   });
-  return vars;
+  ref.onResume(() {
+    timer?.cancel();
+  });
+
+  return repo.watchItems(localCategoryId);
 });
 
-// Minimal extension so we don't touch your models everywhere
-extension _MenuItemCopyImage on MenuItem {
-  MenuItem copyWithImage({String? imageUrl}) => MenuItem(
-    id: id,
-    tenantId: tenantId,
-    name: name,
-    description: description,
-    categoryId: categoryId,
-    sku: sku,
-    hsn: hsn,
-    isActive: isActive,
-    stockOut: stockOut,
-    taxInclusive: taxInclusive,
-    gstRate: gstRate,
-    kitchenStationId: kitchenStationId,
-    createdAt: createdAt,
-    updatedAt: updatedAt,
-    imageUrl: imageUrl ?? this.imageUrl,
-  );
-}
+/// Variants for a given *local* item ID
+final itemVariantsProvider = StreamProvider.family
+    .autoDispose<List<ItemVariant>, int>((ref, localItemId) {
+  final repo = ref.watch(catalogRepoProvider);
+  if (localItemId == 0) {
+    return Stream.value([]);
+  }
+  // This watches the local database
+  return repo.watchVariants(localItemId);
+});
 
 /// ---------------------------------------------------------------------------
 /// MAIN PAGE
@@ -100,17 +69,33 @@ class MenuPage extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Menu Categories'),
-
+        actions: [
+          // Add a manual sync button
+          IconButton(
+            icon: const Icon(Icons.sync),
+            tooltip: 'Sync Menu',
+            onPressed: () async {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Syncing...')),
+              );
+              await ref.read(syncControllerProvider.notifier).syncNow();
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Sync complete!'), duration: Duration(seconds: 1)),
+                );
+              }
+            },
+          )
+        ],
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          final saved = await showDialog<bool>(
+        onPressed: () {
+          showDialog<bool>(
             context: context,
             builder: (_) => const _AddCategoryDialog(),
           );
-          if (saved == true) {
-            ref.invalidate(menuCategoriesProvider);
-          }
+          // No invalidation needed, dialog will trigger sync
         },
         tooltip: 'Add Category',
         child: const Icon(Icons.add),
@@ -118,19 +103,23 @@ class MenuPage extends ConsumerWidget {
       body: catsAsync.when(
         data: (cats) {
           if (cats.isEmpty) {
-            return const Center(
+            return Center(
               child: Text(
-                'No categories yet.\nTap + to add one.',
+                'No categories yet.\nTap + to add one, or tap Sync.',
                 textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyLarge,
               ),
             );
           }
+
+          // Sort local data
+          cats.sort((a, b) => a.position.compareTo(b.position));
 
           return ListView.builder(
             itemCount: cats.length,
             itemBuilder: (context, i) {
               final cat = cats[i];
-              final catId = cat.id ?? '';
+              final catId = cat.id; // Use the local int ID
 
               final itemsAsync = ref.watch(categoryItemsProvider(catId));
 
@@ -151,35 +140,31 @@ class MenuPage extends ConsumerWidget {
                       IconButton(
                         tooltip: 'Add Item',
                         icon: const Icon(Icons.add_box_outlined),
-                        onPressed: () async {
-                          final created = await showDialog<bool>(
+                        onPressed: () {
+                          showDialog<bool>(
                             context: context,
                             builder: (_) => _AddItemDialog(category: cat),
                           );
-                          if (created == true) {
-                            ref.invalidate(categoryItemsProvider(catId));
-                          }
                         },
                       ),
                       IconButton(
                         tooltip: 'Edit Category',
                         icon: const Icon(Icons.edit),
-                        onPressed: () async {
-                          final updated = await showDialog<bool>(
+                        onPressed: () {
+                          showDialog<bool>(
                             context: context,
                             builder: (_) => _EditCategoryDialog(category: cat),
                           );
-                          if (updated == true) {
-                            ref.invalidate(menuCategoriesProvider);
-                          }
                         },
                       ),
                       IconButton(
                         tooltip: 'Delete Category',
                         icon: const Icon(Icons.delete_outline),
-                        onPressed: cat.id == null
+                        onPressed: (cat.remoteId == null || cat.remoteId!.isEmpty)
                             ? null
                             : () async {
+                          // TODO: Implement offline-first delete
+                          // For now, we call the API and then sync
                           final ok = await _confirmYesNo(
                               context,
                               'Delete "${cat.name}" and all its items?');
@@ -187,8 +172,8 @@ class MenuPage extends ConsumerWidget {
 
                           try {
                             final repo = ref.read(catalogRepoProvider);
-                            await repo.deleteCategory(cat.id!);
-                            ref.invalidate(menuCategoriesProvider);
+                            await repo.deleteCategory(cat.remoteId!);
+                            await ref.read(syncControllerProvider.notifier).syncNow();
                           } catch (e) {
                             if (context.mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
@@ -206,6 +191,10 @@ class MenuPage extends ConsumerWidget {
                   children: [
                     itemsAsync.when(
                       data: (items) {
+                        // Sort local data
+                        items.sort((a, b) =>
+                            a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
                         if (items.isEmpty) {
                           return Padding(
                             padding: const EdgeInsets.symmetric(vertical: 8.0),
@@ -221,7 +210,7 @@ class MenuPage extends ConsumerWidget {
 
                         return Column(
                           children: items.map((it) {
-                            final itemId = it.id ?? '';
+                            final itemId = it.id;
                             final varsAsync =
                             ref.watch(itemVariantsProvider(itemId));
 
@@ -230,7 +219,7 @@ class MenuPage extends ConsumerWidget {
                               const EdgeInsets.only(left: 0, right: 0),
                               leading: Padding(
                                 padding: const EdgeInsets.only(right: 8.0),
-                                child: MenuImage(path: it.imageUrl, size: 56),
+                                child: MenuImage(path: it.imageUrl ?? '', size: 56),
                               ),
                               title: Text(
                                 it.name,
@@ -259,6 +248,13 @@ class MenuPage extends ConsumerWidget {
                                           ),
                                         );
                                       }
+                                      // Sort local data
+                                      vars.sort((a, b) {
+                                        if (a.isDefault && !b.isDefault) return -1;
+                                        if (!a.isDefault && b.isDefault) return 1;
+                                        return a.label.toLowerCase().compareTo(b.label.toLowerCase());
+                                      });
+
                                       final def = vars.firstWhere(
                                             (v) => v.isDefault,
                                         orElse: () => vars.first,
@@ -294,29 +290,25 @@ class MenuPage extends ConsumerWidget {
                                   IconButton(
                                     tooltip: 'Variants / Prices',
                                     icon: const Icon(Icons.price_change),
-                                    onPressed: it.id == null
+                                    onPressed: it.remoteId == null
                                         ? null
-                                        : () async {
-                                      final updated =
-                                      await showModalBottomSheet<bool>(
+                                        : () {
+                                      showModalBottomSheet<bool>(
                                         context: context,
                                         isScrollControlled: true,
-                                        builder: (_) => _ManageVariantsSheet(
-                                          itemId: it.id!,
-                                          itemName: it.name,
-                                        ),
+                                        builder: (_) =>
+                                            _ManageVariantsSheet(
+                                              localItemId: it.id,
+                                              remoteItemId: it.remoteId!,
+                                              itemName: it.name,
+                                            ),
                                       );
-                                      if (updated == true) {
-                                        ref.invalidate(
-                                          itemVariantsProvider(it.id!),
-                                        );
-                                      }
                                     },
                                   ),
                                   IconButton(
                                     tooltip: 'Delete Item',
                                     icon: const Icon(Icons.delete_outline),
-                                    onPressed: it.id == null
+                                    onPressed: it.remoteId == null
                                         ? null
                                         : () async {
                                       final ok = await _confirmYesNo(
@@ -328,11 +320,8 @@ class MenuPage extends ConsumerWidget {
                                       try {
                                         final repo =
                                         ref.read(catalogRepoProvider);
-                                        await repo.deleteItem(it.id!);
-
-                                        ref.invalidate(
-                                          categoryItemsProvider(catId),
-                                        );
+                                        await repo.deleteItem(it.remoteId!);
+                                        await ref.read(syncControllerProvider.notifier).syncNow();
                                       } catch (e) {
                                         if (context.mounted) {
                                           ScaffoldMessenger.of(context)
@@ -348,6 +337,14 @@ class MenuPage extends ConsumerWidget {
                                   ),
                                 ],
                               ),
+                              onTap: () {
+                                // Navigate to detail page, passing the local DB object
+                                Navigator.of(context).push<bool>(
+                                  MaterialPageRoute(
+                                    builder: (_) => MenuItemDetailPage(item: it),
+                                  ),
+                                );
+                              },
                             );
                           }).toList(),
                         );
@@ -406,6 +403,7 @@ Future<bool?> _confirmYesNo(BuildContext context, String msg) {
   );
 }
 
+// Updated to use the local DB model
 String _variantSummary(ItemVariant v) {
   final price = v.basePrice.toStringAsFixed(2);
   final lbl = v.label.isEmpty ? 'Default' : v.label;
@@ -440,7 +438,6 @@ class _AddCategoryDialogState extends ConsumerState<_AddCategoryDialog> {
     final pos = int.tryParse(_posCtl.text.trim()) ?? 0;
     if (name.isEmpty) return;
 
-    // pull tenant/branch from providers
     final me = ref.read(authControllerProvider).me;
     final tenantId = me?.tenantId ?? '';
     final branchId = ref.read(activeBranchIdProvider);
@@ -458,12 +455,17 @@ class _AddCategoryDialogState extends ConsumerState<_AddCategoryDialog> {
 
     try {
       final repo = ref.read(catalogRepoProvider);
+      // We still call the API for writes.
+      // TODO: Change this to write to OpsJournal for offline
       await repo.addCategory(
         name,
         tenantId: tenantId,
         branchId: branchId,
         position: pos,
       );
+
+      // Manually trigger a sync to pull the new data
+      await ref.read(syncControllerProvider.notifier).syncNow();
 
       if (mounted) {
         Navigator.pop(context, true);
@@ -524,7 +526,7 @@ class _AddCategoryDialogState extends ConsumerState<_AddCategoryDialog> {
 
 class _EditCategoryDialog extends ConsumerStatefulWidget {
   const _EditCategoryDialog({required this.category});
-  final MenuCategory category;
+  final MenuCategory category; // Now a db.MenuCategory
 
   @override
   ConsumerState<_EditCategoryDialog> createState() => _EditCategoryDialogState();
@@ -554,17 +556,36 @@ class _EditCategoryDialogState extends ConsumerState<_EditCategoryDialog> {
     final pos = int.tryParse(_posCtl.text.trim()) ?? 0;
     if (name.isEmpty) return;
 
+    if (widget.category.remoteId == null || widget.category.remoteId!.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('This category hasn’t synced yet. Tap Sync, then try edit.'))
+        );
+      }
+      return;
+    }
+
     setState(() => _busy = true);
 
     try {
       final repo = ref.read(catalogRepoProvider);
-      await repo.editCategory(
-        widget.category.id!,
-        name: name,
-        position: pos,
-        tenantId: widget.category.tenantId,
-        branchId: widget.category.branchId,
+      // We still call the API for writes
+      // TODO: Change this to write to OpsJournal for offline
+      await repo.updateCategory(
+        widget.category.remoteId!,
+        api.MenuCategory(
+          // We build the API model for the update
+          id: widget.category.remoteId,
+          tenantId: ref.read(activeTenantIdProvider),
+          branchId: ref.read(activeBranchIdProvider),
+          name: name,
+          position: pos,
+        ),
       );
+
+      // Manually trigger a sync to pull the new data
+      await ref.read(syncControllerProvider.notifier).syncNow();
+
       if (mounted) {
         Navigator.pop(context, true);
       }
@@ -622,12 +643,12 @@ class _EditCategoryDialogState extends ConsumerState<_EditCategoryDialog> {
 }
 
 /// ---------------------------------------------------------------------------
-/// ADD ITEM DIALOG  (creates MenuItem + first/default Variant) + saves image URL
+/// ADD ITEM DIALOG
 /// ---------------------------------------------------------------------------
 
 class _AddItemDialog extends ConsumerStatefulWidget {
   const _AddItemDialog({required this.category});
-  final MenuCategory category;
+  final MenuCategory category; // Now a db.MenuCategory
 
   @override
   ConsumerState<_AddItemDialog> createState() => _AddItemDialogState();
@@ -637,15 +658,10 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
   final _nameCtl = TextEditingController();
   final _descCtl = TextEditingController();
   final _gstCtl = TextEditingController(text: '5.0');
-
-  // default variant info
   final _variantLabelCtl = TextEditingController(text: 'Regular');
   final _priceCtl = TextEditingController();
-
-  // NEW: file picker state
   PlatformFile? _pickedFile;
-  Uint8List? _previewBytes; // for showing thumbnail in dialog
-
+  Uint8List? _previewBytes;
   bool _busy = false;
 
   @override
@@ -659,28 +675,20 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
   }
 
   Future<void> _pickImage() async {
-    // Open native file picker
     final result = await FilePicker.platform.pickFiles(
       type: FileType.image,
       allowMultiple: false,
-      withData: true, // we want bytes for preview
+      withData: true,
     );
-
     if (!mounted) return;
-
     if (result != null && result.files.isNotEmpty) {
       final file = result.files.first;
       setState(() {
         _pickedFile = file;
-        _previewBytes = file.bytes; // may be null on some platforms, that's ok
+        _previewBytes = file.bytes;
       });
     }
-
-    // On Windows debug you may still see the "Alt Left already pressed" assert.
-    // That's a Flutter desktop quirk after native dialogs. It's safe to ignore
-    // in debug and it won't show up in release builds.
   }
-
 
   void _clearImage() {
     setState(() {
@@ -691,7 +699,6 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
 
   Future<void> _save() async {
     final repo = ref.read(catalogRepoProvider);
-
     final name = _nameCtl.text.trim();
     if (name.isEmpty) return;
 
@@ -700,53 +707,58 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
     final variantLabel = _variantLabelCtl.text.trim();
     final priceVal = double.tryParse(_priceCtl.text.trim()) ?? 0.0;
 
+    final me = ref.read(authControllerProvider).me;
+    final tenantId = me?.tenantId ?? '';
+
     setState(() => _busy = true);
 
     try {
-      // 1) Create the bare item first (no image yet)
-      final newItem = MenuItem(
+      // 1) Create the bare item first (API model)
+      final catRid = widget.category.remoteId ?? '';
+      if (catRid.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Please Sync first — this category isn’t linked to the server yet.'))
+          );
+        }
+        setState(() => _busy = false);
+        return;
+      }
+
+      final newItem = api.MenuItem(
         id: null,
-        tenantId: widget.category.tenantId,
+        tenantId: tenantId,
+        categoryId: catRid, // safe now
         name: name,
         description: desc,
-        categoryId: widget.category.id ?? '',
-        sku: null,
-        hsn: null,
         isActive: true,
-        stockOut: false,
-        taxInclusive: true,
         gstRate: gstRate,
-        kitchenStationId: null,
-        createdAt: null,
-        updatedAt: null,
-        imageUrl: null,
       );
 
       final createdItem = await repo.createItem(newItem);
-      final newItemId = createdItem.id ?? '';
+      final newItemRemoteId = createdItem.id ?? '';
 
-      // 2) Create the default variant (price)
-      final newVar = ItemVariant(
+      // 2) Create the default variant (API model)
+      final newVar = api.ItemVariant(
         id: null,
-        itemId: newItemId,
+        itemId: newItemRemoteId,
         label: variantLabel,
         mrp: priceVal,
         basePrice: priceVal,
         isDefault: true,
       );
-      await repo.createVariant(newItemId, newVar);
+      await repo.createVariant(newItemRemoteId, newVar);
 
-      // 3) If user picked an image, upload it using the *item-specific* endpoint
-      //    This hits: POST /menu/items/{itemId}/image
-      //    which should both save the file AND update image_url in DB.
+      // 3) If user picked an image, upload it
       if (_pickedFile != null) {
         await repo.uploadItemImage(
-          itemId: newItemId,
+          itemId: newItemRemoteId,
           file: _pickedFile!,
         );
-        // We do NOT call repo.updateItem(...) here anymore.
-        // Backend upload route is expected to set image_url on that item.
       }
+
+      // 4) Manually trigger sync to pull changes
+      await ref.read(syncControllerProvider.notifier).syncNow();
 
       if (mounted) {
         Navigator.pop(context, true);
@@ -774,7 +786,6 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Item basics
             TextField(
               controller: _nameCtl,
               decoration: const InputDecoration(labelText: 'Item name *'),
@@ -794,10 +805,7 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
                 helperText: 'ex: 5.0',
               ),
             ),
-
             const Divider(height: 24),
-
-            // IMAGE PICKER BLOCK
             Align(
               alignment: Alignment.centerLeft,
               child: Text(
@@ -812,7 +820,6 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Preview box
                 Container(
                   width: 72,
                   height: 72,
@@ -834,8 +841,6 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
                   ),
                 ),
                 const SizedBox(width: 12),
-
-                // Buttons + filename
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -871,10 +876,7 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
                 ),
               ],
             ),
-
             const Divider(height: 24),
-
-            // Default variant / price block
             Align(
               alignment: Alignment.centerLeft,
               child: Text(
@@ -930,11 +932,13 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
 
 class _ManageVariantsSheet extends ConsumerStatefulWidget {
   const _ManageVariantsSheet({
-    required this.itemId,
+    required this.localItemId,
+    required this.remoteItemId,
     required this.itemName,
   });
 
-  final String itemId;
+  final int localItemId;
+  final String remoteItemId;
   final String itemName;
 
   @override
@@ -968,25 +972,26 @@ class _ManageVariantsSheetState
     try {
       final repo = ref.read(catalogRepoProvider);
 
-      final newVar = ItemVariant(
+      // Create using the API model
+      final newVar = api.ItemVariant(
         id: null,
-        itemId: widget.itemId,
+        itemId: widget.remoteItemId,
         label: label,
         mrp: mrp ?? price,
         basePrice: price,
         isDefault: _isDefault,
       );
 
-      await repo.createVariant(widget.itemId, newVar);
+      await repo.createVariant(widget.remoteItemId, newVar);
+
+      // Trigger sync to pull changes
+      await ref.read(syncControllerProvider.notifier).syncNow();
 
       // clear form
       _labelCtl.clear();
       _priceCtl.clear();
       _mrpCtl.clear();
       _isDefault = false;
-
-      // refresh list
-      ref.invalidate(itemVariantsProvider(widget.itemId));
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1026,9 +1031,10 @@ class _ManageVariantsSheetState
                     double.tryParse(priceCtl.text.trim()) ?? 0.0;
                 final parsedMrp = double.tryParse(mrpCtl.text.trim());
 
-                final updated = ItemVariant(
-                  id: v.id,
-                  itemId: v.itemId,
+                // Build API model for update
+                final updated = api.ItemVariant(
+                  id: v.remoteId, // Use remote ID
+                  itemId: widget.remoteItemId,
                   label: lblCtl.text.trim(),
                   mrp: parsedMrp ?? parsedPrice,
                   basePrice: parsedPrice,
@@ -1037,8 +1043,8 @@ class _ManageVariantsSheetState
 
                 await repo.updateVariant(updated);
 
-                // refresh main list
-                ref.invalidate(itemVariantsProvider(widget.itemId));
+                // Trigger sync
+                await ref.read(syncControllerProvider.notifier).syncNow();
 
                 if (ctx.mounted) Navigator.pop(ctx, true);
               } catch (e) {
@@ -1127,12 +1133,15 @@ class _ManageVariantsSheetState
   }
 
   Future<void> _deleteVariant(ItemVariant v) async {
+    if (v.remoteId == null) return;
     final ok = await _confirmYesNo(context, 'Delete variant "${v.label}"?');
     if (ok != true) return;
 
     try {
-      await ref.read(catalogRepoProvider).deleteVariant(v.id!);
-      ref.invalidate(itemVariantsProvider(widget.itemId));
+      await ref.read(catalogRepoProvider).deleteVariant(v.remoteId!);
+      // Trigger sync
+      await ref.read(syncControllerProvider.notifier).syncNow();
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Deleted ${v.label}')),
@@ -1148,7 +1157,8 @@ class _ManageVariantsSheetState
 
   @override
   Widget build(BuildContext context) {
-    final varsAsync = ref.watch(itemVariantsProvider(widget.itemId));
+    // Use the local item ID to watch variants
+    final varsAsync = ref.watch(itemVariantsProvider(widget.localItemId));
 
     return SafeArea(
       child: Padding(
@@ -1172,6 +1182,13 @@ class _ManageVariantsSheetState
               // existing variants list
               varsAsync.when(
                 data: (vars) {
+                  // Sort local data
+                  vars.sort((a, b) {
+                    if (a.isDefault && !b.isDefault) return -1;
+                    if (!a.isDefault && b.isDefault) return 1;
+                    return a.label.toLowerCase().compareTo(b.label.toLowerCase());
+                  });
+
                   if (vars.isEmpty) {
                     return Text(
                       'No variants yet.',
@@ -1235,7 +1252,6 @@ class _ManageVariantsSheetState
                 ),
               ),
               const SizedBox(height: 8),
-
               TextField(
                 controller: _labelCtl,
                 decoration: const InputDecoration(
@@ -1244,7 +1260,6 @@ class _ManageVariantsSheetState
                 ),
               ),
               const SizedBox(height: 12),
-
               TextField(
                 controller: _priceCtl,
                 keyboardType:
@@ -1252,7 +1267,6 @@ class _ManageVariantsSheetState
                 decoration: const InputDecoration(labelText: 'Base price (₹)'),
               ),
               const SizedBox(height: 12),
-
               TextField(
                 controller: _mrpCtl,
                 keyboardType:
@@ -1260,7 +1274,6 @@ class _ManageVariantsSheetState
                 decoration: const InputDecoration(labelText: 'MRP (optional)'),
               ),
               const SizedBox(height: 12),
-
               Row(
                 children: [
                   Checkbox(
@@ -1274,9 +1287,7 @@ class _ManageVariantsSheetState
                   const Text('Default variant'),
                 ],
               ),
-
               const SizedBox(height: 16),
-
               Row(
                 children: [
                   Expanded(

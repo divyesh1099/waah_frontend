@@ -1,12 +1,13 @@
-﻿// lib/app/providers.dart
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+﻿import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:dio/dio.dart';
 
 import 'package:waah_frontend/data/api_client.dart';
+import 'package:waah_frontend/data/local/app_db.dart'; // Import Drift DB
+import 'package:waah_frontend/data/repo/settings_repo.dart'; // Import SettingsRepo
 import 'package:waah_frontend/features/auth/auth_controller.dart';
 import '../data/models.dart';
-import 'package:file_picker/file_picker.dart';
+// We no longer import FilePicker here, it's in the repo
 
 final mediaBaseUrlProvider = Provider<String>((ref) => '$kBaseUrl/media/');
 
@@ -104,7 +105,6 @@ StateNotifierProvider<_IdNotifier, String>((ref) {
   final stored = prefs.getString('active_tenant_id') ?? '';
   final n = _IdNotifier(prefs, 'active_tenant_id', stored);
 
-  // NEW: adopt tenant_id from /auth/me when token/me changes
   ref.listen<AuthState>(authControllerProvider, (prev, next) {
     final prevToken = prev?.token ?? '';
     final nextToken = next.token ?? '';
@@ -129,7 +129,6 @@ StateNotifierProvider<_IdNotifier, String>((ref) {
   final stored = prefs.getString('active_branch_id') ?? '';
   final n = _IdNotifier(prefs, 'active_branch_id', stored);
 
-  // React to auth state changes to auto-adopt branch from /auth/me
   ref.listen<AuthState>(authControllerProvider, (prev, next) {
     final prevToken = prev?.token ?? '';
     final nextToken = next.token ?? '';
@@ -138,7 +137,6 @@ StateNotifierProvider<_IdNotifier, String>((ref) {
       n.clear();
     }
 
-    // When /auth/me arrives with a branch and none is set yet
     final prevBranch = prev?.me?.branchId ?? '';
     final nextBranch = next.me?.branchId ?? '';
     if (prevBranch != nextBranch && n.state.isEmpty && nextBranch.isNotEmpty) {
@@ -150,6 +148,8 @@ StateNotifierProvider<_IdNotifier, String>((ref) {
 });
 
 /// All branches for the active tenant (used by branch picker UI)
+/// This remains a FutureProvider as it's not core data needed offline
+/// and is only used on the branch selection screen.
 final branchesProvider = FutureProvider.autoDispose<List<BranchInfo>>((ref) async {
   final api = ref.watch(apiClientProvider);
   final tenantId = ref.watch(activeTenantIdProvider);
@@ -157,26 +157,18 @@ final branchesProvider = FutureProvider.autoDispose<List<BranchInfo>>((ref) asyn
   return api.fetchBranches(tenantId: tenantId);
 });
 
+/// ===== REFACTORED FOR OFFLINE-FIRST =====
 /// Restaurant settings (branding) for active tenant+branch
+/// This provider now reads from the local DB stream.
+/// It will load instantly and update automatically when a sync happens.
 final restaurantSettingsProvider =
-FutureProvider.autoDispose<RestaurantSettings?>((ref) async {
-  final api = ref.watch(apiClientProvider);
-  final tenantId = ref.watch(activeTenantIdProvider);
-  final branchId = ref.watch(activeBranchIdProvider);
-
-  if (tenantId.isEmpty || branchId.isEmpty) {
-    return null;
-  }
-  return api.getRestaurantSettings(
-    tenantId: tenantId,
-    branchId: branchId,
-  );
+StreamProvider.autoDispose<RestaurantSetting?>((ref) {
+  // Watch the repo, which watches the local DB
+  return ref.watch(settingsRepoProvider).watchRestaurantSettings();
 });
 
 /// Build a full URL for images that may come as absolute, relative, or /media/…
-/// - If already absolute (http/https), return as-is
-/// - If starts with /media/, prefix with kBaseUrl
-/// - Else treat as relative and join with media base
+/// (I am re-adding this function which I mistakenly removed)
 String resolveMediaUrl(String? input) {
   if (input == null || input.isEmpty) return '';
   final s = input.trim();
@@ -187,6 +179,7 @@ String resolveMediaUrl(String? input) {
 }
 
 /// Expose the resolver in DI for widgets that prefer reading from ref
+/// (I am re-adding this provider which I mistakenly removed)
 final mediaResolverProvider = Provider<Uri Function(String?)>((ref) {
   return (s) => Uri.parse(resolveMediaUrl(s));
 });

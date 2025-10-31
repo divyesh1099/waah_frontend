@@ -1,46 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
-import 'package:waah_frontend/data/models.dart';
+import 'package:waah_frontend/app/providers.dart';
+// Import the API models with an alias
+import 'package:waah_frontend/data/models.dart' as api;
+// Import the local DB models
+import 'package:waah_frontend/data/local/app_db.dart' as db;
 import 'package:waah_frontend/data/repo/catalog_repo.dart';
+import 'package:waah_frontend/features/sync/sync_controller.dart';
 import 'package:waah_frontend/widgets/menu_media.dart';
 
 // Common GST presets
 const List<double> _kGstPresets = [0, 5, 12, 18, 28];
 
-extension MenuItemCopy on MenuItem {
-  MenuItem copyWith({
-    String? name,
-    String? description,
-    bool? isActive,
-    bool? stockOut,
-    bool? taxInclusive,
-    double? gstRate,
-    String? imageUrl,
-  }) {
-    return MenuItem(
-      id: id,
-      tenantId: tenantId,
-      name: name ?? this.name,
-      description: description ?? this.description,
-      categoryId: categoryId,
-      sku: sku,
-      hsn: hsn,
-      isActive: isActive ?? this.isActive,
-      stockOut: stockOut ?? this.stockOut,
-      taxInclusive: taxInclusive ?? this.taxInclusive,
-      gstRate: gstRate ?? this.gstRate,
-      kitchenStationId: kitchenStationId,
-      createdAt: createdAt,
-      updatedAt: updatedAt,
-      imageUrl: imageUrl ?? this.imageUrl,
-    );
-  }
-}
+// This extension is no longer needed, we will build the API model manually
 
 class MenuItemDetailPage extends ConsumerStatefulWidget {
   const MenuItemDetailPage({super.key, required this.item});
-  final MenuItem item;
+  // This is now the local database model
+  final db.MenuItem item;
 
   @override
   ConsumerState<MenuItemDetailPage> createState() => _MenuItemDetailPageState();
@@ -63,6 +40,7 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
   @override
   void initState() {
     super.initState();
+    // Initialize controllers from the local db.MenuItem
     _nameCtl = TextEditingController(text: widget.item.name);
     _descCtl = TextEditingController(text: widget.item.description ?? '');
     _gstCtl = TextEditingController(text: widget.item.gstRate.toStringAsFixed(2));
@@ -72,7 +50,6 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
     _taxInclusive = widget.item.taxInclusive;
     _imageUrl = widget.item.imageUrl;
 
-    // Initialize preset if current GST matches one of the presets
     final currentGst = widget.item.gstRate;
     _gstPresetValue = _kGstPresets.contains(currentGst) ? currentGst : null;
   }
@@ -87,8 +64,16 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
 
   Future<void> _saveItem() async {
     if (_saving) return;
-    final id = widget.item.id;
-    if (id == null) return;
+    // We need the remoteId to update the item
+    final remoteId = widget.item.remoteId;
+    if (remoteId == null || remoteId.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('This item hasn’t synced yet. Tap Sync, then try again.'))
+        );
+      }
+      return;
+    }
 
     final gstParsed = double.tryParse(_gstCtl.text.trim());
     if (gstParsed == null) {
@@ -101,7 +86,12 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
 
     try {
       final repo = ref.read(catalogRepoProvider);
-      final updatedDraft = widget.item.copyWith(
+
+      // Build the API model to send the update
+      final updatedDraft = api.MenuItem(
+        id: remoteId,
+        tenantId: ref.read(activeTenantIdProvider),
+        // categoryId: (omit entirely to avoid server 400/422)
         name: _nameCtl.text.trim(),
         description: _descCtl.text.trim().isEmpty ? null : _descCtl.text.trim(),
         isActive: _isActive,
@@ -110,7 +100,12 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
         gstRate: gstParsed,
         imageUrl: _imageUrl,
       );
-      await repo.updateItem(id, updatedDraft);
+
+      await repo.updateItem(remoteId, updatedDraft);
+
+      // Trigger a sync to pull changes
+      await ref.read(syncControllerProvider.notifier).syncNow();
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved ✅')));
         Navigator.of(context).pop(true);
@@ -125,17 +120,30 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
   }
 
   Future<void> _deleteItem() async {
-    final id = widget.item.id;
-    if (id == null) return;
+    final remoteId = widget.item.remoteId;
+    if (remoteId == null || remoteId.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('This item hasn’t synced yet. Tap Sync, then try again.'))
+        );
+      }
+      return;
+    }
 
-    final ok = await _confirm(context, 'Delete "${widget.item.name}"?\n(Soft delete, hides in POS)');
+    final ok = await _confirm(context, 'Delete "${widget.item.name}"?\n(This will sync with the server)');
     if (!ok) return;
 
     setState(() => _saving = true);
     try {
-      await ref.read(catalogRepoProvider).deleteItem(id);
+      await ref.read(catalogRepoProvider).deleteItem(remoteId);
+
+      // Trigger a sync to update local DB
+      await ref.read(syncControllerProvider.notifier).syncNow();
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Deleted ${widget.item.name}')));
+        // Pop twice to go back to the category list
+        Navigator.of(context).pop(true);
         Navigator.of(context).pop(true);
       }
     } catch (err) {
@@ -149,6 +157,7 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
 
   @override
   Widget build(BuildContext context) {
+    // The widget.item is already the local db.MenuItem
     final it = widget.item;
 
     return Scaffold(
@@ -165,7 +174,7 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // Image uploader (URL paste, pick file -> backend upload)
+          // Image uploader
           MenuImageUploaderField(
             value: _imageUrl,
             onChanged: (v) => setState(() => _imageUrl = v),
@@ -223,7 +232,7 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
           ),
           const SizedBox(height: 12),
 
-          // GST preset dropdown (safe, correct generic syntax)
+          // GST preset dropdown
           DropdownButtonFormField<double?>(
             value: _gstPresetValue,
             decoration: const InputDecoration(

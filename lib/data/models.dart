@@ -1,5 +1,7 @@
 // lib/data/models.dart
 
+import 'package:drift/drift.dart';
+
 /// ---------- Utilities ----------
 DateTime? _dt(dynamic v) {
   if (v == null) return null;
@@ -404,11 +406,14 @@ class MenuCategory {
 }
 
 class MenuItem {
-  final String? id;
+  final String? id;                 // remote id
   final String tenantId;
   final String name;
   final String? description;
-  final String categoryId;
+
+  // Make this nullable so we can omit it on update
+  final String? categoryId;
+
   final String? sku;
   final String? hsn;
   final bool isActive;
@@ -416,16 +421,16 @@ class MenuItem {
   final bool taxInclusive;
   final double gstRate;
   final String? kitchenStationId;
-  final String? imageUrl; // NEW
+  final String? imageUrl;           // optional
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
-  MenuItem({
+  const MenuItem({
     this.id,
     required this.tenantId,
     required this.name,
     this.description,
-    required this.categoryId,
+    this.categoryId,               // <-- no JsonKey here; just nullable
     this.sku,
     this.hsn,
     this.isActive = true,
@@ -433,7 +438,7 @@ class MenuItem {
     this.taxInclusive = true,
     this.gstRate = 5.0,
     this.kitchenStationId,
-    this.imageUrl, // NEW
+    this.imageUrl,
     this.createdAt,
     this.updatedAt,
   });
@@ -443,7 +448,7 @@ class MenuItem {
     tenantId: _str(j['tenant_id']) ?? '',
     name: _str(j['name']) ?? '',
     description: _str(j['description']),
-    categoryId: _str(j['category_id']) ?? '',
+    categoryId: _str(j['category_id']), // <-- keep nullable (no default '')
     sku: _str(j['sku']),
     hsn: _str(j['hsn']),
     isActive: (j['is_active'] as bool?) ?? true,
@@ -451,27 +456,30 @@ class MenuItem {
     taxInclusive: (j['tax_inclusive'] as bool?) ?? true,
     gstRate: _numToDouble(j['gst_rate']) ?? 5.0,
     kitchenStationId: _str(j['kitchen_station_id']),
-    imageUrl: _str(j['image_url']), // NEW
+    imageUrl: _str(j['image_url']),
     createdAt: _dt(j['created_at']),
     updatedAt: _dt(j['updated_at']),
   );
 
   Map<String, dynamic> toJson() => {
-    'id': id,
+    if (id != null) 'id': id,
     'tenant_id': tenantId,
     'name': name,
-    'description': description,
-    'category_id': categoryId,
-    'sku': sku,
-    'hsn': hsn,
+    if (description != null) 'description': description,
+
+    // Only send category_id when we actually intend to change/set it
+    if (categoryId != null) 'category_id': categoryId,
+
+    if (sku != null) 'sku': sku,
+    if (hsn != null) 'hsn': hsn,
     'is_active': isActive,
     'stock_out': stockOut,
     'tax_inclusive': taxInclusive,
     'gst_rate': gstRate,
-    'kitchen_station_id': kitchenStationId,
-    'image_url': imageUrl, // NEW (optional)
-    'created_at': createdAt?.toIso8601String(),
-    'updated_at': updatedAt?.toIso8601String(),
+    if (kitchenStationId != null) 'kitchen_station_id': kitchenStationId,
+    if (imageUrl != null) 'image_url': imageUrl,
+    if (createdAt != null) 'created_at': createdAt!.toIso8601String(),
+    if (updatedAt != null) 'updated_at': updatedAt!.toIso8601String(),
   };
 }
 

@@ -1,37 +1,34 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:waah_frontend/data/models.dart';
+// Import API models with an alias
+import 'package:waah_frontend/data/models.dart' as api;
+// Import local DB models
+import 'package:waah_frontend/data/local/app_db.dart';
 import 'package:waah_frontend/data/repo/catalog_repo.dart';
+import 'package:waah_frontend/app/providers.dart';
+import 'package:waah_frontend/features/menu/menu_page.dart'; // For providers
+import 'package:waah_frontend/features/sync/sync_controller.dart';
 
-/// Provider: load items for a specific category ID.
-final categoryItemsProvider = FutureProvider.family
-    .autoDispose<List<MenuItem>, String>((ref, categoryId) async {
+
+/// Provider: load items for a *local* category ID.
+final categoryItemsStreamProvider = StreamProvider.family
+    .autoDispose<List<MenuItem>, int>((ref, localCategoryId) {
   final repo = ref.watch(catalogRepoProvider);
-
-  // Your repo.loadItems(...) maps to ApiClient.fetchItems(...)
-  final items =
-  await repo.loadItems(categoryId: categoryId, tenantId: '');
-
-  // Sort: active first, then alphabetical
-  items.sort((a, b) {
-    final aActive = (a.isActive && !a.stockOut) ? 0 : 1;
-    final bActive = (b.isActive && !b.stockOut) ? 0 : 1;
-    final cmpActive = aActive.compareTo(bActive);
-    if (cmpActive != 0) return cmpActive;
-    return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-  });
-
-  return items;
+  if (localCategoryId == 0) {
+    return Stream.value([]);
+  }
+  return repo.watchItems(localCategoryId);
 });
 
 class CategoryItemsPage extends ConsumerWidget {
   const CategoryItemsPage({super.key, required this.category});
+// This is now the local DB model
   final MenuCategory category;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final catId = category.id ?? '';
-    final asyncItems = ref.watch(categoryItemsProvider(catId));
+    final catId = category.id;
+    final asyncItems = ref.watch(categoryItemsStreamProvider(catId));
 
     return Scaffold(
       appBar: AppBar(
@@ -41,34 +38,27 @@ class CategoryItemsPage extends ConsumerWidget {
             icon: const Icon(Icons.add),
             tooltip: 'Add item',
             onPressed: () async {
-              if (category.id == null) return;
+              if (category.remoteId == null) return;
 
               final newData = await _promptNewItem(context);
               if (newData == null) return;
 
               try {
-                // Build a MenuItem that matches your model
-                final draft = MenuItem(
+// Build an API MenuItem model for creation
+                final draft = api.MenuItem(
                   id: null, // backend will assign
-                  tenantId: '', // consistent with rest of calls
+                  tenantId: ref.read(activeTenantIdProvider),
                   name: newData.name,
                   description: newData.description,
-                  categoryId: category.id!,
-                  sku: null,
-                  hsn: null,
+                  categoryId: category.remoteId!, // Use remote ID for API
                   isActive: true,
-                  stockOut: false,
-                  taxInclusive: true,
                   gstRate: 5.0,
-                  kitchenStationId: null,
-                  createdAt: null,
-                  updatedAt: null,
                 );
 
                 await ref.read(catalogRepoProvider).createItem(draft);
 
-                // refresh list
-                ref.invalidate(categoryItemsProvider(category.id!));
+// Trigger sync to pull the new item
+                await ref.read(syncControllerProvider.notifier).syncNow();
 
                 if (!context.mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -102,6 +92,16 @@ class CategoryItemsPage extends ConsumerWidget {
               child: Text('No items in this category yet'),
             );
           }
+
+// Sort local data
+          items.sort((a, b) {
+            final aActive = (a.isActive && !a.stockOut) ? 0 : 1;
+            final bActive = (b.isActive && !b.stockOut) ? 0 : 1;
+            final cmpActive = aActive.compareTo(bActive);
+            if (cmpActive != 0) return cmpActive;
+            return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+          });
+
           return ListView.separated(
             itemCount: items.length,
             separatorBuilder: (_, __) =>
@@ -145,21 +145,20 @@ class CategoryItemsPage extends ConsumerWidget {
                     Icons.delete_outline,
                     color: Colors.redAccent,
                   ),
-                  onPressed: () async {
+                  onPressed: (it.remoteId == null || it.remoteId!.isEmpty) ? null : () async {
                     final ok = await _confirm(
                       context,
                       'Delete "${it.name}"?',
                     );
-                    if (!ok) return;
-                    if (it.id == null) return;
+                    if (!ok || it.remoteId == null) return;
 
                     try {
                       await ref
                           .read(catalogRepoProvider)
-                          .deleteItem(it.id!);
+                          .deleteItem(it.remoteId!);
 
-                      ref.invalidate(
-                          categoryItemsProvider(category.id!));
+// Trigger sync
+                      await ref.read(syncControllerProvider.notifier).syncNow();
 
                       if (!context.mounted) return;
                       ScaffoldMessenger.of(context)
@@ -187,8 +186,8 @@ class CategoryItemsPage extends ConsumerWidget {
                   },
                 ),
                 onTap: () {
-                  // TODO: push an ItemEditPage for variants/price/tax.
-                  // Navigator.push(...);
+// TODO: push an ItemEditPage for variants/price/tax.
+// Navigator.push(...);
                 },
               );
             },
