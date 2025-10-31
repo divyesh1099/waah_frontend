@@ -2,6 +2,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:waah_frontend/data/local/app_db.dart';
 
+import '../../app/providers.dart';
+
 // Provider to access this repository
 final settingsRepoProvider = Provider<SettingsRepo>((ref) {
   final db = ref.watch(localDatabaseProvider);
