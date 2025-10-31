@@ -29,8 +29,10 @@ class CatalogRepo {
   // ------------------ Helpers: map API -> local ------------------
 
   Future<void> _upsertLocalCategoryFromApi(api.MenuCategory c) async {
+    final rid = (c.id ?? '').trim();
     await _db.upsertCategory(MenuCategoriesCompanion(
-      remoteId: Value(c.id ?? ''),
+      // only set remoteId if non-empty; otherwise leave absent
+      remoteId: rid.isEmpty ? const Value.absent() : Value(rid),
       name: Value(c.name),
       position: Value(c.position),
     ));

@@ -204,9 +204,28 @@ class AppDatabase extends _$AppDatabase {
   }
 
   // ---------- CRUD helpers ----------
-  Future<void> upsertCategory(MenuCategoriesCompanion c) =>
-      into(menuCategories).insertOnConflictUpdate(c);
+  Future<void> upsertCategory(MenuCategoriesCompanion c) async {
+    // decide by remoteId (rid)
+    final String? rid = c.remoteId.present ? c.remoteId.value : null;
 
+    if (rid == null || rid.isEmpty) {
+      // no rid => plain insert
+      await into(menuCategories).insert(c);
+      return;
+    }
+
+    // if a row with this rid exists, update it; otherwise insert
+    final existing = await (select(menuCategories)
+      ..where((t) => t.remoteId.equals(rid)))
+        .getSingleOrNull();
+
+    if (existing == null) {
+      await into(menuCategories).insert(c);
+    } else {
+      await (update(menuCategories)..where((t) => t.id.equals(existing.id)))
+          .write(c);
+    }
+  }
   Future<void> upsertMenuItem(MenuItemsCompanion c) async {
     final String? rid = c.remoteId.present ? c.remoteId.value : null;
     if (rid == null || rid.isEmpty) {
