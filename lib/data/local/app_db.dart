@@ -7,9 +7,31 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqlite3_flutter_libs/sqlite3_flutter_libs.dart';
 
-import 'app_db.dart' as db;
+// ⛔️ removed: import 'app_db.dart' as db;  // this file importing itself causes type resolution issues
 
 part 'app_db.g.dart';
+
+// ✅ NEW: minimal order cache for list + detail totals
+@DataClassName('OrderRow')
+class Orders extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get remoteId => text().named('rid').unique()();         // order.id
+  TextColumn get orderNo => text().withDefault(const Constant(''))(); // keep as text for safety
+  TextColumn get status => text()();                                  // OrderStatus.name
+  TextColumn get channel => text()();                                 // OrderChannel.name
+  TextColumn get tableId => text().nullable()();
+  IntColumn get pax => integer().nullable()();
+  TextColumn get note => text().nullable()();
+  DateTimeColumn get openedAt => dateTime().nullable()();
+  DateTimeColumn get updatedAt => dateTime().nullable()();
+
+  // cached totals (from detail endpoint)
+  RealColumn get subtotal => real().withDefault(const Constant(0.0))();
+  RealColumn get tax => real().withDefault(const Constant(0.0))();
+  RealColumn get total => real().withDefault(const Constant(0.0))();
+  RealColumn get paid => real().withDefault(const Constant(0.0))();
+  RealColumn get due => real().withDefault(const Constant(0.0))();
+}
 
 @DataClassName('MenuCategory')
 class MenuCategories extends Table {
@@ -31,8 +53,7 @@ class MenuItems extends Table {
   TextColumn get hsn => text().nullable()();
   BoolColumn get isActive => boolean().withDefault(const Constant(true))();
   BoolColumn get stockOut => boolean().withDefault(const Constant(false))();
-  BoolColumn get taxInclusive =>
-      boolean().withDefault(const Constant(true))();
+  BoolColumn get taxInclusive => boolean().withDefault(const Constant(true))();
   RealColumn get gstRate => real().withDefault(const Constant(5.0))();
   TextColumn get kitchenStationId => text().nullable()();
   TextColumn get imageUrl => text().nullable()();
@@ -47,8 +68,7 @@ class ItemVariants extends Table {
   TextColumn get label => text()();
   RealColumn get mrp => real().nullable()();
   RealColumn get basePrice => real()();
-  BoolColumn get isDefault =>
-      boolean().withDefault(const Constant(false))();
+  BoolColumn get isDefault => boolean().withDefault(const Constant(false))();
   TextColumn get imageUrl => text().nullable()();
 }
 
@@ -80,18 +100,12 @@ class RestaurantSettings extends Table {
   TextColumn get phone => text().nullable()();
   TextColumn get gstin => text().nullable()();
   TextColumn get fssai => text().nullable()();
-  BoolColumn get printFssaiOnInvoice =>
-      boolean().withDefault(const Constant(false))();
-  BoolColumn get gstInclusiveDefault =>
-      boolean().withDefault(const Constant(true))();
-  TextColumn get serviceChargeMode =>
-      text().withDefault(const Constant('NONE'))();
-  RealColumn get serviceChargeValue =>
-      real().withDefault(const Constant(0.0))();
-  TextColumn get packingChargeMode =>
-      text().withDefault(const Constant('NONE'))();
-  RealColumn get packingChargeValue =>
-      real().withDefault(const Constant(0.0))();
+  BoolColumn get printFssaiOnInvoice => boolean().withDefault(const Constant(false))();
+  BoolColumn get gstInclusiveDefault => boolean().withDefault(const Constant(true))();
+  TextColumn get serviceChargeMode => text().withDefault(const Constant('NONE'))();
+  RealColumn get serviceChargeValue => real().withDefault(const Constant(0.0))();
+  TextColumn get packingChargeMode => text().withDefault(const Constant('NONE'))();
+  RealColumn get packingChargeValue => real().withDefault(const Constant(0.0))();
   TextColumn get billingPrinterId => text().nullable()();
   TextColumn get invoiceFooter => text().nullable()();
 
@@ -106,15 +120,17 @@ class RestaurantSettings extends Table {
   DiningTables,
   OpsJournal,
   RestaurantSettings,
+  Orders, // ✅ ensures `orders` getter, `OrderRow`, `OrdersCompanion` are generated
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
-  // NEW: public, callable from other files
+  // public factory
   factory AppDatabase.open() => AppDatabase(_openConnection());
 
+  // bump so Orders is created during upgrade
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   Future<void> _dropTableIfExists(Migrator m, String tableName) async {
     try {
@@ -135,10 +151,13 @@ class AppDatabase extends _$AppDatabase {
         await _dropTableIfExists(m, 'restaurant_settings');
         await m.createAll();
       }
+      if (from < 4) {
+        await m.createTable(orders); // ✅ create Orders non-destructively
+      }
     },
   );
 
-  // ---------- Streams (sorted & fast) ----------
+  // ---------- Streams ----------
   Stream<List<MenuCategory>> watchCategories() =>
       (select(menuCategories)
         ..orderBy([
@@ -166,23 +185,31 @@ class AppDatabase extends _$AppDatabase {
         ]))
           .watch();
 
-  Stream<List<DiningTable>> watchDiningTables() =>
-      select(diningTables).watch();
+  Stream<List<DiningTable>> watchDiningTables() => select(diningTables).watch();
 
   Stream<RestaurantSetting?> watchSettings() =>
-      (select(restaurantSettings)..where((t) => t.id.equals(1)))
-          .watchSingleOrNull();
+      (select(restaurantSettings)..where((t) => t.id.equals(1))).watchSingleOrNull();
+
+  // ---------- ORDERS ----------
+  Stream<List<OrderRow>> watchOrders({String? status}) {
+    final q = select(orders)
+      ..orderBy([
+            (t) => OrderingTerm(expression: t.openedAt, mode: OrderingMode.desc),
+            (t) => OrderingTerm(expression: t.id, mode: OrderingMode.desc),
+      ]);
+    if (status != null) {
+      q.where((t) => t.status.equals(status));
+    }
+    return q.watch();
+  }
 
   // ---------- CRUD helpers ----------
-  Future<void> upsertCategory(MenuCategoriesCompanion companion) =>
-      into(menuCategories).insertOnConflictUpdate(companion);
+  Future<void> upsertCategory(MenuCategoriesCompanion c) =>
+      into(menuCategories).insertOnConflictUpdate(c);
 
-  // MENU ITEMS
   Future<void> upsertMenuItem(MenuItemsCompanion c) async {
-    final String? rid =
-    c.remoteId.present ? c.remoteId.value : null; // 'rid' column
+    final String? rid = c.remoteId.present ? c.remoteId.value : null;
     if (rid == null || rid.isEmpty) {
-      // brand-new local item (no remote yet)
       await into(menuItems).insert(c);
       return;
     }
@@ -194,18 +221,15 @@ class AppDatabase extends _$AppDatabase {
     }
   }
 
-  // VARIANTS
-  // Inside AppDatabase (or an extension on it)
-  Future<void> upsertItemVariant(db.ItemVariantsCompanion c) async {
+  // ⬇️ no self-alias; use the generated companion directly
+  Future<void> upsertItemVariant(ItemVariantsCompanion c) async {
     final String? rid = c.remoteId.present ? c.remoteId.value : null;
     if (rid == null || rid.isEmpty) {
       await into(itemVariants).insert(c);
       return;
     }
-    final existing = await (select(itemVariants)
-      ..where((t) => t.remoteId.equals(rid)))
-        .getSingleOrNull();
-
+    final existing =
+    await (select(itemVariants)..where((t) => t.remoteId.equals(rid))).getSingleOrNull();
     if (existing == null) {
       await into(itemVariants).insert(c);
     } else {
@@ -213,15 +237,11 @@ class AppDatabase extends _$AppDatabase {
     }
   }
 
-  Future<void> upsertSettings(RestaurantSettingsCompanion companion) =>
-      into(restaurantSettings).insertOnConflictUpdate(companion);
+  Future<void> upsertSettings(RestaurantSettingsCompanion c) =>
+      into(restaurantSettings).insertOnConflictUpdate(c);
 
-  Future<void> addPendingOp(OpsJournalCompanion op) =>
-      into(opsJournal).insert(op);
-
-  Future<List<OpsJournalEntry>> getPendingOps() =>
-      select(opsJournal).get();
-
+  Future<void> addPendingOp(OpsJournalCompanion op) => into(opsJournal).insert(op);
+  Future<List<OpsJournalEntry>> getPendingOps() => select(opsJournal).get();
   Future<void> clearPendingOps(List<int> ids) =>
       (delete(opsJournal)..where((t) => t.id.isIn(ids))).go();
 
@@ -233,67 +253,47 @@ class AppDatabase extends _$AppDatabase {
     });
   }
 
-  Future<MenuCategory?> findCategoryByRid(String rid) {
-    return (select(menuCategories)..where((t) => t.remoteId.equals(rid)))
-        .getSingleOrNull();
-  }
+  Future<MenuCategory?> findCategoryByRid(String rid) =>
+      (select(menuCategories)..where((t) => t.remoteId.equals(rid))).getSingleOrNull();
 
-  Future<MenuItem?> findItemByRid(String rid) {
-    return (select(menuItems)..where((t) => t.remoteId.equals(rid)))
-        .getSingleOrNull();
-  }
+  Future<MenuItem?> findItemByRid(String rid) =>
+      (select(menuItems)..where((t) => t.remoteId.equals(rid))).getSingleOrNull();
 
-  Future<int?> localCategoryIdForRid(String rid) async {
-    final row = await findCategoryByRid(rid);
-    return row?.id;
-  }
+  Future<int?> localCategoryIdForRid(String rid) async =>
+      (await findCategoryByRid(rid))?.id;
 
-  Future<int?> localItemIdForRid(String rid) async {
-    final row = await findItemByRid(rid);
-    return row?.id;
-  }
+  Future<int?> localItemIdForRid(String rid) async =>
+      (await findItemByRid(rid))?.id;
 
   Future<void> deleteCategoryByRid(String rid) async {
-    final row =
-    await (select(menuCategories)..where((t) => t.remoteId.equals(rid)))
-        .getSingleOrNull();
+    final row = await (select(menuCategories)..where((t) => t.remoteId.equals(rid))).getSingleOrNull();
     if (row != null) {
       await (delete(menuCategories)..where((t) => t.id.equals(row.id))).go();
     }
   }
 
   Future<void> deleteItemByRid(String rid) async {
-    final row =
-    await (select(menuItems)..where((t) => t.remoteId.equals(rid)))
-        .getSingleOrNull();
+    final row = await (select(menuItems)..where((t) => t.remoteId.equals(rid))).getSingleOrNull();
     if (row != null) {
       await (delete(menuItems)..where((t) => t.id.equals(row.id))).go();
     }
   }
 
   Future<void> deleteVariantByRid(String rid) async {
-    final row =
-    await (select(itemVariants)..where((t) => t.remoteId.equals(rid)))
-        .getSingleOrNull();
+    final row = await (select(itemVariants)..where((t) => t.remoteId.equals(rid))).getSingleOrNull();
     if (row != null) {
       await (delete(itemVariants)..where((t) => t.id.equals(row.id))).go();
     }
   }
 
-
   Future<void> upsertDiningTable(DiningTablesCompanion c) async {
     final String? rid = c.remoteId.present ? c.remoteId.value : null;
-
     if (rid == null || rid.isEmpty) {
-      // Fall back to a plain insert if no remote id yet
       await into(diningTables).insert(c);
       return;
     }
-
-    final existing = await (select(diningTables)
-      ..where((t) => t.remoteId.equals(rid)))
-        .getSingleOrNull();
-
+    final existing =
+    await (select(diningTables)..where((t) => t.remoteId.equals(rid))).getSingleOrNull();
     if (existing == null) {
       await into(diningTables).insert(c);
     } else {
@@ -301,66 +301,73 @@ class AppDatabase extends _$AppDatabase {
     }
   }
 
+  Future<void> deleteRestaurantSettingsByRemoteId(String rid) async =>
+      (delete(restaurantSettings)..where((t) => t.remoteId.equals(rid))).go();
 
-  Future<void> deleteRestaurantSettingsByRemoteId(String rid) async {
-    await (delete(restaurantSettings)..where((t) => t.remoteId.equals(rid))).go();
-  }
+  Future<void> deleteDiningTableByRemoteId(String rid) async =>
+      (delete(diningTables)..where((t) => t.remoteId.equals(rid))).go();
 
-  Future<void> deleteDiningTableByRemoteId(String rid) async {
-    await (delete(diningTables)..where((t) => t.remoteId.equals(rid))).go();
-  }
-
-  Future<void> deleteItemVariantByRemoteId(String rid) async {
-    await (delete(itemVariants)..where((t) => t.remoteId.equals(rid))).go();
-  }
+  Future<void> deleteItemVariantByRemoteId(String rid) async =>
+      (delete(itemVariants)..where((t) => t.remoteId.equals(rid))).go();
 
   Future<void> deleteMenuItemByRemoteId(String rid) async {
     await transaction(() async {
-      final it = await (select(menuItems)..where((t) => t.remoteId.equals(rid)))
-          .getSingleOrNull();
+      final it =
+      await (select(menuItems)..where((t) => t.remoteId.equals(rid))).getSingleOrNull();
       if (it == null) return;
-
-      // delete variants for this item
       await (delete(itemVariants)..where((v) => v.itemId.equals(it.id))).go();
-      // delete the item itself
       await (delete(menuItems)..where((i) => i.id.equals(it.id))).go();
     });
   }
 
   Future<void> deleteMenuCategoryByRemoteId(String rid) async {
     await transaction(() async {
-      final cat = await (select(menuCategories)
-        ..where((t) => t.remoteId.equals(rid)))
-          .getSingleOrNull();
+      final cat =
+      await (select(menuCategories)..where((t) => t.remoteId.equals(rid))).getSingleOrNull();
       if (cat == null) return;
 
-      // find items under this category
-      final items = await (select(menuItems)
-        ..where((i) => i.categoryId.equals(cat.id)))
-          .get();
+      final items =
+      await (select(menuItems)..where((i) => i.categoryId.equals(cat.id))).get();
       final ids = items.map((e) => e.id).toList();
 
       if (ids.isNotEmpty) {
         await (delete(itemVariants)..where((v) => v.itemId.isIn(ids))).go();
         await (delete(menuItems)..where((i) => i.id.isIn(ids))).go();
       }
-
       await (delete(menuCategories)..where((c) => c.id.equals(cat.id))).go();
     });
   }
 
   Future<void> setItemImageByRemoteId(String remoteId, String? url) async {
-    final row = await (select(menuItems)..where((t) => t.remoteId.equals(remoteId)))
-        .getSingleOrNull();
-    if (row == null) {
-      // Row not in local DB yet; let the next sync bring it.
-      return;
-    }
-    await (update(menuItems)..where((t) => t.id.equals(row.id))).write(
-      MenuItemsCompanion(imageUrl: Value(url)),
-    );
+    final row =
+    await (select(menuItems)..where((t) => t.remoteId.equals(remoteId))).getSingleOrNull();
+    if (row == null) return;
+    await (update(menuItems)..where((t) => t.id.equals(row.id)))
+        .write(MenuItemsCompanion(imageUrl: Value(url)));
   }
 
+  // ---------- ORDERS: CRUD helpers ----------
+  Future<void> upsertOrder(OrdersCompanion c) async {
+    final String? rid = c.remoteId.present ? c.remoteId.value : null;
+    if (rid == null || rid.isEmpty) return;
+    final existing =
+    await (select(orders)..where((t) => t.remoteId.equals(rid))).getSingleOrNull();
+    if (existing == null) {
+      await into(orders).insert(c);
+    } else {
+      await (update(orders)..where((t) => t.id.equals(existing.id))).write(c);
+    }
+  }
+
+  Future<OrderRow?> findOrderByRid(String rid) =>
+      (select(orders)..where((t) => t.remoteId.equals(rid))).getSingleOrNull();
+
+  Future<void> deleteOrderByRid(String rid) async {
+    final row = await findOrderByRid(rid);
+    if (row != null) {
+      await (delete(orders)..where((t) => t.id.equals(row.id))).go();
+    }
+  }
 }
 
 // Keep your provider here or in providers.dart (you already expose one there)

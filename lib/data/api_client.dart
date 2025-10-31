@@ -1845,4 +1845,25 @@ class ApiClient {
     }
     throw Exception('Upload did not return a "path" field');
   }
+  // --- Branch update/delete ---
+  Future<void> updateBranch(String id, Map<String, dynamic> body) async {
+    await _patch('/identity/branches/$id', body: body);
+  }
+  Future<void> deleteBranch(String id) async {
+    await _delete('/identity/branches/$id');
+  }
+
+// --- DiningTable update/delete ---
+  Future<void> updateTable(String id, Map<String, dynamic> body) async {
+    await _patch('/dining/tables/$id', body: body);
+  }
+  Future<void> deleteTable(String id) async {
+    await _delete('/dining/tables/$id');
+  }
+
+// --- Printer delete ---
+  Future<void> deletePrinter(String id) async {
+    await _delete('/settings/printers/$id');
+  }
+
 }

@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:waah_frontend/app/providers.dart';
 // no direct import of api_client.dart needed here
 import 'package:waah_frontend/data/models.dart';
+import 'package:go_router/go_router.dart';
 
 /// Load all roles for my tenant.
 final rolesListProvider =

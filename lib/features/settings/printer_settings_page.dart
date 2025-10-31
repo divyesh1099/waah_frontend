@@ -1,671 +1,189 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:waah_frontend/app/providers.dart';
-import 'package:waah_frontend/data/api_client.dart';
-import 'package:waah_frontend/data/models.dart';
-
-/// bundle printers + stations in one async load for this branch
-final printerAndStationProvider =
-FutureProvider.autoDispose<_PrinterStationBundle>((ref) async {
-  final api = ref.watch(apiClientProvider);
-  final me = ref.watch(authControllerProvider).me;
-  final tenantId = me?.tenantId ?? '';
-  final branchId = ref.watch(activeBranchIdProvider);
-
-  if (tenantId.isEmpty || branchId.isEmpty) {
-    return const _PrinterStationBundle(
-      printers: [],
-      stations: [],
-    );
-  }
-
-  final printers = await api.listPrinters(
-    tenantId: tenantId,
-    branchId: branchId,
-  );
-
-  final stations = await api.listStations(
-    tenantId: tenantId,
-    branchId: branchId,
-  );
-
-  return _PrinterStationBundle(
-    printers: printers,
-    stations: stations,
-  );
-});
-
-class _PrinterStationBundle {
-  final List<Map<String, dynamic>> printers;
-  final List<Map<String, dynamic>> stations;
-  const _PrinterStationBundle({
-    required this.printers,
-    required this.stations,
-  });
-}
+import '../../app/providers.dart';
+import '../../data/models.dart';
+import '../../data/repo/settings_repo.dart';
 
 class PrinterSettingsPage extends ConsumerWidget {
   const PrinterSettingsPage({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final tenantId = ref.watch(authControllerProvider).me?.tenantId ?? '';
+    final repo = ref.watch(settingsRepoProvider);
+    final tenantId = ref.watch(activeTenantIdProvider);
     final branchId = ref.watch(activeBranchIdProvider);
 
-    final asyncData = ref.watch(printerAndStationProvider);
-
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Printers & Stations'),
+      appBar: AppBar(title: const Text('Printers')),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: branchId.isEmpty ? null : () => _openEditor(context, ref, tenantId, branchId),
+        icon: const Icon(Icons.add),
+        label: const Text('Add Printer'),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: asyncData.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, st) => Text(
-            'Failed to load: $e',
-            style: const TextStyle(color: Colors.red),
-          ),
-          data: (bundle) {
-            return ListView(
-              children: [
-                Text(
-                  'Tenant: $tenantId',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 14,
-                  ),
-                ),
-                Text(
-                  'Branch: $branchId',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.grey.shade700,
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                // Printers card
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Printers',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 16,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        if (bundle.printers.isEmpty)
-                          Text(
-                            'No printers configured.\nAdd at least one BILLING printer so invoices & cash drawer work.',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Colors.grey.shade600,
-                            ),
-                          )
-                        else
-                          Column(
-                            children: bundle.printers.map((p) {
-                              final name = (p['name'] ?? '').toString();
-                              final type = (p['type'] ?? '').toString();
-                              final conn =
-                              (p['connection_url'] ?? '').toString();
-                              final isDefault =
-                              p['is_default'] == true ? ' (default)' : '';
-                              final drawerEnabled =
-                                  p['cash_drawer_enabled'] == true;
-                              final drawerCode =
-                              (p['cash_drawer_code'] ?? '').toString();
-                              return ListTile(
-                                dense: true,
-                                title: Text('$name$isDefault'),
-                                subtitle: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'Type: $type  ·  $conn',
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                    if (drawerEnabled)
-                                      Text(
-                                        drawerCode.isEmpty
-                                            ? 'Cash drawer enabled'
-                                            : 'Cash drawer: $drawerCode',
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.brown,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                                trailing: IconButton(
-                                  icon: const Icon(Icons.edit),
-                                  onPressed: () {
-                                    // Optional future:
-                                    // showModalBottomSheet(...) with prefilled _AddPrinterSheet in "edit mode"
-                                    // then call api.updatePrinter(...)
-                                  },
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                        const SizedBox(height: 12),
-                        FilledButton.icon(
-                          onPressed: () async {
-                            final added =
-                            await showModalBottomSheet<bool>(
-                              context: context,
-                              isScrollControlled: true,
-                              useSafeArea: true,
-                              builder: (_) => const _AddPrinterSheet(),
-                            );
-
-                            if (added == true && context.mounted) {
-                              ref.invalidate(printerAndStationProvider);
-                            }
-                          },
-                          icon: const Icon(Icons.add),
-                          label: const Text('Add Printer'),
-                        ),
-                      ],
+      body: branchId.isEmpty
+          ? const Center(child: Text('Pick a branch first'))
+          : StreamBuilder<List<Printer>>(
+        stream: repo.watchPrinters(branchId),
+        initialData: const [],
+        builder: (c, snap) {
+          final items = snap.data ?? const [];
+          if (items.isEmpty) return const Center(child: Text('No printers yet'));
+          return ListView.separated(
+            padding: const EdgeInsets.all(12),
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemCount: items.length,
+            itemBuilder: (_, i) {
+              final p = items[i];
+              return ListTile(
+                leading: Icon(p.type == PrinterType.BILLING ? Icons.receipt_long : Icons.restaurant),
+                title: Text(p.name),
+                subtitle: Text([
+                  p.type.name,
+                  if ((p.connectionUrl ?? '').isNotEmpty) p.connectionUrl!,
+                  if (p.isDefault) 'Default',
+                  if (p.cashDrawerEnabled) 'Cash Drawer: ${p.cashDrawerCode ?? "enabled"}',
+                ].join(' • ')),
+                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                  if (p.type == PrinterType.BILLING)
+                    IconButton(
+                      icon: Icon(p.isDefault ? Icons.check_circle : Icons.radio_button_unchecked),
+                      tooltip: 'Make Default Billing',
+                      onPressed: () async {
+                        final updated = p.toJson()..['is_default'] = true;
+                        await ref.read(settingsRepoProvider).updatePrinterOptimistic(
+                          tenantId, branchId, Printer.fromJson(updated),
+                        );
+                      },
                     ),
+                  IconButton(
+                    icon: const Icon(Icons.edit),
+                    onPressed: () => _openEditor(context, ref, tenantId, branchId, initial: p),
+                    tooltip: 'Edit',
                   ),
-                ),
-
-                const SizedBox(height: 16),
-
-                // Kitchen Stations card
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment:
-                      CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Kitchen Stations',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 16,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        if (bundle.stations.isEmpty)
-                          Text(
-                            'No stations yet.\nAdd Tandoor / Chinese / Billing etc so KOT routing works.',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Colors.grey.shade600,
-                            ),
-                          )
-                        else
-                          Column(
-                            children: bundle.stations.map((st) {
-                              final name =
-                              (st['name'] ?? '').toString();
-                              final printerId =
-                              (st['printer_id'] ?? '').toString();
-                              return ListTile(
-                                dense: true,
-                                title: Text(name),
-                                subtitle: Text(
-                                  printerId.isEmpty
-                                      ? 'No printer linked'
-                                      : 'Printer: $printerId',
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                                trailing: IconButton(
-                                  icon: const Icon(Icons.edit),
-                                  onPressed: () {
-                                    // Optional future:
-                                    // show bottom sheet with station edit
-                                  },
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                        const SizedBox(height: 12),
-                        FilledButton.icon(
-                          onPressed: () async {
-                            final added =
-                            await showModalBottomSheet<bool>(
-                              context: context,
-                              isScrollControlled: true,
-                              useSafeArea: true,
-                              builder: (_) => _AddStationSheet(
-                                printers: bundle.printers,
-                              ),
-                            );
-
-                            if (added == true && context.mounted) {
-                              ref.invalidate(printerAndStationProvider);
-                            }
-                          },
-                          icon: const Icon(Icons.add),
-                          label: const Text('Add Station'),
-                        ),
-                      ],
-                    ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () => _confirmDelete(context, ref, tenantId, branchId, p.id!),
+                    tooltip: 'Delete',
                   ),
-                ),
-              ],
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
-
-/// Bottom sheet to CREATE a printer.
-/// Calls POST /settings/printers via ApiClient.createPrinter(...)
-class _AddPrinterSheet extends ConsumerStatefulWidget {
-  const _AddPrinterSheet();
-
-  @override
-  ConsumerState<_AddPrinterSheet> createState() => _AddPrinterSheetState();
-}
-
-class _AddPrinterSheetState extends ConsumerState<_AddPrinterSheet> {
-  final _nameCtl = TextEditingController();
-  final _urlCtl = TextEditingController();
-  final _drawerCodeCtl = TextEditingController();
-
-  String _type = 'BILLING'; // BILLING or KITCHEN
-  bool _drawerEnabled = false;
-
-  bool _saving = false;
-  String? _err;
-
-  @override
-  void dispose() {
-    _nameCtl.dispose();
-    _urlCtl.dispose();
-    _drawerCodeCtl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    final tenantId =
-        ref.read(authControllerProvider).me?.tenantId ?? '';
-    final branchId = ref.read(activeBranchIdProvider);
-
-    final name = _nameCtl.text.trim();
-    final url = _urlCtl.text.trim();
-
-    if (tenantId.isEmpty || branchId.isEmpty) {
-      setState(() {
-        _err = 'Missing tenant/branch';
-      });
-      return;
-    }
-    if (name.isEmpty || url.isEmpty) {
-      setState(() {
-        _err = 'Name and connection URL are required';
-      });
-      return;
-    }
-
-    setState(() {
-      _saving = true;
-      _err = null;
-    });
-
-    try {
-      await ref.read(apiClientProvider).createPrinter(
-        tenantId: tenantId,
-        branchId: branchId,
-        name: name,
-        type: _type,
-        connectionUrl: url,
-        cashDrawerEnabled:
-        _type == 'BILLING' ? _drawerEnabled : false,
-        cashDrawerCode: _type == 'BILLING' && _drawerEnabled
-            ? _drawerCodeCtl.text.trim()
-            : null,
-      );
-
-      if (!mounted) return;
-      Navigator.pop(context, true);
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _err = e.toString();
-        });
-      }
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
-
-    // Only show drawer options when type == BILLING
-    final showDrawerStuff = _type == 'BILLING';
-
-    return SingleChildScrollView(
-      padding: EdgeInsets.only(
-        left: 16,
-        right: 16,
-        top: 16,
-        bottom: bottomInset + 16,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Add Printer',
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              fontSize: 16,
-            ),
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _nameCtl,
-            decoration: const InputDecoration(
-              labelText: 'Printer Name *',
-              helperText: 'Example: Billing Printer, Kitchen Printer',
-            ),
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            value: _type,
-            items: const [
-              DropdownMenuItem(
-                value: 'BILLING',
-                child: Text('BILLING (Invoices / Cash drawer)'),
-              ),
-              DropdownMenuItem(
-                value: 'KITCHEN',
-                child: Text('KITCHEN (KOT / Station)'),
-              ),
-            ],
-            onChanged: (val) {
-              if (val == null) return;
-              setState(() {
-                _type = val;
-                if (_type != 'BILLING') {
-                  _drawerEnabled = false;
-                  _drawerCodeCtl.clear();
-                }
-              });
-            },
-            decoration: const InputDecoration(
-              labelText: 'Type',
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _urlCtl,
-            decoration: const InputDecoration(
-              labelText: 'Connection URL *',
-              helperText:
-              'Example: http://192.168.0.50:9100/agent (your local print agent)',
-            ),
-          ),
-          const SizedBox(height: 12),
-
-          if (showDrawerStuff) ...[
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              value: _drawerEnabled,
-              title: const Text('Cash drawer enabled'),
-              onChanged: (v) {
-                setState(() {
-                  _drawerEnabled = v;
-                });
-              },
-            ),
-            const SizedBox(height: 8),
-            if (_drawerEnabled)
-              TextField(
-                controller: _drawerCodeCtl,
-                decoration: const InputDecoration(
-                  labelText: 'Drawer Kick Code',
-                  helperText: 'Example: PULSE_2_100',
-                ),
-              ),
-            const SizedBox(height: 12),
-          ],
-
-          if (_err != null) ...[
-            Text(
-              _err!,
-              style: TextStyle(
-                color: Colors.red.shade700,
-                fontWeight: FontWeight.w600,
-                fontSize: 13,
-              ),
-            ),
-            const SizedBox(height: 12),
-          ],
-
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed:
-                  _saving ? null : () => Navigator.pop(context, false),
-                  child: const Text('Cancel'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton(
-                  onPressed: _saving ? null : _save,
-                  child: _saving
-                      ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                      : const Text('Save'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Bottom sheet to CREATE a kitchen station (like "Tandoor", "Chinese")
-/// Calls POST /settings/stations via ApiClient.createStation(...)
-class _AddStationSheet extends ConsumerStatefulWidget {
-  const _AddStationSheet({
-    required this.printers,
-  });
-
-  final List<Map<String, dynamic>> printers;
-
-  @override
-  ConsumerState<_AddStationSheet> createState() =>
-      _AddStationSheetState();
-}
-
-class _AddStationSheetState extends ConsumerState<_AddStationSheet> {
-  final _nameCtl = TextEditingController();
-  String? _printerId;
-
-  bool _saving = false;
-  String? _err;
-
-  @override
-  void initState() {
-    super.initState();
-    // default to first printer (usually kitchen printer)
-    if (widget.printers.isNotEmpty) {
-      _printerId = widget.printers.first['id']?.toString();
-    }
-  }
-
-  @override
-  void dispose() {
-    _nameCtl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    final tenantId =
-        ref.read(authControllerProvider).me?.tenantId ?? '';
-    final branchId = ref.read(activeBranchIdProvider);
-
-    final name = _nameCtl.text.trim();
-    final printerId = _printerId;
-
-    if (tenantId.isEmpty || branchId.isEmpty) {
-      setState(() {
-        _err = 'Missing tenant/branch';
-      });
-      return;
-    }
-    if (name.isEmpty) {
-      setState(() {
-        _err = 'Station name is required';
-      });
-      return;
-    }
-
-    setState(() {
-      _saving = true;
-      _err = null;
-    });
-
-    try {
-      // Build a KitchenStation model for createStation(...)
-      // Assumes KitchenStation has named params:
-      //   tenantId, branchId, name, printerId
-      // and toJson() maps them to the backend keys.
-      final station = KitchenStation(
-        tenantId: tenantId,
-        branchId: branchId,
-        name: name,
-        printerId: (printerId == null || printerId.isEmpty)
-            ? null
-            : printerId,
-      );
-
-      await ref.read(apiClientProvider).createStation(station);
-
-      if (!mounted) return;
-      Navigator.pop(context, true);
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _err = e.toString();
-        });
-      }
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
-
-    return SingleChildScrollView(
-      padding: EdgeInsets.only(
-        left: 16,
-        right: 16,
-        top: 16,
-        bottom: bottomInset + 16,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Add Station',
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              fontSize: 16,
-            ),
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _nameCtl,
-            decoration: const InputDecoration(
-              labelText: 'Station Name *',
-              helperText:
-              'Examples: Billing, Tandoor, Chinese, Bar',
-            ),
-          ),
-          const SizedBox(height: 12),
-
-          DropdownButtonFormField<String>(
-            value: _printerId,
-            items: widget.printers.map((p) {
-              final pid = (p['id'] ?? '').toString();
-              final pname = (p['name'] ?? '').toString();
-              final ptype = (p['type'] ?? '').toString();
-              return DropdownMenuItem<String>(
-                value: pid,
-                child: Text('$pname ($ptype)'),
+                ]),
               );
-            }).toList(),
-            onChanged: (val) {
-              setState(() {
-                _printerId = val;
-              });
             },
-            decoration: const InputDecoration(
-              labelText: 'Printer to send KOTs',
-              helperText: 'Optional but recommended',
-            ),
-          ),
-          const SizedBox(height: 12),
+          );
+        },
+      ),
+    );
+  }
 
-          if (_err != null) ...[
-            Text(
-              _err!,
-              style: TextStyle(
-                color: Colors.red.shade700,
-                fontWeight: FontWeight.w600,
-                fontSize: 13,
-              ),
-            ),
-            const SizedBox(height: 12),
-          ],
+  Future<void> _openEditor(
+      BuildContext context,
+      WidgetRef ref,
+      String tenantId,
+      String branchId, {
+        Printer? initial,
+      }) async {
+    final nameCtl = TextEditingController(text: initial?.name ?? '');
+    final urlCtl  = TextEditingController(text: initial?.connectionUrl ?? '');
+    final drawerCtl = TextEditingController(text: initial?.cashDrawerCode ?? '');
+    var type = initial?.type ?? PrinterType.BILLING;
+    var isDefault = initial?.isDefault ?? (type == PrinterType.BILLING);
+    var drawer = initial?.cashDrawerEnabled ?? false;
 
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed:
-                  _saving ? null : () => Navigator.pop(context, false),
-                  child: const Text('Cancel'),
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogCtx) {
+        var closing = false;
+        void safePop(bool v) { if (!closing) { closing = true; Navigator.of(dialogCtx).pop(v); } }
+
+        return StatefulBuilder(builder: (c, setState) {
+          return AlertDialog(
+            title: Text(initial == null ? 'Add Printer' : 'Edit Printer'),
+            content: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                TextField(controller: nameCtl,  decoration: const InputDecoration(labelText: 'Name'), autofocus: true),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<PrinterType>(
+                  value: type,
+                  decoration: const InputDecoration(labelText: 'Type'),
+                  items: PrinterType.values.map((t) => DropdownMenuItem(value: t, child: Text(t.name))).toList(),
+                  onChanged: (v) => setState(() {
+                    type = v ?? PrinterType.BILLING;
+                    if (type == PrinterType.KITCHEN) isDefault = false;
+                  }),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton(
-                  onPressed: _saving ? null : _save,
-                  child: _saving
-                      ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                      : const Text('Save'),
+                const SizedBox(height: 8),
+                TextField(controller: urlCtl,     decoration: const InputDecoration(labelText: 'Connection URL (e.g. http://ip:9100/print)')),
+                const SizedBox(height: 8),
+                if (type == PrinterType.BILLING)
+                  SwitchListTile(
+                    title: const Text('Default Billing Printer'),
+                    value: isDefault,
+                    onChanged: (v) => setState(() => isDefault = v),
+                  ),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  title: const Text('Cash Drawer Enabled'),
+                  value: drawer,
+                  onChanged: (v) => setState(() => drawer = v),
                 ),
-              ),
+                if (drawer)
+                  TextField(controller: drawerCtl, decoration: const InputDecoration(labelText: 'Cash Drawer Code (optional)')),
+              ]),
+            ),
+            actions: [
+              TextButton(onPressed: () => safePop(false), child: const Text('Cancel')),
+              FilledButton(onPressed: () => safePop(true), child: const Text('Save')),
             ],
-          ),
+          );
+        });
+      },
+    );
+    if (ok != true) return;
+
+    final repo = ref.read(settingsRepoProvider);
+    final p = Printer(
+      id: initial?.id ?? 'tmp-${DateTime.now().millisecondsSinceEpoch}',
+      tenantId: tenantId,
+      branchId: branchId,
+      name: nameCtl.text.trim(),
+      type: type,
+      connectionUrl: urlCtl.text.trim().isEmpty ? null : urlCtl.text.trim(),
+      isDefault: type == PrinterType.BILLING ? isDefault : false,
+      cashDrawerEnabled: drawer,
+      cashDrawerCode: drawerCtl.text.trim().isEmpty ? null : drawerCtl.text.trim(),
+    );
+
+    if (initial == null) {
+      await repo.createPrinterOptimistic(tenantId, branchId, p);
+    } else {
+      await repo.updatePrinterOptimistic(tenantId, branchId, p);
+    }
+  }
+
+  Future<void> _confirmDelete(
+      BuildContext context,
+      WidgetRef ref,
+      String tenantId,
+      String branchId,
+      String id,
+      ) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Printer?'),
+        content: const Text('This will remove the printer. Works offline (queued).'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton.tonal(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
         ],
       ),
     );
+    if (ok == true) {
+      await ref.read(settingsRepoProvider).deletePrinterOptimistic(tenantId, branchId, id);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Printer deleted')));
+      }
+    }
   }
 }

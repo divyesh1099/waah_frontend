@@ -8,6 +8,7 @@ import 'package:waah_frontend/data/local/app_db.dart'; // Drift DB
 import 'package:waah_frontend/data/repo/settings_repo.dart';
 import 'package:waah_frontend/features/auth/auth_controller.dart';
 import '../data/models.dart';
+import '../data/repo/orders_repo.dart';
 
 final mediaBaseUrlProvider = Provider<String>((ref) => '$kBaseUrl/media/');
 
@@ -157,4 +158,30 @@ final localDatabaseProvider = Provider<AppDatabase>((ref) {
   final db = AppDatabase.open();
   ref.onDispose(db.close);
   return db;
+});
+
+// ✅ Repo
+final ordersRepoProvider = Provider<OrdersRepo>((ref) {
+  final db  = ref.watch(localDatabaseProvider);
+  final api = ref.watch(apiClientProvider);
+  return OrdersRepo(db, api);
+});
+
+// ✅ Local-first list stream (per status), with silent refresh
+final ordersLocalProvider = StreamProvider.autoDispose.family<List<OrderRow>, OrderStatus?>((ref, status) {
+  final repo = ref.watch(ordersRepoProvider);
+
+  // kick a silent refresh (non-blocking)
+  final tenantId = ref.watch(activeTenantIdProvider);
+  final branchId = ref.watch(activeBranchIdProvider);
+  // ignore errors; stream will still show cached data
+  repo.refresh(status: status, tenantId: tenantId, branchId: branchId).catchError((_) {});
+
+  return repo.watch(status);
+});
+
+// ✅ Detail with offline fallback (wrap repo.detail)
+final orderDetailCachedProvider = FutureProvider.autoDispose.family<OrderDetail, String>((ref, orderId) async {
+  final repo = ref.watch(ordersRepoProvider);
+  return repo.detail(orderId);
 });

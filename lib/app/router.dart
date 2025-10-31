@@ -37,6 +37,7 @@ import 'package:waah_frontend/features/settings/settings_page.dart';
 import 'package:waah_frontend/features/settings/branch_settings_page.dart';
 import 'package:waah_frontend/features/settings/printer_settings_page.dart';
 import 'package:waah_frontend/features/settings/branch_select_page.dart';
+import 'package:waah_frontend/features/settings/table_settings_page.dart';
 
 /// Small gate that redirects after the first frame based on auth state.
 /// Ensures /auth/me is fetched and adopts me.branchId into activeBranchId.
@@ -185,19 +186,25 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           // SETTINGS LANDING
           GoRoute(
             path: '/settings',
-            builder: (c, s) => const SettingsPage(),
-          ),
-
-          // SETTINGS - BRANCH / RESTAURANT PROFILE
-          GoRoute(
-            path: '/settings/branch',
-            builder: (c, s) => const BranchSettingsPage(),
-          ),
-
-          // SETTINGS - PRINTERS / STATIONS
-          GoRoute(
-            path: '/settings/printers',
-            builder: (c, s) => const PrinterSettingsPage(),
+            name: 'settings',
+            builder: (context, state) => const SettingsPage(),
+            routes: [
+              GoRoute(
+                path: 'branch',
+                name: 'settings-branch',
+                builder: (context, state) => const BranchSettingsPage(),
+              ),
+              GoRoute(
+                path: 'tables',
+                name: 'settings-tables',
+                builder: (context, state) => const TableSettingsPage(),
+              ),
+              GoRoute(
+                path: 'printers',
+                name: 'settings-printers',
+                builder: (context, state) => const PrinterSettingsPage(),
+              ),
+            ],
           ),
 
           // ORDERS LIST
