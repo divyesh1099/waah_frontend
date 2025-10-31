@@ -14,6 +14,8 @@ import 'package:waah_frontend/features/menu/menu_item_detail_page.dart';
 import 'package:waah_frontend/widgets/menu_media.dart';
 import 'dart:async';
 
+import 'menu_csv_import_page.dart';
+
 /// ---------------------------------------------------------------------------
 /// PROVIDERS (Refactored for Offline-First)
 /// ---------------------------------------------------------------------------
@@ -86,7 +88,17 @@ class MenuPage extends ConsumerWidget {
                 );
               }
             },
-          )
+          ),
+          IconButton(
+            icon: const Icon(Icons.upload_file),
+            tooltip: 'Import CSV',
+            onPressed: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const MenuCsvImportPage()),
+              );
+            },
+          ),
+
         ],
       ),
       floatingActionButton: FloatingActionButton(

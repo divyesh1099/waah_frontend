@@ -9,6 +9,7 @@ import 'package:waah_frontend/app/providers.dart';
 import 'package:waah_frontend/data/api_client.dart';
 import 'package:waah_frontend/data/local/app_db.dart';
 import 'package:waah_frontend/data/models.dart' as api;
+import 'package:dio/dio.dart' as dio;
 
 class CatalogRepo {
   CatalogRepo(this._client, this._db);
@@ -341,6 +342,186 @@ class CatalogRepo {
       }
     } catch (_) {}
   }
+
+  // --------- CSV Import helpers (idempotent “find-or-create”) ---------
+
+  Future<MenuCategory?> _findLocalCategoryByNameCI(String name) async {
+    final rows = await _db.select(_db.menuCategories).get();
+    final n = name.trim().toLowerCase();
+    for (final r in rows) {
+      if (r.name.trim().toLowerCase() == n) return r;
+    }
+    return null;
+  }
+
+  Future<MenuItem?> _findLocalItemByNameCI(int localCategoryId, String name) async {
+    final rows = await (_db.select(_db.menuItems)
+      ..where((t) => t.categoryId.equals(localCategoryId)))
+        .get();
+    final n = name.trim().toLowerCase();
+    for (final r in rows) {
+      if (r.name.trim().toLowerCase() == n) return r;
+    }
+    return null;
+  }
+
+  Future<ItemVariant?> _findLocalVariantByLabelCI(int localItemId, String label) async {
+    final rows = await (_db.select(_db.itemVariants)
+      ..where((t) => t.itemId.equals(localItemId)))
+        .get();
+    final n = label.trim().toLowerCase();
+    for (final r in rows) {
+      if (r.label.trim().toLowerCase() == n) return r;
+    }
+    return null;
+  }
+
+  /// Returns (localCategoryId, remoteCategoryId)
+  Future<(int, String)> ensureCategoryByName({
+    required String name,
+    required String tenantId,
+    required String branchId,
+  }) async {
+    final existing = await _findLocalCategoryByNameCI(name);
+    if (existing != null && (existing.remoteId ?? '').isNotEmpty) {
+      return (existing.id, existing.remoteId!);
+    }
+
+    // create on server (this upserts locally via createCategory-> _upsertLocalCategoryFromApi)
+    final out = await addCategory(
+      name,
+      tenantId: tenantId,
+      branchId: branchId,
+      position: existing?.position ?? 0,
+    );
+
+    final after = await _findLocalCategoryByNameCI(name);
+    if (after == null || (after.remoteId ?? '').isEmpty) {
+      throw StateError('Category "$name" not created properly');
+    }
+    return (after.id, after.remoteId!);
+  }
+
+  /// Returns remoteItemId
+  Future<String> ensureItemByName({
+    required String itemName,
+    required String remoteCategoryId,
+    required String tenantId,
+    String? description,
+    bool isActive = true,
+    bool stockOut = false,
+    bool taxInclusive = true,
+    double gstRate = 5.0,
+    String? sku,
+    String? hsn,
+  }) async {
+    // map remote category -> local id
+    final localCatId = await _db.localCategoryIdForRid(remoteCategoryId);
+    if (localCatId != null) {
+      final existingLocal = await _findLocalItemByNameCI(localCatId, itemName);
+      if (existingLocal != null && (existingLocal.remoteId ?? '').isNotEmpty) {
+        return existingLocal.remoteId!;
+      }
+    }
+
+    // Create on server; local upsert occurs via createItem->_upsertLocalItemFromApi
+    final created = await createItem(api.MenuItem(
+      id: null,
+      tenantId: tenantId,
+      categoryId: remoteCategoryId,
+      name: itemName,
+      description: description,
+      isActive: isActive,
+      stockOut: stockOut,
+      taxInclusive: taxInclusive,
+      gstRate: gstRate,
+      sku: sku,
+      hsn: hsn,
+    ));
+    final rid = created.id ?? '';
+    if (rid.isEmpty) throw StateError('Item "$itemName" did not return id');
+
+    return rid;
+  }
+
+  Future<void> ensureVariantByLabel({
+    required String remoteItemId,
+    required String label,
+    required double basePrice,
+    double? mrp,
+    bool isDefault = false,
+  }) async {
+    final localItemId = await _db.localItemIdForRid(remoteItemId);
+    if (localItemId != null) {
+      final existing = await _findLocalVariantByLabelCI(localItemId, label);
+      if (existing != null) {
+        // Update if needed
+        await updateVariant(api.ItemVariant(
+          id: existing.remoteId, // might be null; server will ignore if missing
+          itemId: remoteItemId,
+          label: label,
+          mrp: mrp ?? basePrice,
+          basePrice: basePrice,
+          isDefault: isDefault,
+        ));
+        return;
+      }
+    }
+
+    // Create
+    await createVariant(
+      remoteItemId,
+      api.ItemVariant(
+        id: null,
+        itemId: remoteItemId,
+        label: label,
+        mrp: mrp ?? basePrice,
+        basePrice: basePrice,
+        isDefault: isDefault,
+      ),
+    );
+  }
+
+  /// Download an image from a public HTTP/HTTPS URL and attach to item
+  Future<void> uploadItemImageFromHttpUrl({
+    required String itemId, // remote id
+    required String imageUrl,
+  }) async {
+    final u = imageUrl.trim();
+    if (!(u.startsWith('http://') || u.startsWith('https://'))) return;
+
+    final d = dio.Dio();
+    final resp = await d.get<List<int>>(
+      u,
+      options: dio.Options(responseType: dio.ResponseType.bytes),
+    );
+    if (resp.data == null) return;
+
+    String _inferMime(String name) {
+      final lower = name.toLowerCase();
+      if (lower.endsWith('.png')) return 'image/png';
+      if (lower.endsWith('.webp')) return 'image/webp';
+      if (lower.endsWith('.gif')) return 'image/gif';
+      return 'image/jpeg';
+    }
+
+    final filename = Uri.parse(u).pathSegments.isNotEmpty
+        ? Uri.parse(u).pathSegments.last
+        : 'image.jpg';
+
+    final url = await _client.uploadItemImage(
+      itemId: itemId,
+      bytes: resp.data!,
+      filename: filename,
+      contentType: _inferMime(filename),
+    );
+
+    // update-only locally
+    try {
+      await _db.setItemImageByRemoteId(itemId, url);
+    } catch (_) {}
+  }
+
 }
 
 final catalogRepoProvider = Provider<CatalogRepo>((ref) {
