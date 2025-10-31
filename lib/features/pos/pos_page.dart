@@ -1,8 +1,41 @@
-﻿import 'package:flutter/material.dart';
+﻿import 'dart:async';
+
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:waah_frontend/app/providers.dart';
 import 'package:waah_frontend/data/models.dart';
 import 'package:waah_frontend/widgets/menu_media.dart';
+import 'dart:convert' as convert;
+import 'dart:math';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../data/api_client.dart';
+
+// --- FAST CACHES for variants & modifiers (cleared on app restart) ---
+final Map<String, List<ItemVariant>> _variantsCache = {};
+final Map<String, List<_ItemModifierGroupData>> _modsCache = {};
+
+Future<List<ItemVariant>> _getVariantsCached(WidgetRef ref, String itemId) async {
+  final hit = _variantsCache[itemId];
+  if (hit != null) return hit;
+  final client = ref.read(apiClientProvider);
+  final res = await client.fetchVariants(itemId);
+  _variantsCache[itemId] = res;
+  return res;
+}
+
+Future<List<_ItemModifierGroupData>> _getModsCached(WidgetRef ref, String itemId) async {
+  final hit = _modsCache[itemId];
+  if (hit != null) return hit;
+  final client = ref.read(apiClientProvider);
+  final raw = await client.fetchItemModifierGroups(itemId);
+  final parsed = raw.map<_ItemModifierGroupData>(
+        (g) => _ItemModifierGroupData.fromRaw(Map<String, dynamic>.from(g)),
+  ).toList();
+  _modsCache[itemId] = parsed;
+  return parsed;
+}
+
 
 /// ------------------------------------------------------------
 /// PROVIDERS: categories, items, tables, cart
@@ -365,35 +398,13 @@ class PosPage extends ConsumerWidget {
         title: const Text('POS'),
         actions: [
           IconButton(
-            tooltip: 'Sync Online',
+            tooltip: 'Sync queued ops',
             icon: const Icon(Icons.sync),
-            onPressed: () async {
-              final client = ref.read(apiClientProvider);
-              try {
-                await client.syncPush(
-                  deviceId: 'flutter-pos',
-                  ops: const [
-                    {
-                      'entity': 'ping',
-                      'entity_id': 'flutter-pos',
-                      'op': 'UPSERT',
-                      'payload': {'hello': 'pos'}
-                    }
-                  ],
-                );
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Sync pushed ✅')),
-                  );
-                }
-              } catch (e) {
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Sync failed: $e')),
-                  );
-                }
-              }
-            },
+              onPressed: () async {
+                await pushQueueNow(context, ref);
+                // If you have one, invalidate your orders list here:
+                // ref.invalidate(ordersProvider);
+              },
           ),
           IconButton(
             tooltip: 'Refresh menu',
@@ -450,72 +461,64 @@ class PosPage extends ConsumerWidget {
                         : maxWidth >= 560
                         ? 3
                         : 2;
+                    // Prefetch for the first few visible items (no await → non-blocking)
+                    for (final it in items.take(12)) {
+                      final id = it.id;
+                      if (id != null && id.isNotEmpty) {
+                        unawaited(_getVariantsCached(ref, id));
+                        unawaited(_getModsCached(ref, id));
+                      }
+                    }
 
                     return Scrollbar(
                       child: GridView.builder(
+                        primary: true, // ← ensures it binds to the PrimaryScrollController
                         padding: const EdgeInsets.all(12),
-                        gridDelegate:
-                        SliverGridDelegateWithFixedCrossAxisCount(
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                           crossAxisCount: cross,
                           mainAxisSpacing: 12,
                           crossAxisSpacing: 12,
-                          // Compact card to avoid covering background visually
                           childAspectRatio: 3 / 4,
                         ),
                         itemCount: items.length,
-                        itemBuilder: (_, i) {
-                          final it = items[i];
-                          return _ItemCard(
-                            item: it,
+                                                  itemBuilder: (_, i) {
+                                              final item = items[i];
+                                              return _ItemCard(
+                                                item: item,
                             onTap: () async {
-                              final client = ref.read(apiClientProvider);
+                              if ((item.id ?? '').isEmpty) return;
+                              // fetch both in parallel (and cached)
+                              final results = await Future.wait([
+                    _getVariantsCached(ref, item.id!),
+                    _getModsCached(ref, item.id!),
+                              ]);
+                              final variants = results[0] as List<ItemVariant>;
+                              final modifierGroups = results[1] as List<_ItemModifierGroupData>;
 
-                              // 1. fetch variants
-                              final variants =
-                              await client.fetchVariants(it.id ?? '');
-
-                              // 2. fetch modifier groups (+mods) from backend
-                              final rawGroups =
-                              await client.fetchItemModifierGroups(
-                                  it.id ?? '');
-                              final modifierGroups = rawGroups
-                                  .map<_ItemModifierGroupData>(
-                                    (g) => _ItemModifierGroupData.fromRaw(
-                                  Map<String, dynamic>.from(g),
-                                ),
-                              )
-                                  .toList();
-
-                              // 3. bottom sheet (variant + modifiers + qty)
                               if (!context.mounted) return;
-                              final res =
-                              await showModalBottomSheet<_AddResult>(
+                              final res = await showModalBottomSheet<_AddResult>(
                                 context: context,
                                 isScrollControlled: true,
                                 builder: (_) => _AddToCartSheet(
-                                  item: it,
+                                  item: item,
                                   variants: variants,
                                   modifierGroups: modifierGroups,
                                 ),
                               );
                               if (res == null) return;
 
-                              // 4. add to cart
                               ref.read(posCartProvider.notifier).addItem(
-                                item: it,
+                                item: item,
                                 variant: res.variant,
                                 modifiers: res.modifiers,
                                 qty: res.qty.toDouble(),
                               );
 
-                              // 5. toast
                               if (context.mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
-                                    content: Text(
-                                        '${it.name} x${res.qty} added to cart'),
-                                    duration:
-                                    const Duration(milliseconds: 800),
+                                    content: Text('${item.name} x${res.qty} added to cart'),
+                                    duration: const Duration(milliseconds: 800),
                                   ),
                                 );
                               }
@@ -576,6 +579,7 @@ class _CategoryBar extends ConsumerWidget {
     return SizedBox(
       height: 56,
       child: ListView.separated(
+        primary: false,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         scrollDirection: Axis.horizontal,
         itemCount: categories.length + 1, // + All chip
@@ -1050,6 +1054,201 @@ class _AddToCartSheetState extends State<_AddToCartSheet> {
   }
 }
 
+/// ---------------- OFFLINE QUEUE (Ops Journal) ----------------
+
+const _kOpsQueueKey = 'pos_offline_ops_v1';
+const _kDeviceId    = 'flutter-pos';
+
+Future<List<Map<String, dynamic>>> _readQueuedOps(WidgetRef ref) async {
+  final prefs = ref.read(prefsProvider);
+  final raw = prefs.getString(_kOpsQueueKey);
+  if (raw == null || raw.trim().isEmpty) return <Map<String, dynamic>>[];
+  final decoded = convert.jsonDecode(raw);
+  if (decoded is List) {
+    return decoded.cast<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+  return <Map<String, dynamic>>[];
+}
+
+Future<void> _writeQueuedOps(WidgetRef ref, List<Map<String, dynamic>> ops) async {
+  final prefs = ref.read(prefsProvider);
+  await prefs.setString(_kOpsQueueKey, convert.jsonEncode(ops));
+}
+
+Future<void> _enqueueOps(WidgetRef ref, List<Map<String, dynamic>> newOps) async {
+  final cur = await _readQueuedOps(ref);
+  cur.addAll(newOps);
+  await _writeQueuedOps(ref, cur);
+}
+
+Future<int> _queuedCount(WidgetRef ref) async {
+  final cur = await _readQueuedOps(ref);
+  return cur.length;
+}
+
+/// Pushes everything in one call to /sync/push. Clears queue on success.
+Future<void> pushQueueNow(BuildContext ctx, WidgetRef ref) async {
+  final client = ref.read(apiClientProvider);
+  final ops = await _readQueuedOps(ref);
+  if (ops.isEmpty) {
+    if (ctx.mounted) {
+      ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Nothing to sync')));
+    }
+    return;
+  }
+
+  try {
+    await client.syncPush(deviceId: _kDeviceId, ops: ops);
+    await _writeQueuedOps(ref, []);
+    if (ctx.mounted) {
+      ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Synced ${ops.length} op(s) ✅')));
+    }
+  } catch (e) {
+    if (ctx.mounted) {
+      ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Sync failed: $e')));
+    }
+  }
+}
+
+/// Build a compact batch of checkout ops for one order (OPEN → ADD_ITEM* → FIRE_KOT → PAY → INVOICE → PRINT → DRAWER)
+List<Map<String, dynamic>> buildCheckoutOps({
+  required String orderNo,
+  required String tenantId,
+  required String branchId,
+  required OrderChannel channel,
+  required int? pax,
+  required String? tableId,
+  required List<CartLine> lines,
+  required double amountDueHint,
+}) {
+  String rid(String pfx, int i) =>
+      '$pfx-${DateTime.now().millisecondsSinceEpoch}-${i}-${Random().nextInt(1<<32)}';
+
+  final ops = <Map<String, dynamic>>[];
+
+  // OPEN ORDER
+  ops.add({
+    'entity': 'order',
+    'entity_id': orderNo,     // client-supplied id; server should map to real id
+    'op': 'OPEN',
+    'payload': {
+      'tenant_id': tenantId,
+      'branch_id': branchId,
+      'order_no': orderNo,
+      'channel': channel.name,
+      if (pax != null) 'pax': pax,
+      if (tableId != null) 'table_id': tableId,
+      'note': null,
+    },
+  });
+
+  // ADD ITEMS
+  for (var i = 0; i < lines.length; i++) {
+    final l = lines[i];
+    ops.add({
+      'entity': 'order_item',
+      'entity_id': rid('oi', i), // client-generated row id (just for de-dupe)
+      'op': 'ADD',
+      'payload': {
+        'order_no': orderNo,
+        'item_id': l.item.id,
+        'variant_id': l.variant?.id,
+        'qty': l.qty,
+        'unit_price': l.unitPrice,
+        'modifiers': l.modifiers.map((m) => {
+          'modifier_id': m.id ?? m.name,
+          'qty': 1,
+          'price_delta': m.priceDelta,
+        }).toList(),
+      },
+    });
+  }
+
+  // FIRE KOT
+  ops.add({
+    'entity': 'kot',
+    'entity_id': orderNo,
+    'op': 'FIRE',
+    'payload': {'order_no': orderNo, 'station_id': null},
+  });
+
+  // PAY (cash)
+  ops.add({
+    'entity': 'payment',
+    'entity_id': orderNo,
+    'op': 'PAY',
+    'payload': {
+      'order_no': orderNo,
+      'mode': 'CASH',
+      'amount': amountDueHint, // server should recompute if needed
+    },
+  });
+
+  // INVOICE → PRINT → DRAWER
+  ops.addAll([
+    {
+      'entity': 'invoice',
+      'entity_id': orderNo,
+      'op': 'CREATE',
+      'payload': {'order_no': orderNo},
+    },
+    {
+      'entity': 'invoice',
+      'entity_id': orderNo,
+      'op': 'PRINT',
+      'payload': {'order_no': orderNo},
+    },
+    {
+      'entity': 'drawer',
+      'entity_id': branchId,
+      'op': 'OPEN',
+      'payload': {'tenant_id': tenantId, 'branch_id': branchId},
+    },
+  ]);
+
+  return ops;
+}
+
+/// ---------------- FAST ONLINE HELPERS (no queue, but much quicker) ----------------
+
+Future<void> _addItemsBulkFast(ApiClient client, String orderId, List<CartLine> lines,
+    {int parallel = 6}) async {
+  // limit concurrency to avoid server overload
+  final chunks = <List<CartLine>>[];
+  for (var i = 0; i < lines.length; i += parallel) {
+    chunks.add(lines.sublist(i, i + parallel > lines.length ? lines.length : i + parallel));
+  }
+  for (final chunk in chunks) {
+    await Future.wait(chunk.map((l) {
+      final orderItem = OrderItem(
+        id: null,
+        orderId: orderId,
+        itemId: l.item.id!,
+        variantId: l.variant?.id,
+        parentLineId: null,
+        qty: l.qty,
+        unitPrice: l.unitPrice,
+        lineDiscount: 0,
+        gstRate: l.item.gstRate,
+        cgst: 0,
+        sgst: 0,
+        igst: 0,
+        taxableValue: 0,
+      );
+      final mods = l.modifiers
+          .map((m) => OrderItemModifier(
+        id: null,
+        orderItemId: '',
+        modifierId: m.id ?? '',
+        qty: 1,
+        priceDelta: m.priceDelta,
+      ))
+          .toList();
+      return client.addOrderItem(orderId, orderItem, modifiers: mods);
+    }));
+  }
+}
+
 /// Bottom cart: shows lines, lets you +/-/X, shows total, and checkout
 class _CartSummary extends ConsumerStatefulWidget {
   const _CartSummary({required this.cart});
@@ -1061,6 +1260,19 @@ class _CartSummary extends ConsumerStatefulWidget {
 
 class _CartSummaryState extends ConsumerState<_CartSummary> {
   bool _busy = false;
+  late final ScrollController _cartCtl;
+
+  @override
+  void initState() {
+    super.initState();
+    _cartCtl = ScrollController();
+  }
+
+  @override
+  void dispose() {
+    _cartCtl.dispose();
+    super.dispose();
+  }
 
   // guess pax from qty total
   int _paxGuess(PosCartState cart) {
@@ -1191,7 +1403,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       PosCartState cart,
       _CheckoutRequest info,
       ) async {
-    final client = ref.read(apiClientProvider);
+    final client   = ref.read(apiClientProvider);
     final tenantId = ref.read(activeTenantIdProvider);
     final branchId = ref.read(activeBranchIdProvider);
 
@@ -1203,24 +1415,51 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       return;
     }
 
-    // 1. generate offline-friendly order number
+    // A client-stable order number; server should de-duplicate by this.
     final orderNo = 'POS1-${DateTime.now().millisecondsSinceEpoch}';
 
-    // pax fallback
-    final paxFromCart = _paxGuess(cart);
-    final int? paxToSend = (info.pax != null && info.pax! > 0)
-        ? info.pax
-        : (paxFromCart == 0 ? null : paxFromCart);
+    // Very fast, totally offline path: queue ops and return immediately.
+    // Toggle this to false if you want to try the fast-online path by default.
+    const bool queueFirst = false;
 
-    // 2. create order using lightweight route
+    if (queueFirst) {
+      final amountHint = cart.subTotal; // server will recompute exact taxes
+      final ops = buildCheckoutOps(
+        orderNo: orderNo,
+        tenantId: tenantId,
+        branchId: branchId,
+        channel: info.channel,
+        pax: info.pax,
+        tableId: info.tableId,
+        lines: cart.lines,
+        amountDueHint: amountHint,
+      );
+      await _enqueueOps(ref, ops);
+
+      // Clear the cart immediately; feels instant.
+      ref.read(posCartProvider.notifier).clear();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Order $orderNo queued (${ops.length} ops). Tap 🔄 to sync.'),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    // ---------------- FAST ONLINE PATH (keeps backend as-is, but parallelizes) ----------------
+
+    // 1) Open order (single call)
     late final String orderId;
     try {
       final created = await client.openOrderOffline(
         tenantId: tenantId,
         branchId: branchId,
         orderNo: orderNo,
-        channel: info.channel.name, // "DINE_IN"/"TAKEAWAY"/etc.
-        pax: paxToSend,
+        channel: info.channel.name,
+        pax: info.pax,
         tableId: info.tableId,
         customerId: null,
         note: null,
@@ -1228,12 +1467,24 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       orderId = created['id']?.toString() ?? '';
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to create order: $e')),
+      // If online open fails, fallback to queue so the cashier isn’t blocked.
+      final fallbackOps = buildCheckoutOps(
+        orderNo: orderNo,
+        tenantId: tenantId,
+        branchId: branchId,
+        channel: info.channel,
+        pax: info.pax,
+        tableId: info.tableId,
+        lines: cart.lines,
+        amountDueHint: cart.subTotal,
       );
+      await _enqueueOps(ref, fallbackOps);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Went offline. Order queued as $orderNo.')),
+      );
+      ref.read(posCartProvider.notifier).clear();
       return;
     }
-
     if (orderId.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1242,86 +1493,35 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       return;
     }
 
-    // 3. add each cart line as an order_item (with modifiers!)
-    for (final line in cart.lines) {
-      final itemId = line.item.id;
-      if (itemId == null) continue;
-
-      final orderItem = OrderItem(
-        id: null,
-        orderId: orderId,
-        itemId: itemId,
-        variantId: line.variant?.id,
-        parentLineId: null,
-        qty: line.qty,
-        unitPrice: line.unitPrice,
-        lineDiscount: 0,
-        gstRate: line.item.gstRate,
-        cgst: 0,
-        sgst: 0,
-        igst: 0,
-        taxableValue: 0,
-      );
-
-      // Convert selected Menu Modifiers -> OrderItemModifier payloads (qty=1)
-      final mods = line.modifiers
-          .map(
-            (m) => OrderItemModifier(
-          id: null,
-          orderItemId: '', // ignored on create
-          modifierId: m.id ?? '',
-          qty: 1,
-          priceDelta: m.priceDelta,
-        ),
-      )
-          .toList();
-
-      try {
-        await client.addOrderItem(orderId, orderItem, modifiers: mods);
-      } catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to add line item: $e')),
-        );
-        return;
-      }
-    }
-
-    // 4. SEND KOT TO KITCHEN (create /kot/tickets and print)
+    // 2) Add items in parallel (chunked)
     try {
-      await client.fireKotForOrder(
-        orderId: orderId,
-        stationId: null, // null => send ALL items in one ticket
-      );
+      await _addItemsBulkFast(client, orderId, cart.lines, parallel: 6);
     } catch (e) {
-      // Do NOT block billing if the kitchen printer is offline.
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('KOT not sent: $e'),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
-      // continue anyway
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to add items: $e')),
+      );
+      return;
     }
 
-    // 5. totals (to know how much to collect)
+    // 3) Start non-blocking operations together
+    // Fire KOT (don’t block billing if it fails)
+    final kotF = client.fireKotForOrder(orderId: orderId, stationId: null).catchError((_) {});
+
+    // Totals → Pay
     late final OrderDetail detail;
     try {
       detail = await client.getOrderDetail(orderId);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load totals: $e')),
+        SnackBar(content: Text('Totals failed: $e')),
       );
       return;
     }
-    final amountDue = detail.totals.due;
 
-    // 6. pay in full CASH
     try {
-      await client.pay(orderId, PayMode.CASH, amountDue);
+      await client.pay(orderId, PayMode.CASH, detail.totals.due);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1330,56 +1530,25 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       return;
     }
 
-    // 7. create invoice (DB row + invoice number)
-    Map<String, dynamic> invoiceResp = {};
-    try {
-      invoiceResp = await client.createInvoice(orderId);
-    } catch (e) {
-      // non-blocking
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Invoice issue: $e')),
-        );
-      }
-    }
+    // 4) After payment, do these in parallel (best-effort)
+    final invoiceF = client.createInvoice(orderId).catchError((_) => <String, dynamic>{});
+    final drawerF  = client.openDrawer(tenantId: tenantId, branchId: branchId).catchError((_) {});
+    await kotF; // ensure KOT attempt finished
 
-    // 8. print invoice if we got invoice_id
-    final invoiceId = invoiceResp['invoice_id']?.toString();
+    final invoiceResp = await invoiceF;
+    final invoiceId   = invoiceResp['invoice_id']?.toString();
     if (invoiceId != null && invoiceId.isNotEmpty) {
-      try {
-        await client.printInvoice(invoiceId);
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Print issue: $e'),
-              duration: const Duration(seconds: 2),
-            ),
-          );
-        }
-      }
+      unawaited(client.printInvoice(invoiceId).catchError((_) {}));
     }
+    unawaited(drawerF);
 
-    // 9. pop cash drawer (best-effort)
-    try {
-      await client.openDrawer(
-        tenantId: tenantId,
-        branchId: branchId,
-      );
-    } catch (_) {
-      // drawer might not be configured; ignore
-    }
-
-    // 10. clear cart
+    // 5) Done — clear cart & toast
     ref.read(posCartProvider.notifier).clear();
-
-    // 11. success toast
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          'Paid ₹${amountDue.toStringAsFixed(2)} • '
-              'Order $orderNo (${info.channel.name}) ✅',
+          'Paid ₹${detail.totals.due.toStringAsFixed(2)} • Order $orderNo (${info.channel.name}) ✅',
         ),
         duration: const Duration(seconds: 3),
       ),
@@ -1430,7 +1599,10 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
                     maxHeight: 180,
                   ),
                   child: Scrollbar(
+                    controller: _cartCtl,
                     child: ListView.separated(
+                      controller: _cartCtl,
+                      primary: false,          // ← don’t fight for PrimaryScrollController
                       shrinkWrap: true,
                       itemCount: lines.length,
                       separatorBuilder: (_, __) => const Divider(height: 8),
