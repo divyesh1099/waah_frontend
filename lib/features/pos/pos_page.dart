@@ -10,6 +10,7 @@ import 'dart:math';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../data/api_client.dart';
+typedef Read = T Function<T>(ProviderListenable<T> provider);
 
 // --- FAST CACHES for variants & modifiers (cleared on app restart) ---
 final Map<String, List<ItemVariant>> _variantsCache = {};
@@ -46,47 +47,31 @@ final selectedCategoryIdProvider = StateProvider<String?>((ref) => null);
 
 /// Load menu categories for the ACTIVE tenant/branch.
 final posCategoriesProvider =
-FutureProvider.autoDispose<List<MenuCategory>>((ref) async {
+FutureProvider<List<MenuCategory>>((ref) async {
   final client = ref.watch(apiClientProvider);
   final tenantId = ref.watch(activeTenantIdProvider);
   final branchId = ref.watch(activeBranchIdProvider);
-
   if (tenantId.isEmpty || branchId.isEmpty) return <MenuCategory>[];
 
-  final cats = await client.fetchCategories(
-    tenantId: tenantId,
-    branchId: branchId,
-  );
-
-  // stable sort by position for consistent UI
+  final cats = await client.fetchCategories(tenantId: tenantId, branchId: branchId);
   cats.sort((a, b) => (a.position).compareTo(b.position));
   return cats;
 });
 
-/// Load menu items for currently selected category for the ACTIVE tenant.
 final posItemsProvider =
-FutureProvider.autoDispose<List<MenuItem>>((ref) async {
+FutureProvider<List<MenuItem>>((ref) async {
   final client = ref.watch(apiClientProvider);
   final tenantId = ref.watch(activeTenantIdProvider);
   final catId = ref.watch(selectedCategoryIdProvider);
-
   if (tenantId.isEmpty) return <MenuItem>[];
 
   final items = await client.fetchItems(
-    // treat empty-string like null
-    categoryId: (catId == null || (catId.isNotEmpty && catId.trim().isEmpty))
-        ? null
-        : catId,
+    categoryId: (catId == null || (catId.isNotEmpty && catId.trim().isEmpty)) ? null : catId,
     tenantId: tenantId,
   );
 
-  // Only active / not stock_out, just to keep POS clean.
-  final filtered = items.where((i) => i.isActive && !i.stockOut).toList();
-
-  // sort by name for predictable grid
-  filtered.sort(
-        (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-  );
+  final filtered = items.where((i) => i.isActive && !i.stockOut).toList()
+    ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
   return filtered;
 });
 
@@ -104,6 +89,28 @@ final diningTablesProvider = FutureProvider<List<DiningTable>>((ref) async {
     ..sort((a, b) => a.code.toLowerCase().compareTo(b.code.toLowerCase()));
 
   return sorted;
+});
+
+// Top-level silent push that accepts a generic Ref (works with WidgetRef too)
+Future<void> _silentPush(Read read) async {
+    final client = read(apiClientProvider);
+    final ops = await _readQueuedOps(read);
+  if (ops.isEmpty) return;
+  try {
+    await client.syncPush(deviceId: _kDeviceId, ops: ops);
+    await _writeQueuedOps(read, []);
+  } catch (_) {
+    // ignore; autosync will retry
+  }
+}
+
+// Top-level autosync provider
+final _queueAutoSyncProvider = Provider<void>((ref) {
+  final t = Timer.periodic(const Duration(seconds: 20), (_) {
+    // best-effort quiet sync
+    unawaited(_silentPush(ref.read));
+  });
+  ref.onDispose(t.cancel);
 });
 
 /// ------------------------------------------------------------
@@ -369,6 +376,7 @@ class PosPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(_queueAutoSyncProvider);
     final tenantId = ref.watch(activeTenantIdProvider);
     final branchId = ref.watch(activeBranchIdProvider);
 
@@ -401,7 +409,7 @@ class PosPage extends ConsumerWidget {
             tooltip: 'Sync queued ops',
             icon: const Icon(Icons.sync),
               onPressed: () async {
-                await pushQueueNow(context, ref);
+                await pushQueueNow(context, ref.read);
                 // If you have one, invalidate your orders list here:
                 // ref.invalidate(ordersProvider);
               },
@@ -462,7 +470,7 @@ class PosPage extends ConsumerWidget {
                         ? 3
                         : 2;
                     // Prefetch for the first few visible items (no await → non-blocking)
-                    for (final it in items.take(12)) {
+                    for (final it in items.take(24)) {
                       final id = it.id;
                       if (id != null && id.isNotEmpty) {
                         unawaited(_getVariantsCached(ref, id));
@@ -472,7 +480,7 @@ class PosPage extends ConsumerWidget {
 
                     return Scrollbar(
                       child: GridView.builder(
-                        primary: true, // ← ensures it binds to the PrimaryScrollController
+                        primary: true,
                         padding: const EdgeInsets.all(12),
                         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                           crossAxisCount: cross,
@@ -481,49 +489,75 @@ class PosPage extends ConsumerWidget {
                           childAspectRatio: 3 / 4,
                         ),
                         itemCount: items.length,
-                                                  itemBuilder: (_, i) {
-                                              final item = items[i];
-                                              return _ItemCard(
-                                                item: item,
-                            onTap: () async {
-                              if ((item.id ?? '').isEmpty) return;
-                              // fetch both in parallel (and cached)
-                              final results = await Future.wait([
-                    _getVariantsCached(ref, item.id!),
-                    _getModsCached(ref, item.id!),
-                              ]);
-                              final variants = results[0] as List<ItemVariant>;
-                              final modifierGroups = results[1] as List<_ItemModifierGroupData>;
+                        cacheExtent: 800,                // prefetch offscreen widgets
+                        addAutomaticKeepAlives: false,   // fewer keepalive markers
+                        addRepaintBoundaries: true,      // isolate paints
+                        addSemanticIndexes: false,
+                        itemBuilder: (_, i) {
+                          final item = items[i];
+                          return _ItemCard(
+                            key: ValueKey(item.id ?? i),  // better element reuse
+                            item: item,
+                                                onTap: () async {
+                                                  if ((item.id ?? '').isEmpty) return;
 
-                              if (!context.mounted) return;
-                              final res = await showModalBottomSheet<_AddResult>(
-                                context: context,
-                                isScrollControlled: true,
-                                builder: (_) => _AddToCartSheet(
-                                  item: item,
-                                  variants: variants,
-                                  modifierGroups: modifierGroups,
-                                ),
-                              );
-                              if (res == null) return;
+                                                  // fetch & cache in parallel
+                                                  final results = await Future.wait([
+                                                    _getVariantsCached(ref, item.id!),
+                                                    _getModsCached(ref, item.id!),
+                                                  ]);
+                                                  final variants = results[0] as List<ItemVariant>;
+                                                  final modifierGroups = results[1] as List<_ItemModifierGroupData>;
 
-                              ref.read(posCartProvider.notifier).addItem(
-                                item: item,
-                                variant: res.variant,
-                                modifiers: res.modifiers,
-                                qty: res.qty.toDouble(),
-                              );
+                                                  // QUICK ADD if: no required groups AND <=1 variant
+                                                  final hasRequired = modifierGroups.any((g) => g.requiredGroup && (g.minSel > 0));
+                                                  if (!hasRequired && variants.length <= 1) {
+                                                    final chosen = variants.isEmpty ? null : variants.first;
+                                                    ref.read(posCartProvider.notifier).addItem(
+                                                      item: item,
+                                                      variant: chosen,
+                                                      modifiers: const [],
+                                                      qty: 1,
+                                                    );
+                                                    if (context.mounted) {
+                                                      ScaffoldMessenger.of(context).showSnackBar(
+                                                        SnackBar(
+                                                          content: Text('${item.name} x1 added to cart'),
+                                                          duration: const Duration(milliseconds: 700),
+                                                        ),
+                                                      );
+                                                    }
+                                                    return;
+                                                  }
 
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('${item.name} x${res.qty} added to cart'),
-                                    duration: const Duration(milliseconds: 800),
-                                  ),
-                                );
-                              }
-                            },
-                          );
+                                                  // otherwise, open chooser
+                                                  if (!context.mounted) return;
+                                                  final res = await showModalBottomSheet<_AddResult>(
+                                                    context: context,
+                                                    isScrollControlled: true,
+                                                    builder: (_) => _AddToCartSheet(
+                                                      item: item,
+                                                      variants: variants,
+                                                      modifierGroups: modifierGroups,
+                                                    ),
+                                                  );
+                                                  if (res == null) return;
+                                                  ref.read(posCartProvider.notifier).addItem(
+                                                    item: item,
+                                                    variant: res.variant,
+                                                    modifiers: res.modifiers,
+                                                    qty: res.qty.toDouble(),
+                                                  );
+                                                  if (context.mounted) {
+                                                    ScaffoldMessenger.of(context).showSnackBar(
+                                                      SnackBar(
+                                                        content: Text('${item.name} x${res.qty} added to cart'),
+                                                        duration: const Duration(milliseconds: 800),
+                                                      ),
+                                                    );
+                                                  }
+                                                },
+                                              );
                         },
                       ),
                     );
@@ -615,7 +649,7 @@ class _CategoryBar extends ConsumerWidget {
 
 /// One menu item card in the grid (shows image if available)
 class _ItemCard extends StatelessWidget {
-  const _ItemCard({required this.item, required this.onTap});
+  const _ItemCard({super.key, required this.item, required this.onTap});
   final MenuItem item;
   final VoidCallback onTap;
 
@@ -635,9 +669,15 @@ class _ItemCard extends StatelessWidget {
             // Image area
             AspectRatio(
               aspectRatio: 4 / 3,
-              child: MenuBannerImage(
-                path: item.imageUrl,
-                borderRadius: 0, // leave square corners in the grid card header
+              child: RepaintBoundary(
+                child: MenuBannerImage(
+                  path: item.imageUrl,
+                  borderRadius: 0,
+                  // TIP (optional): if MenuBannerImage lets you pass fit/filter:
+                  // fit: BoxFit.cover,
+                  // filterQuality: FilterQuality.low,
+                  // gapless: true,
+                ),
               ),
             ),
 
@@ -1059,8 +1099,8 @@ class _AddToCartSheetState extends State<_AddToCartSheet> {
 const _kOpsQueueKey = 'pos_offline_ops_v1';
 const _kDeviceId    = 'flutter-pos';
 
-Future<List<Map<String, dynamic>>> _readQueuedOps(WidgetRef ref) async {
-  final prefs = ref.read(prefsProvider);
+Future<List<Map<String, dynamic>>> _readQueuedOps(Read read) async {
+  final prefs = read(prefsProvider);
   final raw = prefs.getString(_kOpsQueueKey);
   if (raw == null || raw.trim().isEmpty) return <Map<String, dynamic>>[];
   final decoded = convert.jsonDecode(raw);
@@ -1070,26 +1110,26 @@ Future<List<Map<String, dynamic>>> _readQueuedOps(WidgetRef ref) async {
   return <Map<String, dynamic>>[];
 }
 
-Future<void> _writeQueuedOps(WidgetRef ref, List<Map<String, dynamic>> ops) async {
-  final prefs = ref.read(prefsProvider);
+Future<void> _writeQueuedOps(Read read, List<Map<String, dynamic>> ops) async {
+  final prefs = read(prefsProvider);
   await prefs.setString(_kOpsQueueKey, convert.jsonEncode(ops));
 }
 
-Future<void> _enqueueOps(WidgetRef ref, List<Map<String, dynamic>> newOps) async {
-  final cur = await _readQueuedOps(ref);
+Future<void> _enqueueOps(Read read, List<Map<String, dynamic>> newOps) async {
+  final cur = await _readQueuedOps(read);
   cur.addAll(newOps);
-  await _writeQueuedOps(ref, cur);
+  await _writeQueuedOps(read, cur);
 }
 
-Future<int> _queuedCount(WidgetRef ref) async {
-  final cur = await _readQueuedOps(ref);
+Future<int> _queuedCount(Read read) async {
+  final cur = await _readQueuedOps(read);
   return cur.length;
 }
 
 /// Pushes everything in one call to /sync/push. Clears queue on success.
-Future<void> pushQueueNow(BuildContext ctx, WidgetRef ref) async {
-  final client = ref.read(apiClientProvider);
-  final ops = await _readQueuedOps(ref);
+Future<void> pushQueueNow(BuildContext ctx, Read read) async {
+  final client = read(apiClientProvider);
+  final ops = await _readQueuedOps(read);
   if (ops.isEmpty) {
     if (ctx.mounted) {
       ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Nothing to sync')));
@@ -1099,7 +1139,7 @@ Future<void> pushQueueNow(BuildContext ctx, WidgetRef ref) async {
 
   try {
     await client.syncPush(deviceId: _kDeviceId, ops: ops);
-    await _writeQueuedOps(ref, []);
+    await _writeQueuedOps(read, []);
     if (ctx.mounted) {
       ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Synced ${ops.length} op(s) ✅')));
     }
@@ -1398,11 +1438,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
 
   // talk to backend: create order, add items, take cash, invoice, print
   // talk to backend: create order, add items, SEND KOT, take cash, invoice, print
-  Future<void> _performCheckout(
-      WidgetRef ref,
-      PosCartState cart,
-      _CheckoutRequest info,
-      ) async {
+  Future<void> _performCheckout(PosCartState cart, _CheckoutRequest info) async {
     final client   = ref.read(apiClientProvider);
     final tenantId = ref.read(activeTenantIdProvider);
     final branchId = ref.read(activeBranchIdProvider);
@@ -1420,7 +1456,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
 
     // Very fast, totally offline path: queue ops and return immediately.
     // Toggle this to false if you want to try the fast-online path by default.
-    const bool queueFirst = false;
+    const bool queueFirst = true;
 
     if (queueFirst) {
       final amountHint = cart.subTotal; // server will recompute exact taxes
@@ -1434,7 +1470,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
         lines: cart.lines,
         amountDueHint: amountHint,
       );
-      await _enqueueOps(ref, ops);
+      await _enqueueOps(ref.read, ops);
 
       // Clear the cart immediately; feels instant.
       ref.read(posCartProvider.notifier).clear();
@@ -1478,7 +1514,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
         lines: cart.lines,
         amountDueHint: cart.subTotal,
       );
-      await _enqueueOps(ref, fallbackOps);
+      await _enqueueOps(ref.read, fallbackOps);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Went offline. Order queued as $orderNo.')),
       );
@@ -1567,7 +1603,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
         return; // user cancelled
       }
 
-      await _performCheckout(ref, widget.cart, req);
+      await _performCheckout(widget.cart, req);
     } finally {
       if (mounted) {
         setState(() {
