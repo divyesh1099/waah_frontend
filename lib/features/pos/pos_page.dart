@@ -10,6 +10,7 @@ import 'dart:math';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../data/api_client.dart';
+import '../../data/repo/settings_repo.dart';
 typedef Read = T Function<T>(ProviderListenable<T> provider);
 
 // --- FAST CACHES for variants & modifiers (cleared on app restart) ---
@@ -37,7 +38,56 @@ Future<List<_ItemModifierGroupData>> _getModsCached(WidgetRef ref, String itemId
   return parsed;
 }
 
-
+class _BranchSwitcherAction extends ConsumerWidget {
+  const _BranchSwitcherAction();
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final branches$ = ref.watch(settingsRepoProvider).watchBranches();
+    final activeBid = ref.watch(activeBranchIdProvider);
+    return StreamBuilder<List<BranchInfo>>(
+      stream: branches$,
+      initialData: const [],
+      builder: (c, s) {
+        final branches = s.data ?? const [];
+        if (branches.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        final activeName = branches.firstWhere(
+              (b) => b.id == activeBid,
+          orElse: () => branches.first,
+        ).name;
+        return PopupMenuButton<String>(
+          tooltip: 'Switch Branch',
+          icon: const Icon(Icons.store_mall_directory),
+          itemBuilder: (_) => [
+            for (final b in branches)
+              PopupMenuItem<String>(
+                value: b.id,
+                child: Row(
+                  children: [
+                    if (b.id == activeBid) const Icon(Icons.check, size: 18),
+                    if (b.id == activeBid) const SizedBox(width: 8),
+                    Expanded(child: Text(b.name)),
+                  ],
+                ),
+              ),
+          ],
+          onSelected: (bid) {
+            final picked = branches.firstWhere((b) => b.id == bid, orElse: () => branches.first);
+            ref.read(activeBranchIdProvider.notifier).state = bid;
+            ref.read(selectedCategoryIdProvider.notifier).state = null;
+            ref.invalidate(posCategoriesProvider);
+            ref.invalidate(posItemsProvider);
+            ref.invalidate(diningTablesProvider);
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Switched to branch: ${picked.name}')),
+            );
+          },
+        );
+      },
+    );
+  }
+}
 /// ------------------------------------------------------------
 /// PROVIDERS: categories, items, tables, cart
 /// ------------------------------------------------------------
@@ -58,19 +108,23 @@ FutureProvider<List<MenuCategory>>((ref) async {
   return cats;
 });
 
-final posItemsProvider =
-FutureProvider<List<MenuItem>>((ref) async {
-  final client = ref.watch(apiClientProvider);
+final posItemsProvider = FutureProvider<List<MenuItem>>((ref) async {
+  final client   = ref.watch(apiClientProvider);
   final tenantId = ref.watch(activeTenantIdProvider);
-  final catId = ref.watch(selectedCategoryIdProvider);
+  final branchId = ref.watch(activeBranchIdProvider); // NEW
+  final catId    = ref.watch(selectedCategoryIdProvider);
+
   if (tenantId.isEmpty) return <MenuItem>[];
 
   final items = await client.fetchItems(
-    categoryId: (catId == null || (catId.isNotEmpty && catId.trim().isEmpty)) ? null : catId,
+    categoryId: (catId == null || catId.trim().isEmpty) ? null : catId, // FIXED
     tenantId: tenantId,
+    branchId: branchId.isEmpty ? null : branchId,                        // NEW
   );
 
-  final filtered = items.where((i) => i.isActive && !i.stockOut).toList()
+  final filtered = items
+      .where((i) => i.isActive && !i.stockOut)
+      .toList()
     ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
   return filtered;
 });
@@ -405,6 +459,7 @@ class PosPage extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('POS'),
         actions: [
+          _BranchSwitcherAction(),
           IconButton(
             tooltip: 'Sync queued ops',
             icon: const Icon(Icons.sync),
@@ -1543,7 +1598,28 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
     // 3) Start non-blocking operations together
     // Fire KOT (don’t block billing if it fails)
     final kotF = client.fireKotForOrder(orderId: orderId, stationId: null).catchError((_) {});
+    final tenantId2 = ref.read(activeTenantIdProvider);
+    final branchId2 = ref.read(activeBranchIdProvider);
 
+    Future<void> _fanOutKotToKitchenPrinters() async {
+      try {
+        final printers = await client.listPrinters(
+          tenantId: tenantId2,
+          branchId: branchId2,
+        );
+        // printers is List<Map<String,dynamic>>
+        for (final p in printers) {
+          final type = (p['type'] as String?)?.toUpperCase();
+          final pid  = (p['id']   as String?) ?? '';
+          if (type == 'KITCHEN' && pid.isNotEmpty) {
+            // Fire-and-forget; billing shouldn’t block on kitchen prints
+            unawaited(client.printKot(orderId: orderId, printerId: pid));
+          }
+        }
+      } catch (_) {/* best-effort */}
+    }
+
+    unawaited(_fanOutKotToKitchenPrinters());
     // Totals → Pay
     late final OrderDetail detail;
     try {

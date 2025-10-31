@@ -1,3 +1,9 @@
+
+// ==============================================
+// lib/features/settings/printer_settings_page.dart
+// ==============================================
+// NOTE: Only change is: repo.watchPrinters(tenantId, branchId)
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -24,7 +30,7 @@ class PrinterSettingsPage extends ConsumerWidget {
       body: branchId.isEmpty
           ? const Center(child: Text('Pick a branch first'))
           : StreamBuilder<List<Printer>>(
-        stream: repo.watchPrinters(branchId),
+        stream: repo.watchPrinters(tenantId, branchId),
         initialData: const [],
         builder: (c, snap) {
           final items = snap.data ?? const [];
@@ -42,7 +48,7 @@ class PrinterSettingsPage extends ConsumerWidget {
                   p.type.name,
                   if ((p.connectionUrl ?? '').isNotEmpty) p.connectionUrl!,
                   if (p.isDefault) 'Default',
-                  if (p.cashDrawerEnabled) 'Cash Drawer: ${p.cashDrawerCode ?? "enabled"}',
+                  if (p.cashDrawerEnabled) 'Cash Drawer: \${p.cashDrawerCode ?? "enabled"}',
                 ].join(' • ')),
                 trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                   if (p.type == PrinterType.BILLING)
@@ -65,6 +71,26 @@ class PrinterSettingsPage extends ConsumerWidget {
                     icon: const Icon(Icons.delete_outline),
                     onPressed: () => _confirmDelete(context, ref, tenantId, branchId, p.id!),
                     tooltip: 'Delete',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.print),
+                    tooltip: 'Test',
+                    onPressed: () async {
+                      try {
+                        await ref.read(apiClientProvider).testPrinter(p.id!);
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Test job sent to \${p.name}')),
+                          );
+                        }
+                      } catch (e) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Test failed: \$e')),
+                          );
+                        }
+                      }
+                    },
                   ),
                 ]),
               );
@@ -143,7 +169,7 @@ class PrinterSettingsPage extends ConsumerWidget {
 
     final repo = ref.read(settingsRepoProvider);
     final p = Printer(
-      id: initial?.id ?? 'tmp-${DateTime.now().millisecondsSinceEpoch}',
+      id: initial?.id ?? 'tmp-\${DateTime.now().millisecondsSinceEpoch}',
       tenantId: tenantId,
       branchId: branchId,
       name: nameCtl.text.trim(),

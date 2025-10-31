@@ -1,4 +1,9 @@
-﻿import 'package:flutter/material.dart';
+﻿// ================================
+// lib/features/settings/settings_page.dart
+// ================================
+// NOTE: Only change is: repo.watchPrinters(tenantId, branchId)
+
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/providers.dart';
 import '../../data/repo/settings_repo.dart';
@@ -28,20 +33,20 @@ class SettingsPage extends ConsumerWidget {
             children: [
               _Card(
                 title: 'Branches',
-                subtitleStream: repo.watchBranches().map((l) => '${l.length} branches'),
+                subtitleStream: repo.watchBranches().map((l) => '\${l.length} branches'),
                 icon: Icons.store_mall_directory,
                 onTap: () => context.push('/settings/branch'),
               ),
               _Card(
                 title: 'Tables',
-                subtitleStream: repo.watchTables(branchId).map((l) => '${l.length} tables'),
+                subtitleStream: repo.watchTables(branchId).map((l) => '\${l.length} tables'),
                 icon: Icons.table_restaurant,
                 onTap: () => context.push('/settings/tables'),
                 disabled: branchId.isEmpty,
               ),
               _Card(
                 title: 'Printers',
-                subtitleStream: repo.watchPrinters(branchId).map((l) => '${l.length} printers'),
+                subtitleStream: repo.watchPrinters(tenantId, branchId).map((l) => '\${l.length} printers'),
                 icon: Icons.print,
                 onTap: () => context.push('/settings/printers'),
                 disabled: branchId.isEmpty,

@@ -1,4 +1,13 @@
-﻿import 'dart:async';
+﻿// features/kot/kot_page.dart
+// Fast + Offline‑first KOT board (drop‑in)
+// - Instant SWR (mem -> disk -> network)
+// - Optimistic status changes (forward & backward) with offline queue
+// - Per‑lane refresh; avoids global rebuilds
+// - More details on cards: order type chip, quick item hints, waiter/table, notes, age
+// - Long‑press = move backward; Tap = move forward; also explicit buttons
+// - Reprint / Cancel retained, both offline‑queue aware
+
+import 'dart:async';
 import 'dart:convert' as convert;
 import 'dart:math';
 
@@ -53,6 +62,20 @@ DateTime? _extractCreatedAt(dynamic t) {
   return null;
 }
 
+// User‑facing channel chip text/icon
+({IconData icon, String label}) _channelMeta(OrderChannel ch) {
+  switch (ch) {
+    case OrderChannel.DINE_IN:
+      return (icon: Icons.restaurant, label: 'Dine‑In');
+    case OrderChannel.TAKEAWAY:
+      return (icon: Icons.shopping_bag, label: 'Takeaway');
+    case OrderChannel.DELIVERY:
+      return (icon: Icons.delivery_dining, label: 'Delivery');
+    default:
+      return (icon: Icons.local_mall, label: ch.name.replaceAll('_', ' '));
+  }
+}
+
 // ------------------------------------------------------------------
 // Lite models for fast cache (only what the card displays)
 // ------------------------------------------------------------------
@@ -79,10 +102,11 @@ class KotLineLite {
   factory KotLineLite.fromMap(Map<String, dynamic> m) => KotLineLite(
     qty: m['qty'] ?? 1,
     name: m['name']?.toString() ?? '',
-    variantLabel:
-    (m['variantLabel']?.toString().isEmpty ?? true) ? null : m['variantLabel'].toString(),
-    modifiers:
-    (m['modifiers'] as List?)?.map((e) => e.toString()).toList() ?? const <String>[],
+    variantLabel: (m['variantLabel']?.toString().isEmpty ?? true)
+        ? null
+        : m['variantLabel'].toString(),
+    modifiers: (m['modifiers'] as List?)?.map((e) => e.toString()).toList() ??
+        const <String>[],
   );
 }
 
@@ -158,8 +182,7 @@ class KotCardData {
     (m['waiterName']?.toString().isEmpty ?? true) ? null : m['waiterName'].toString(),
     orderNo: (m['orderNo']?.toString().isEmpty ?? true) ? null : m['orderNo'].toString(),
     orderId: (m['orderId']?.toString().isEmpty ?? true) ? null : m['orderId'].toString(),
-    orderNote:
-    (m['orderNote']?.toString().isEmpty ?? true) ? null : m['orderNote'].toString(),
+    orderNote: (m['orderNote']?.toString().isEmpty ?? true) ? null : m['orderNote'].toString(),
     channel: (() {
       final s = m['channel']?.toString();
       if (s == null || s.isEmpty) return null;
@@ -199,7 +222,9 @@ class KotCardData {
             final raw = (l as dynamic).modifiers;
             if (raw is List) {
               mods = raw
-                  .map((e) => e is String ? e : ((e as dynamic).name ?? e.toString()).toString())
+                  .map((e) => e is String
+                  ? e
+                  : ((e as dynamic).name ?? e.toString()).toString())
                   .toList();
             }
           } catch (_) {}
@@ -221,7 +246,8 @@ class KotCardData {
       tableCode: (t.tableCode?.trim().isEmpty ?? true) ? null : t.tableCode,
       waiterName: (t.waiterName?.trim().isNotEmpty ?? false) ? t.waiterName : null,
       orderNo: (t.orderNo?.trim().isNotEmpty ?? false) ? t.orderNo : null,
-      orderId: (t.orderId?.toString().trim().isNotEmpty ?? false) ? t.orderId?.toString() : null,
+      orderId:
+      (t.orderId?.toString().trim().isNotEmpty ?? false) ? t.orderId?.toString() : null,
       orderNote: (t.orderNote?.trim().isNotEmpty ?? false) ? t.orderNote : null,
       channel: _extractChannel(t),
       createdAt: _extractCreatedAt(t),
@@ -236,6 +262,14 @@ String _modsSummaryLite(KotLineLite ln) {
   return ' • ${ln.modifiers.join(", ")}';
 }
 
+String _hintFromLines(List<KotLineLite> lines) {
+  if (lines.isEmpty) return '';
+  final cap = min(3, lines.length);
+  final head = lines.take(cap).map((l) => '${_fmtQty(l.qty)}× ${l.name}').join(', ');
+  final more = lines.length > cap ? ' +${lines.length - cap} more' : '';
+  return head + more;
+}
+
 // ------------------------------------------------------------------
 // Session/Context: tenant & branch (mirror global)
 // ------------------------------------------------------------------
@@ -246,6 +280,7 @@ final kotBranchIdProvider = Provider<String>((ref) => ref.watch(activeBranchIdPr
 // In-memory cache + queued ops
 // ------------------------------------------------------------------
 final Map<String, List<KotCardData>> _memCache = {};
+final Set<String> _busyTickets = <String>{}; // dedupe rapid taps
 
 class _KotOp {
   final String type; // 'status' | 'reprint' | 'cancel'
@@ -253,8 +288,8 @@ class _KotOp {
   final Map<String, dynamic> payload;
   _KotOp(this.type, this.ticketId, this.payload);
   Map<String, dynamic> toMap() => {'type': type, 'ticketId': ticketId, 'payload': payload};
-  static _KotOp fromMap(Map<String, dynamic> m) => _KotOp(
-      m['type'] as String, m['ticketId'] as String, Map<String, dynamic>.from(m['payload'] as Map));
+  static _KotOp fromMap(Map<String, dynamic> m) =>
+      _KotOp(m['type'] as String, m['ticketId'] as String, Map<String, dynamic>.from(m['payload'] as Map));
 }
 
 Future<List<_KotOp>> _readKotQueue(Read read, String tenantId, String branchId) async {
@@ -289,18 +324,13 @@ Future<void> _pushKotQueue(Read read, String tenantId, String branchId) async {
     try {
       if (op.type == 'status') {
         final ns = KOTStatus.values.firstWhere((e) => e.name == op.payload['next']);
-        await api.patchKitchenTicketStatus(op.ticketId, ns,
-            tenantId: tenantId, branchId: branchId);
+        await api.patchKitchenTicketStatus(op.ticketId, ns, tenantId: tenantId, branchId: branchId);
       } else if (op.type == 'reprint') {
         await api.reprintKitchenTicket(op.ticketId,
-            reason: op.payload['reason']?.toString() ?? 'Queued reprint',
-            tenantId: tenantId,
-            branchId: branchId);
+            reason: op.payload['reason']?.toString() ?? 'Queued reprint', tenantId: tenantId, branchId: branchId);
       } else if (op.type == 'cancel') {
         await api.cancelKitchenTicket(op.ticketId,
-            reason: op.payload['reason']?.toString(),
-            tenantId: tenantId,
-            branchId: branchId);
+            reason: op.payload['reason']?.toString(), tenantId: tenantId, branchId: branchId);
       }
     } catch (_) {
       failures.add(op);
@@ -312,16 +342,14 @@ Future<void> _pushKotQueue(Read read, String tenantId, String branchId) async {
 // ------------------------------------------------------------------
 // Network fetch + SWR cache update
 // ------------------------------------------------------------------
-Future<List<KotCardData>> _fetchFresh(
-    Read read, String tenantId, String branchId, KOTStatus status) async {
+Future<List<KotCardData>> _fetchFresh(Read read, String tenantId, String branchId, KOTStatus status) async {
   final api = read(apiClientProvider);
   final list = await api.fetchKitchenTickets(
     status: status,
     tenantId: tenantId.isEmpty ? null : tenantId,
     branchId: branchId.isEmpty ? null : branchId,
   );
-  final mapped = list.map(KotCardData.fromKitchenTicket).toList()
-    ..sort((a, b) => b.ticketNo.compareTo(a.ticketNo));
+  final mapped = list.map(KotCardData.fromKitchenTicket).toList()..sort((a, b) => b.ticketNo.compareTo(a.ticketNo));
 
   // Write caches
   final key = _kb(tenantId, branchId, status);
@@ -357,8 +385,7 @@ final _kotAutoPollProvider = Provider<void>((ref) {
 // ------------------------------------------------------------------
 // Provider: SWR (serve cache immediately, then refresh in background)
 // ------------------------------------------------------------------
-final kotTicketsProvider =
-FutureProvider.family.autoDispose<List<KotCardData>, KOTStatus>((ref, status) async {
+final kotTicketsProvider = FutureProvider.family.autoDispose<List<KotCardData>, KOTStatus>((ref, status) async {
   final tenantId = ref.watch(kotTenantIdProvider);
   final branchId = ref.watch(kotBranchIdProvider);
   ref.watch(_kotAutoPollProvider); // keep poller alive while page open
@@ -378,8 +405,7 @@ FutureProvider.family.autoDispose<List<KotCardData>, KOTStatus>((ref, status) as
     final raw = prefs.getString(key);
     if (raw != null && raw.isNotEmpty) {
       final arr = (convert.jsonDecode(raw) as List).cast<Map>();
-      final parsed =
-      arr.map((e) => KotCardData.fromMap(Map<String, dynamic>.from(e))).toList();
+      final parsed = arr.map((e) => KotCardData.fromMap(Map<String, dynamic>.from(e))).toList();
       _memCache[key] = parsed;
       unawaited(_refreshKot(ref.read, tenantId, branchId, status));
       return parsed;
@@ -421,9 +447,9 @@ class KotPage extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: 8),
-          Expanded(
+          const Expanded(
             child: Row(
-              children: const [
+              children: [
                 Expanded(child: _KotColumn(title: 'New', status: KOTStatus.NEW)),
                 VerticalDivider(width: 1),
                 Expanded(child: _KotColumn(title: 'In Progress', status: KOTStatus.IN_PROGRESS)),
@@ -470,6 +496,7 @@ class _KotColumn extends ConsumerWidget {
             data: (tickets) {
               if (tickets.isEmpty) return const Center(child: Text('No tickets'));
               return ListView.separated(
+                cacheExtent: 800,
                 itemCount: tickets.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
                 itemBuilder: (_, i) => _TicketCard(ticket: tickets[i]),
@@ -498,41 +525,18 @@ class _TicketCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final bgColor = _statusColor(ticket.status);
     final next = _nextStatus(ticket.status);
+    final prev = _prevStatus(ticket.status);
 
     return Card(
       color: bgColor,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       child: InkWell(
-        onTap: () async {
-          if (next == null || ticket.id.isEmpty) return;
-          final tenantId = ref.read(kotTenantIdProvider);
-          final branchId = ref.read(kotBranchIdProvider);
-          try {
-            await ref
-                .read(apiClientProvider)
-                .patchKitchenTicketStatus(ticket.id, next, tenantId: tenantId, branchId: branchId);
-            // refresh boards (move across columns)
-            for (final st in KOTStatus.values) {
-              ref.invalidate(kotTicketsProvider(st));
-            }
-            if (context.mounted) {
-              ScaffoldMessenger.of(context)
-                  .showSnackBar(SnackBar(content: Text('KOT #${ticket.ticketNo} → ${next.name}')));
-            }
-          } catch (_) {
-            // Queue & optimistic move
-            await _enqueueKotOp(
-                ref.read, tenantId, branchId, _KotOp('status', ticket.id, {'next': next.name}));
-            _optimisticMove(ref.read, tenantId, branchId, ticket, next);
-            for (final st in KOTStatus.values) {
-              ref.invalidate(kotTicketsProvider(st));
-            }
-            if (context.mounted) {
-              ScaffoldMessenger.of(context)
-                  .showSnackBar(const SnackBar(content: Text('Offline: queued status update')));
-            }
-          }
-        },
+        onTap: next == null
+            ? null
+            : () => _changeStatus(context, ref, ticket, next, sourceStatus: ticket.status),
+        onLongPress: prev == null
+            ? null
+            : () => _changeStatus(context, ref, ticket, prev, sourceStatus: ticket.status),
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: DefaultTextStyle(
@@ -540,7 +544,7 @@ class _TicketCard extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Header: KOT, station, channel, age, menu
+                // Header: KOT, station, channel, age
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -553,18 +557,10 @@ class _TicketCard extends ConsumerWidget {
                           Text('KOT #${ticket.ticketNo}',
                               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                           if ((ticket.stationName ?? '').isNotEmpty)
-                            Text('• ${ticket.stationName}', style: const TextStyle(fontSize: 12)),
-                          if (ticket.channel != null)
-                            Container(
-                              padding:
-                              const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                  color: Colors.black.withOpacity(.08),
-                                  borderRadius: BorderRadius.circular(6)),
-                              child: Text(ticket.channel!.name.replaceAll('_', ' '),
-                                  style: const TextStyle(
-                                      fontSize: 11, fontWeight: FontWeight.w600)),
-                            ),
+                            const Text('• ', style: TextStyle(fontSize: 12)),
+                          if ((ticket.stationName ?? '').isNotEmpty)
+                            Text(ticket.stationName!, style: const TextStyle(fontSize: 12)),
+                          if (ticket.channel != null) _ChannelChip(channel: ticket.channel!),
                           if (ticket.createdAt != null)
                             Text('• ${_ago(ticket.createdAt)} ago',
                                 style: const TextStyle(fontSize: 11)),
@@ -580,9 +576,13 @@ class _TicketCard extends ConsumerWidget {
                           case 'cancel':
                             await _doCancel(context, ref, ticket);
                             break;
+                          case 'status':
+                            await _pickStatus(context, ref, ticket);
+                            break;
                         }
                       },
                       itemBuilder: (_) => const [
+                        PopupMenuItem<String>(value: 'status', child: Text('Change status…')),
                         PopupMenuItem<String>(value: 'reprint', child: Text('Reprint')),
                         PopupMenuItem<String>(value: 'cancel', child: Text('Cancel')),
                       ],
@@ -603,24 +603,43 @@ class _TicketCard extends ConsumerWidget {
 
                 const SizedBox(height: 2),
 
-                // order no
-                Text(
-                  (ticket.orderNo != null && ticket.orderNo!.isNotEmpty)
-                      ? 'Order ${ticket.orderNo}'
-                      : (ticket.orderId != null ? 'Order ${ticket.orderId}' : 'Order'),
-                  style: const TextStyle(fontSize: 12),
+                // order id/no & quick item hints
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        (ticket.orderNo != null && ticket.orderNo!.isNotEmpty)
+                            ? 'Order ${ticket.orderNo}'
+                            : (ticket.orderId != null ? 'Order ${ticket.orderId}' : 'Order'),
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                    if (ticket.lines.isNotEmpty)
+                      Text('${ticket.lines.length} items', style: const TextStyle(fontSize: 12)),
+                  ],
                 ),
 
                 if ((ticket.orderNote ?? '').isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Text('Note: ${ticket.orderNote}',
-                      style:
-                      const TextStyle(fontSize: 12, fontStyle: FontStyle.italic)),
+                      style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic)),
+                ],
+
+                // Quick item hint line
+                if (ticket.lines.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    _hintFromLines(ticket.lines),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12),
+                  ),
                 ],
 
                 // Lines (bounded; show max 6 + overflow indicator)
                 if (ticket.lines.isNotEmpty) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   ...() {
                     final cap = min(6, ticket.lines.length);
                     final List<Widget> shown =
@@ -637,10 +656,24 @@ class _TicketCard extends ConsumerWidget {
                 ],
 
                 const SizedBox(height: 8),
-                Text(
-                    next == null ? 'Done' : 'Tap to mark ${next.name}',
-                    style: TextStyle(
-                        fontSize: 11, fontWeight: FontWeight.w500, color: Colors.grey.shade800)),
+                // Action row (back/forward)
+                Row(
+                  children: [
+                    if (prev != null)
+                      TextButton.icon(
+                        onPressed: () => _changeStatus(context, ref, ticket, prev, sourceStatus: ticket.status),
+                        icon: const Icon(Icons.arrow_back),
+                        label: Text('Back to ${prev.name}'),
+                      ),
+                    const Spacer(),
+                    if (next != null)
+                      FilledButton.icon(
+                        onPressed: () => _changeStatus(context, ref, ticket, next, sourceStatus: ticket.status),
+                        icon: const Icon(Icons.check),
+                        label: Text('Mark ${next.name}'),
+                      ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -678,6 +711,64 @@ class _TicketCard extends ConsumerWidget {
     }
   }
 
+  KOTStatus? _prevStatus(KOTStatus st) {
+    switch (st) {
+      case KOTStatus.NEW:
+        return null;
+      case KOTStatus.IN_PROGRESS:
+        return KOTStatus.NEW;
+      case KOTStatus.READY:
+        return KOTStatus.IN_PROGRESS;
+      case KOTStatus.DONE:
+        return KOTStatus.READY;
+      case KOTStatus.CANCELLED:
+        return null;
+    }
+  }
+
+  Future<void> _changeStatus(
+      BuildContext context,
+      WidgetRef ref,
+      KotCardData t,
+      KOTStatus target, {
+        required KOTStatus sourceStatus,
+      }) async {
+    if (t.id.isEmpty) return;
+    if (_busyTickets.contains(t.id)) return; // debounce
+    _busyTickets.add(t.id);
+
+    final tenantId = ref.read(kotTenantIdProvider);
+    final branchId = ref.read(kotBranchIdProvider);
+
+    // Optimistic: move immediately
+    _optimisticMove(ref.read, tenantId, branchId, t, target);
+
+    // Only refresh source & destination lanes to reduce rebuilds
+    ref.invalidate(kotTicketsProvider(sourceStatus));
+    ref.invalidate(kotTicketsProvider(target));
+
+    try {
+      await ref
+          .read(apiClientProvider)
+          .patchKitchenTicketStatus(t.id, target, tenantId: tenantId, branchId: branchId);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('KOT #${t.ticketNo} → ${target.name}')),
+        );
+      }
+    } catch (_) {
+      // Queue for retry
+      await _enqueueKotOp(ref.read, tenantId, branchId, _KotOp('status', t.id, {'next': target.name}));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Offline: queued status update')),
+        );
+      }
+    } finally {
+      _busyTickets.remove(t.id);
+    }
+  }
+
   Future<void> _doReprint(BuildContext context, WidgetRef ref, KotCardData t) async {
     final tenantId = ref.read(kotTenantIdProvider);
     final branchId = ref.read(kotBranchIdProvider);
@@ -690,8 +781,7 @@ class _TicketCard extends ConsumerWidget {
             .showSnackBar(SnackBar(content: Text('Reprinted KOT #${t.ticketNo}')));
       }
     } catch (_) {
-      await _enqueueKotOp(
-          ref.read, tenantId, branchId, _KotOp('reprint', t.id, {'reason': 'Queued reprint'}));
+      await _enqueueKotOp(ref.read, tenantId, branchId, _KotOp('reprint', t.id, {'reason': 'Queued reprint'}));
       if (context.mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('Offline: reprint queued')));
@@ -710,9 +800,9 @@ class _TicketCard extends ConsumerWidget {
       await ref
           .read(apiClientProvider)
           .cancelKitchenTicket(t.id, reason: reason, tenantId: tenantId, branchId: branchId);
-      // remove from all columns
       _optimisticRemove(ref.read, tenantId, branchId, t);
-      for (final st in KOTStatus.values) {
+      // only lanes that could contain it
+      for (final st in [KOTStatus.NEW, KOTStatus.IN_PROGRESS, KOTStatus.READY, KOTStatus.DONE]) {
         ref.invalidate(kotTicketsProvider(st));
       }
       if (context.mounted) {
@@ -720,10 +810,9 @@ class _TicketCard extends ConsumerWidget {
             .showSnackBar(SnackBar(content: Text('Cancelled KOT #${t.ticketNo}')));
       }
     } catch (_) {
-      await _enqueueKotOp(
-          ref.read, tenantId, branchId, _KotOp('cancel', t.id, {'reason': reason}));
+      await _enqueueKotOp(ref.read, tenantId, branchId, _KotOp('cancel', t.id, {'reason': reason}));
       _optimisticRemove(ref.read, tenantId, branchId, t);
-      for (final st in KOTStatus.values) {
+      for (final st in [KOTStatus.NEW, KOTStatus.IN_PROGRESS, KOTStatus.READY, KOTStatus.DONE]) {
         ref.invalidate(kotTicketsProvider(st));
       }
       if (context.mounted) {
@@ -737,22 +826,42 @@ class _TicketCard extends ConsumerWidget {
     final ctl = TextEditingController();
     final res = await showDialog<String>(
       context: ctx,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         title: Text(prompt),
         content: TextField(controller: ctl, decoration: const InputDecoration(labelText: 'Reason')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('No')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, ctl.text.trim()), child: const Text('OK')),
+          TextButton(onPressed: () => Navigator.of(dialogCtx).pop(null), child: const Text('No')),
+          FilledButton(onPressed: () => Navigator.of(dialogCtx).pop(ctl.text.trim()), child: const Text('OK')),
         ],
       ),
     );
     return res;
   }
+
+  Future<void> _pickStatus(BuildContext ctx, WidgetRef ref, KotCardData t) async {
+    final choice = await showDialog<KOTStatus>(
+      context: ctx,
+      builder: (dialogCtx) => SimpleDialog(
+        title: Text(
+          'Change status',
+          style: Theme.of(dialogCtx).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        children: KOTStatus.values
+            .where((s) => s != KOTStatus.CANCELLED)
+            .map((s) => SimpleDialogOption(
+          onPressed: () => Navigator.of(dialogCtx).pop(s),
+          child: Text(s.name),
+        ))
+            .toList(),
+      ),
+    );
+    if (choice == null || choice == t.status) return;
+    await _changeStatus(ctx, ref, t, choice, sourceStatus: t.status);
+  }
 }
 
 // Optimistic cache mutations -------------------------------------------------
-void _optimisticMove(
-    Read read, String tenantId, String branchId, KotCardData t, KOTStatus next) {
+void _optimisticMove(Read read, String tenantId, String branchId, KotCardData t, KOTStatus next) {
   // remove from all lists; add to next
   for (final st in KOTStatus.values) {
     final key = _kb(tenantId, branchId, st);
@@ -783,14 +892,13 @@ class _TicketLineRow extends StatelessWidget {
     this.padding = const EdgeInsets.symmetric(vertical: 2),
   });
 
-  // NOTE: Use KotLineLite (offline-friendly) not KitchenTicketLine
+  // NOTE: Use KotLineLite (offline‑friendly) not KitchenTicketLine
   final KotLineLite line;
   final EdgeInsetsGeometry padding;
 
   @override
   Widget build(BuildContext context) {
-    final variant =
-    (line.variantLabel?.isNotEmpty ?? false) ? ' (${line.variantLabel})' : '';
+    final variant = (line.variantLabel?.isNotEmpty ?? false) ? ' (${line.variantLabel})' : '';
     final mods = _modsSummaryLite(line);
     final qtyStr = _fmtQty(line.qty);
 
@@ -807,6 +915,31 @@ class _TicketLineRow extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChannelChip extends StatelessWidget {
+  const _ChannelChip({required this.channel});
+  final OrderChannel channel;
+
+  @override
+  Widget build(BuildContext context) {
+    final meta = _channelMeta(channel);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(.08),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(meta.icon, size: 12),
+          const SizedBox(width: 4),
+          Text(meta.label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
         ],
       ),
     );

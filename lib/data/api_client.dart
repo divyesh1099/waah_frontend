@@ -449,13 +449,15 @@ class ApiClient {
   Future<List<MenuItem>> fetchItems({
     String? categoryId,
     String? tenantId,
+    String? branchId, // NEW
   }) {
     return listAll<MenuItem>(
       path: '/menu/items',
       params: {
         'category_id': categoryId,
         'tenant_id': tenantId,
-      }..removeWhere((k, v) => v == null),
+        'branch_id': branchId, // NEW
+      }..removeWhere((k, v) => v == null || (v is String && v.isEmpty)),
       fromJson: MenuItem.fromJson,
     );
   }
@@ -1866,4 +1868,18 @@ class ApiClient {
     await _delete('/settings/printers/$id');
   }
 
+
+  Future<void> printKot({required String orderId, String? stationId, String? printerId}) async {
+    final data = {
+      'order_id': orderId,
+      if (stationId != null) 'station_id': stationId,
+      if (printerId != null) 'printer_id': printerId,
+    };
+    await _dio.post('/kot/print', data: data);
+  }
+
+// (Optional) simple test endpoint for PrinterSettings
+  Future<void> testPrinter(String printerId) async {
+    await _dio.post('/print/test', data: {'printer_id': printerId});
+  }
 }

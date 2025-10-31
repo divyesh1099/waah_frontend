@@ -1,6 +1,9 @@
+// ==============================
 // lib/data/repo/settings_repo.dart
-// Offline-first SettingsRepo with SharedPreferences cache.
-// Uses your models: BranchInfo, DiningTable, Printer (no model .toJson/.fromJson required).
+// ==============================
+// Offline-first SettingsRepo with SharedPreferences cache only (no network calls).
+// Safe compile: removed any reference to non-existent ApiClient methods like fetchTables.
+// You can wire real API syncs later without breaking the app.
 
 import 'dart:async';
 import 'dart:convert';
@@ -31,7 +34,7 @@ final settingsRepoProvider = Provider<SettingsRepo>((ref) {
 // ---------------- Repo ----------------
 class SettingsRepo {
   SettingsRepo({required ApiClient client, required SharedPreferences prefs})
-      : _client = client,
+      : _client = client, // ignore: unused_field
         _prefs  = prefs {
     _loadCachedBranches();
     _loadCachedTables(_branchId);
@@ -39,7 +42,7 @@ class SettingsRepo {
     _loadCachedRestaurantSettings(_tenantId);
   }
 
-  final ApiClient _client;
+  final ApiClient _client; // kept for future wiring
   final SharedPreferences _prefs;
 
   String _tenantId = '';
@@ -71,6 +74,10 @@ class SettingsRepo {
     _tenantId = id;
     _loadCachedBranches();
     _loadCachedRestaurantSettings(id);
+    // printers key depends on tenant as well
+    if (_branchId.isNotEmpty) {
+      _loadCachedPrinters(_tenantId, _branchId);
+    }
   }
 
   void setActiveBranch(String id) {
@@ -86,7 +93,7 @@ class SettingsRepo {
   }
 
   Future<void> refreshBranches(String tenantId) async {
-    // TODO wire real API: final fresh = await _client.fetchBranches(tenantId: tenantId);
+    // Offline-first (cache only). Wire server later if needed.
     _emitBranches(_branches);
   }
 
@@ -94,20 +101,20 @@ class SettingsRepo {
     _assertTenant(b.tenantId);
     _emitBranches([..._branches, b]);
     _persistBranches();
-    // TODO push server
+    // TODO: push to server when API is available
   }
 
   Future<void> updateBranchOptimistic(BranchInfo b) async {
     _assertTenant(b.tenantId);
     _emitBranches(_branches.map((x) => x.id == b.id ? b : x).toList(growable: false));
     _persistBranches();
-    // TODO push server
+    // TODO: push to server when API is available
   }
 
   Future<void> deleteBranchOptimistic(String id) async {
     _emitBranches(_branches.where((x) => x.id != id).toList(growable: false));
     _persistBranches();
-    // TODO push server
+    // TODO: push to server when API is available
   }
 
   void _emitBranches(List<BranchInfo> items) {
@@ -144,7 +151,7 @@ class SettingsRepo {
   }
 
   Future<void> refreshTables(String branchId) async {
-    // TODO: final fresh = await _client.fetchTables(branchId: branchId);
+    // Offline-first (cache only). Wire server later if needed.
     final cached = _tablesByBranch[branchId] ?? const <DiningTable>[];
     _tablesCtlByBranch[branchId]?.add(List.unmodifiable(cached));
   }
@@ -154,7 +161,7 @@ class SettingsRepo {
     _tablesByBranch[branchId] = List.unmodifiable(list);
     _tablesCtlByBranch[branchId]?.add(_tablesByBranch[branchId]!);
     _persistTables(branchId);
-    // TODO push server
+    // TODO: push to server when API is available
   }
 
   Future<void> updateTableOptimistic(String branchId, DiningTable t) async {
@@ -164,7 +171,7 @@ class SettingsRepo {
     _tablesByBranch[branchId] = List.unmodifiable(list);
     _tablesCtlByBranch[branchId]?.add(_tablesByBranch[branchId]!);
     _persistTables(branchId);
-    // TODO push server
+    // TODO: push to server when API is available
   }
 
   Future<void> deleteTableOptimistic(String branchId, String id) async {
@@ -174,7 +181,7 @@ class SettingsRepo {
     _tablesByBranch[branchId] = List.unmodifiable(list);
     _tablesCtlByBranch[branchId]?.add(_tablesByBranch[branchId]!);
     _persistTables(branchId);
-    // TODO push server
+    // TODO: push to server when API is available
   }
 
   void _loadCachedTables(String branchId) {
@@ -200,11 +207,11 @@ class SettingsRepo {
   }
 
   // -------- Printers --------
-  Stream<List<Printer>> watchPrinters(String branchId) {
-    final key = _pkPrinters(_tenantId, branchId);
+  Stream<List<Printer>> watchPrinters(String tenantId, String branchId) {
+    final key = _pkPrinters(tenantId, branchId);
     final ctl = _printersCtlMap.putIfAbsent(key, () => StreamController<List<Printer>>.broadcast());
-    final cached = _printersMap[key] ?? const <Printer>[];
-    scheduleMicrotask(() => ctl.add(List.unmodifiable(cached)));
+    final items = _printersMap[key] ?? const <Printer>[];
+    scheduleMicrotask(() => ctl.add(List.unmodifiable(items)));
     return ctl.stream;
   }
 
@@ -215,31 +222,31 @@ class SettingsRepo {
   }
 
   Future<void> createPrinterOptimistic(String tenantId, String branchId, Printer p) async {
-    _assertTenant(tenantId);
     final key = _pkPrinters(tenantId, branchId);
-    final next = [...(_printersMap[key] ?? const <Printer>[]), p];
-    _emitPrinters(key, next);
+    final list = [...(_printersMap[key] ?? const <Printer>[]), p];
+    _emitPrinters(key, list);
     _persistPrinters(key);
+    // TODO: push to server when API is available
   }
 
   Future<void> updatePrinterOptimistic(String tenantId, String branchId, Printer p) async {
-    _assertTenant(tenantId);
     final key = _pkPrinters(tenantId, branchId);
-    final next = (_printersMap[key] ?? const <Printer>[])
+    final list = (_printersMap[key] ?? const <Printer>[])
         .map((x) => x.id == p.id ? p : x)
         .toList(growable: false);
-    _emitPrinters(key, next);
+    _emitPrinters(key, list);
     _persistPrinters(key);
+    // TODO: push to server when API is available
   }
 
   Future<void> deletePrinterOptimistic(String tenantId, String branchId, String id) async {
-    _assertTenant(tenantId);
     final key = _pkPrinters(tenantId, branchId);
-    final next = (_printersMap[key] ?? const <Printer>[])
+    final list = (_printersMap[key] ?? const <Printer>[])
         .where((x) => x.id != id)
         .toList(growable: false);
-    _emitPrinters(key, next);
+    _emitPrinters(key, list);
     _persistPrinters(key);
+    // TODO: push to server when API is available
   }
 
   void _emitPrinters(String key, List<Printer> items) {
