@@ -125,7 +125,7 @@ class AppShell extends ConsumerWidget {
                       style: TextStyle(fontSize: 12),
                     ),
                     onPressed: () {
-                      context.go('/branch/select');
+                      context.push('/branch/select');
                     },
                   ),
                 ],

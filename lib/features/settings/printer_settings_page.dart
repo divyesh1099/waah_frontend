@@ -1,18 +1,40 @@
-
 // ==============================================
 // lib/features/settings/printer_settings_page.dart
 // ==============================================
-// NOTE: Only change is: repo.watchPrinters(tenantId, branchId)
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';
+import '../../data/api_client.dart';
 import '../../data/models.dart';
 import '../../data/repo/settings_repo.dart';
+import 'package:go_router/go_router.dart';
+import 'package:dio/dio.dart'; // for DioException type checks
 
 class PrinterSettingsPage extends ConsumerWidget {
   const PrinterSettingsPage({super.key});
+
+  String _errMsg(Object e) {
+    // Prefer ApiException (your ApiClient throws this via _decodeOrThrow)
+    if (e is ApiException) {
+      final status = e.status != null ? ' [${e.status}]' : '';
+      return (e.message.isNotEmpty ? e.message : 'Failed') + status;
+    }
+    // Common Dio path
+    if (e is DioException) {
+      final status = e.response?.statusCode;
+      final data = e.response?.data;
+      if (data is Map && data['detail'] != null) {
+        return '${data['detail']}${status != null ? ' [$status]' : ''}';
+      }
+      if (data is Map && data['message'] != null) {
+        return '${data['message']}${status != null ? ' [$status]' : ''}';
+      }
+      return 'Network error${status != null ? ' [$status]' : ''}';
+    }
+    // Fallback
+    return e.toString();
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -21,7 +43,16 @@ class PrinterSettingsPage extends ConsumerWidget {
     final branchId = ref.watch(activeBranchIdProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Printers')),
+      appBar: AppBar(
+        title: const Text('Printers'),
+        actions: [
+          OutlinedButton.icon(
+            icon: const Icon(Icons.store),
+            label: const Text('Change branch'),
+            onPressed: () => context.push('/branch/select'),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: branchId.isEmpty ? null : () => _openEditor(context, ref, tenantId, branchId),
         icon: const Icon(Icons.add),
@@ -48,7 +79,7 @@ class PrinterSettingsPage extends ConsumerWidget {
                   p.type.name,
                   if ((p.connectionUrl ?? '').isNotEmpty) p.connectionUrl!,
                   if (p.isDefault) 'Default',
-                  if (p.cashDrawerEnabled) 'Cash Drawer: \${p.cashDrawerCode ?? "enabled"}',
+                  if (p.cashDrawerEnabled) 'Cash Drawer: ${p.cashDrawerCode ?? "enabled"}',
                 ].join(' • ')),
                 trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                   if (p.type == PrinterType.BILLING)
@@ -80,13 +111,13 @@ class PrinterSettingsPage extends ConsumerWidget {
                         await ref.read(apiClientProvider).testPrinter(p.id!);
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Test job sent to \${p.name}')),
+                            SnackBar(content: Text('Test job sent to ${p.name}')),
                           );
                         }
                       } catch (e) {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Test failed: \$e')),
+                            SnackBar(content: Text('Test failed: ${_errMsg(e)}')),
                           );
                         }
                       }

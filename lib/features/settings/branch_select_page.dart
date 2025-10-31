@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import 'package:waah_frontend/app/providers.dart';
 import 'package:waah_frontend/data/api_client.dart';
@@ -95,14 +96,15 @@ class BranchSelectPage extends ConsumerWidget {
                     ? const Icon(Icons.check_circle, color: Colors.green)
                     : null,
                 onTap: () {
-                  // Switch active branch in app-wide state
-                  ref.read(activeBranchIdProvider.notifier).state = b.id;
+                  // Switch active branch (fires all side-effects wired in the notifier)
+                ref.read(activeBranchIdProvider.notifier).set(b.id);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Branch switched')),
+                );
 
-                  // after picking, go to menu/pos/home etc.
-                  if (Navigator.canPop(context)) {
-                    Navigator.pop(context);
-                  }
-                },
+                // Close the picker; caller decides where to land next
+                context.pop();
+              },
               );
             },
             separatorBuilder: (_, __) => const SizedBox(height: 12),
@@ -178,7 +180,7 @@ class _BranchCreateSheetState
       );
 
       // make the newly created branch active right away
-      ref.read(activeBranchIdProvider.notifier).state = newId;
+      ref.read(activeBranchIdProvider.notifier).set(newId);
 
       if (!mounted) return;
       Navigator.pop(context, true);

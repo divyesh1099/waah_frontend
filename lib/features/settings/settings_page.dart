@@ -1,8 +1,6 @@
 ﻿// ================================
 // lib/features/settings/settings_page.dart
 // ================================
-// NOTE: Only change is: repo.watchPrinters(tenantId, branchId)
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/providers.dart';
@@ -22,8 +20,50 @@ class SettingsPage extends ConsumerWidget {
     final tenantId = ref.watch(activeTenantIdProvider);
     final branchId = ref.watch(activeBranchIdProvider);
 
+    // read branches to show current branch name in AppBar
+    final branchesAsync = ref.watch(branchesProvider);
+
+    String _branchLabel(List<BranchInfo> list, String id) {
+      final b = list.firstWhere(
+            (x) => x.id == id,
+        orElse: () => BranchInfo(id: id, tenantId: me?.tenantId ?? '', name: '—'),
+      );
+      return b.name.isEmpty ? '—' : b.name;
+    }
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(
+        title: const Text('Settings'),
+        actions: [
+          // Current branch chip + change branch button
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8.0),
+            child: Center(
+              child: branchesAsync.when(
+                loading: () => const SizedBox.shrink(),
+                error: (_, __) => const SizedBox.shrink(),
+                data: (bs) => Row(
+                  children: [
+                    if (branchId.isNotEmpty)
+                      Chip(
+                        label: Text(
+                          _branchLabel(bs, branchId),
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.store),
+                      label: const Text('Change branch'),
+                      onPressed: () => context.push('/branch/select'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -33,20 +73,21 @@ class SettingsPage extends ConsumerWidget {
             children: [
               _Card(
                 title: 'Branches',
-                subtitleStream: repo.watchBranches().map((l) => '\${l.length} branches'),
+                // FIX: remove backslash before $
+                subtitleStream: repo.watchBranches().map((l) => '${l.length} branches'),
                 icon: Icons.store_mall_directory,
                 onTap: () => context.push('/settings/branch'),
               ),
               _Card(
                 title: 'Tables',
-                subtitleStream: repo.watchTables(branchId).map((l) => '\${l.length} tables'),
+                subtitleStream: repo.watchTables(branchId).map((l) => '${l.length} tables'),
                 icon: Icons.table_restaurant,
                 onTap: () => context.push('/settings/tables'),
                 disabled: branchId.isEmpty,
               ),
               _Card(
                 title: 'Printers',
-                subtitleStream: repo.watchPrinters(tenantId, branchId).map((l) => '\${l.length} printers'),
+                subtitleStream: repo.watchPrinters(tenantId, branchId).map((l) => '${l.length} printers'),
                 icon: Icons.print,
                 onTap: () => context.push('/settings/printers'),
                 disabled: branchId.isEmpty,
@@ -71,12 +112,14 @@ class SettingsPage extends ConsumerWidget {
               }
             },
           ),
-          if (!canEdit) const Padding(
-            padding: EdgeInsets.only(top: 16),
-            child: Text('You have read-only access. Ask admin for SETTINGS_EDIT permission.',
-              style: TextStyle(color: Colors.orange),
+          if (!canEdit)
+            const Padding(
+              padding: EdgeInsets.only(top: 16),
+              child: Text(
+                'You have read-only access. Ask admin for SETTINGS_EDIT permission.',
+                style: TextStyle(color: Colors.orange),
+              ),
             ),
-          ),
         ],
       ),
     );

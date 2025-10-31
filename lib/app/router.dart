@@ -243,11 +243,6 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         return null;
       }
 
-      // logged in AND branch chosen, but they're still on /branch/select
-      if (authed && hasBranch && path == '/branch/select') {
-        return '/menu';
-      }
-
       // logged in shouldn't go to /login or /onboarding anymore
       if (authed && (path == '/login' || path == '/onboarding')) {
         return '/';

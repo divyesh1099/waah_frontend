@@ -1880,6 +1880,10 @@ class ApiClient {
 
 // (Optional) simple test endpoint for PrinterSettings
   Future<void> testPrinter(String printerId) async {
-    await _dio.post('/print/test', data: {'printer_id': printerId});
+    final uri = Uri.parse('$baseUrl/print/test').replace(queryParameters: {
+      'printer_id': printerId,
+    });
+    final r = await http.post(uri, headers: _headers());
+    _decodeOrThrow(r); // throws ApiException with parsed message if non-2xx
   }
 }

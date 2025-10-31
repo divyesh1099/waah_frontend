@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/providers.dart';
 import '../../data/models.dart';
 import '../../data/repo/settings_repo.dart';
+import 'package:go_router/go_router.dart';
 
 class TableSettingsPage extends ConsumerWidget {
   const TableSettingsPage({super.key});
@@ -14,7 +15,15 @@ class TableSettingsPage extends ConsumerWidget {
     final branchId = ref.watch(activeBranchIdProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Tables')),
+      appBar: AppBar(title: const Text('Tables'),
+      actions: [
+        OutlinedButton.icon(
+          icon: const Icon(Icons.store),
+          label: const Text('Change branch'),
+          onPressed: () => context.push('/branch/select'),
+        ),
+      ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: branchId.isEmpty ? null : () => _openEditor(context, ref, branchId),
         icon: const Icon(Icons.add),
