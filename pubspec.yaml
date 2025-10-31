@@ -26,6 +26,9 @@ dependencies:
     drift: ^2.16.0
     sqlite3: ^2.4.0
     csv: ^5.0.2
+    crypto: ^3.0.3
+    connectivity_plus: ^6.0.5
+
 
 dev_dependencies:
     flutter_test:

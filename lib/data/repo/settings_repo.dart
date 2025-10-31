@@ -17,19 +17,6 @@ import 'package:waah_frontend/data/api_client.dart';
 import 'package:waah_frontend/data/models.dart';
 import 'package:waah_frontend/data/local/app_db.dart' as db;
 
-// ---------------- Provider ----------------
-final settingsRepoProvider = Provider<SettingsRepo>((ref) {
-  final client = ref.watch(apiClientProvider);
-  final prefs  = ref.watch(prefsProvider);
-
-  final repo = SettingsRepo(client: client, prefs: prefs);
-  repo.setActiveTenant(ref.read(activeTenantIdProvider));
-  repo.setActiveBranch(ref.read(activeBranchIdProvider));
-
-  ref.listen<String>(activeTenantIdProvider, (prev, next) => repo.setActiveTenant(next));
-  ref.listen<String>(activeBranchIdProvider, (prev, next) => repo.setActiveBranch(next));
-  return repo;
-});
 
 // ---------------- Repo ----------------
 class SettingsRepo {

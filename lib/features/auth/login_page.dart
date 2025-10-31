@@ -1,8 +1,12 @@
-﻿import 'package:flutter/material.dart';
+﻿// lib/features/auth/login_page.dart  (your LoginPage)
+// Key changes:
+//  - remove hard-coded default texts
+//  - choose PIN mode by reading whether a pin_hash exists
+//  - better validation & tiny UX nits
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:waah_frontend/app/providers.dart';
-import 'package:go_router/go_router.dart';
 
 class LoginPage extends ConsumerStatefulWidget {
   const LoginPage({super.key});
@@ -11,12 +15,28 @@ class LoginPage extends ConsumerStatefulWidget {
 }
 
 class _LoginPageState extends ConsumerState<LoginPage> {
-  final _mobile = TextEditingController(text: '9999999999');
-  final _pass = TextEditingController(text: 'admin');
-  final _pin  = TextEditingController(text: '1234');
-  final _form = GlobalKey<FormState>();
+  final _mobile = TextEditingController(); // no prefill
+  final _pass   = TextEditingController(); // no prefill
+  final _pin    = TextEditingController(); // no prefill
+  final _form   = GlobalKey<FormState>();
 
-  bool _usePin = false; // toggle between password and pin
+  bool _usePin = false;        // set in init by prefs
+  bool _obscure = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final prefs = ref.read(prefsProvider);
+    // If we’ve ever stored a PIN hash, default to PIN mode.
+    final hasSavedPin = (prefs.getString('pin_hash') ?? '').isNotEmpty;
+    _usePin = hasSavedPin;
+
+    // Optionally pre-fill only the mobile after first successful login
+    final lastMobile = prefs.getString('last_mobile');
+    if (lastMobile != null && lastMobile.isNotEmpty) {
+      _mobile.text = lastMobile;
+    }
+  }
 
   @override
   void dispose() {
@@ -35,11 +55,26 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       pin: _usePin ? _pin.text.trim() : null,
     );
 
-    // if authed (token present), route to HomeGate -> which will branch-gate
-    if (ref.read(isAuthedProvider) && context.mounted) {
-      context.go('/');
+    if (ref.read(isAuthedProvider) && mounted) {
+      context.go('/'); // HomeGate -> branch gating already handled elsewhere
     }
   }
+
+  String? _mobileValidator(String? v) {
+    if (v == null || v.trim().isEmpty) return 'Required';
+    final t = v.trim();
+    if (t.length < 8) return 'Enter valid mobile';
+    return null;
+  }
+
+  String? _pinValidator(String? v) {
+    if (v == null || v.isEmpty) return 'Required';
+    if (v.length != 4) return 'Enter 4-digit PIN';
+    if (int.tryParse(v) == null) return 'Digits only';
+    return null;
+  }
+
+  String? _passValidator(String? v) => (v == null || v.isEmpty) ? 'Required' : null;
 
   @override
   Widget build(BuildContext context) {
@@ -61,77 +96,68 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   children: [
                     TextFormField(
                       controller: _mobile,
-                      decoration:
-                      const InputDecoration(labelText: 'Mobile'),
+                      decoration: const InputDecoration(labelText: 'Mobile'),
                       keyboardType: TextInputType.phone,
-                      validator: (v) =>
-                      v == null || v.isEmpty ? 'Required' : null,
+                      validator: _mobileValidator,
+                      autofillHints: const [AutofillHints.telephoneNumber],
                     ),
                     const SizedBox(height: 12),
 
-                    // Toggle: password login vs PIN login
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       value: _usePin,
-                      title: const Text('Use 4-digit PIN instead'),
-                      onChanged: (v) {
-                        setState(() {
-                          _usePin = v;
-                        });
-                      },
+                      title: const Text('Use 4-digit PIN'),
+                      onChanged: (v) => setState(() => _usePin = v),
                     ),
                     const SizedBox(height: 12),
 
                     if (_usePin)
                       TextFormField(
                         controller: _pin,
-                        decoration: const InputDecoration(
-                          labelText: 'PIN',
-                        ),
+                        decoration: const InputDecoration(labelText: 'PIN'),
                         keyboardType: TextInputType.number,
                         obscureText: true,
-                        validator: (v) => v == null || v.isEmpty
-                            ? 'Required'
-                            : null,
+                        validator: _pinValidator,
+                        autofillHints: const [AutofillHints.password],
                       )
                     else
                       TextFormField(
                         controller: _pass,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           labelText: 'Password',
+                          suffixIcon: IconButton(
+                            onPressed: () => setState(() => _obscure = !_obscure),
+                            icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off),
+                          ),
                         ),
-                        obscureText: true,
-                        validator: (v) => v == null || v.isEmpty
-                            ? 'Required'
-                            : null,
+                        obscureText: _obscure,
+                        validator: _passValidator,
+                        autofillHints: const [AutofillHints.password],
                       ),
 
                     const SizedBox(height: 16),
                     if (auth.error != null) ...[
-                      Text(
-                        auth.error!,
-                        style: const TextStyle(color: Colors.red),
-                      ),
+                      Text(auth.error!, style: const TextStyle(color: Colors.red)),
                       const SizedBox(height: 8),
                     ],
 
                     FilledButton(
                       onPressed: auth.loading ? null : _doLogin,
                       child: auth.loading
-                          ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                        ),
-                      )
-                          : const Text('Login'),
+                          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                          : Text(_usePin ? 'Unlock' : 'Login'),
                     ),
                     const SizedBox(height: 8),
                     TextButton(
                       onPressed: () => context.push('/onboarding'),
                       child: const Text('New setup? Run Onboarding'),
                     ),
+
+                    if (auth.offline)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8.0),
+                        child: Text('Offline mode: limited actions', style: TextStyle(fontSize: 12)),
+                      ),
                   ],
                 ),
               ),
