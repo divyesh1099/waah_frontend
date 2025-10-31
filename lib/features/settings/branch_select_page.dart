@@ -11,7 +11,7 @@ class BranchSelectPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final asyncBranches = ref.watch(branchesProvider);
+    final asyncBranches = ref.watch(branchesStreamProvider);
     final currentBranchId = ref.watch(activeBranchIdProvider);
 
     return Scaffold(
@@ -179,6 +179,7 @@ class _BranchCreateSheetState
         address: _addrCtl.text.trim(),
       );
 
+      await ref.read(settingsRepoProvider).refreshBranches(tenantId);
       // make the newly created branch active right away
       ref.read(activeBranchIdProvider.notifier).set(newId);
 

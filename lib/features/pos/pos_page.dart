@@ -130,19 +130,15 @@ final posItemsProvider = FutureProvider<List<MenuItem>>((ref) async {
 });
 
 /// Load dining tables for ACTIVE branch.
-final diningTablesProvider = FutureProvider<List<DiningTable>>((ref) async {
-  final client = ref.watch(apiClientProvider);
+final diningTablesProvider = StreamProvider<List<DiningTable>>((ref) {
+  final repo = ref.watch(settingsRepoProvider);
   final branchId = ref.watch(activeBranchIdProvider);
 
-  if (branchId.isEmpty) return <DiningTable>[];
-
-  final tables = await client.fetchDiningTables(branchId: branchId);
-
-  // local defensive sort by code just in case
-  final sorted = [...tables]
-    ..sort((a, b) => a.code.toLowerCase().compareTo(b.code.toLowerCase()));
-
-  return sorted;
+  if (branchId.isEmpty) {
+    // immediately emit empty list if no branch selected
+    return Stream<List<DiningTable>>.value(<DiningTable>[]);
+  }
+  return repo.watchTables(branchId); // <-- same source as Settings page
 });
 
 // Top-level silent push that accepts a generic Ref (works with WidgetRef too)

@@ -21,7 +21,7 @@ class SettingsPage extends ConsumerWidget {
     final branchId = ref.watch(activeBranchIdProvider);
 
     // read branches to show current branch name in AppBar
-    final branchesAsync = ref.watch(branchesProvider);
+    final branchesAsync = ref.watch(branchesStreamProvider);
 
     String _branchLabel(List<BranchInfo> list, String id) {
       final b = list.firstWhere(

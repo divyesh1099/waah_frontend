@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:waah_frontend/app/providers.dart';
+import 'package:waah_frontend/data/models.dart'; // NEW: for BranchInfo
 
 class AppShell extends ConsumerWidget {
   final Widget child;
@@ -25,10 +26,13 @@ class AppShell extends ConsumerWidget {
     (rs != null && rs.name.isNotEmpty) ? rs.name : 'dPOS';
 
     // build absolute logo URL if we have a /media/... path
-        final buildUri = ref.read(mediaResolverProvider);
-        final logoFullUrl = (rs != null && (rs.logoUrl?.isNotEmpty ?? false))
-            ? buildUri(rs.logoUrl).toString()
-            : null;
+    final buildUri = ref.read(mediaResolverProvider);
+    final logoFullUrl = (rs != null && (rs.logoUrl?.isNotEmpty ?? false))
+        ? buildUri(rs.logoUrl).toString()
+        : null;
+
+    // NEW: canonical branches stream (from SettingsRepo)
+    final branchesA = ref.watch(branchesStreamProvider);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!context.mounted) return;
@@ -36,6 +40,31 @@ class AppShell extends ConsumerWidget {
         context.go('/login');
       }
     });
+
+    // NEW: widget that renders the Branch: <name> line
+    Widget buildBranchLine() {
+      return branchesA.when(
+        data: (list) {
+          final b = list.firstWhere(
+                (x) => x.id == currentBranchId,
+            orElse: () => BranchInfo(
+              id: currentBranchId,
+              tenantId: me?.tenantId ?? '',
+              name: '',
+            ),
+          );
+          final label = (b.name.isEmpty && currentBranchId.isEmpty)
+              ? '(none)'
+              : (b.name.isNotEmpty ? b.name : currentBranchId);
+          return Text(
+            'Branch: $label',
+            style: const TextStyle(fontSize: 12),
+          );
+        },
+        loading: () => const Text('Branch: —', style: TextStyle(fontSize: 12)),
+        error: (_, __) => const Text('Branch: —', style: TextStyle(fontSize: 12)),
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -111,10 +140,9 @@ class AppShell extends ConsumerWidget {
                     'User: ${me?.name ?? ''}',
                     style: const TextStyle(fontSize: 13),
                   ),
-                  Text(
-                    'Branch: ${currentBranchId.isEmpty ? '(none)' : currentBranchId}',
-                    style: const TextStyle(fontSize: 12),
-                  ),
+
+                  // NEW: show branch NAME instead of ID
+                  buildBranchLine(),
 
                   const SizedBox(height: 8),
 

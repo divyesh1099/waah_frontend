@@ -61,7 +61,10 @@ class SettingsRepo {
     _tenantId = id;
     _loadCachedBranches();
     _loadCachedRestaurantSettings(id);
-    // printers key depends on tenant as well
+    if (_tenantId.isNotEmpty) {
+      // fire-and-forget server pull to hydrate cache
+      refreshBranches(_tenantId);
+    }
     if (_branchId.isNotEmpty) {
       _loadCachedPrinters(_tenantId, _branchId);
     }
@@ -80,9 +83,17 @@ class SettingsRepo {
   }
 
   Future<void> refreshBranches(String tenantId) async {
-    // Offline-first (cache only). Wire server later if needed.
-    _emitBranches(_branches);
+    try {
+      // fetch from server if possible
+      final list = await _client.fetchBranches(tenantId: tenantId);
+      _emitBranches(list);
+      _persistBranches();
+    } catch (_) {
+      // offline / server error → keep whatever we have
+      _emitBranches(_branches);
+    }
   }
+
 
   Future<void> createBranchOptimistic(BranchInfo b) async {
     _assertTenant(b.tenantId);

@@ -282,3 +282,8 @@ import 'package:waah_frontend/data/local/app_db.dart' as db;
 */
 
 // Then keep the rest of your SettingsRepo class as-is.
+// Canonical branches stream from the offline-first repo
+final branchesStreamProvider =
+StreamProvider.autoDispose<List<BranchInfo>>((ref) {
+  return ref.watch(settingsRepoProvider).watchBranches();
+});
