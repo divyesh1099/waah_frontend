@@ -4,7 +4,6 @@ import 'package:dio/dio.dart';
 import 'package:http_parser/http_parser.dart';
 import 'package:file_picker/file_picker.dart';
 import 'models.dart';
-import '../../env.dart';
 
 class UnauthorizedException implements Exception {
   final String message;
@@ -1461,7 +1460,7 @@ class ApiClient {
 
     if (r is Map && r.isNotEmpty && r['id'] != null) {
       return ShiftStatus.fromJson(
-        Map<String, dynamic>.from(r as Map),
+        Map<String, dynamic>.from(r),
       );
     }
     return null;
@@ -1529,21 +1528,32 @@ class ApiClient {
     return Map<String, dynamic>.from(r as Map);
   }
 
+  // ApiClient.dart  (add this)
   Future<List<Map<String, dynamic>>> listPrinters({
     required String tenantId,
     required String branchId,
   }) async {
-    final r = await _get('/settings/printers', params: {
-      'tenant_id': tenantId,
-      'branch_id': branchId,
-    });
+    final r = await _get(
+      '/settings/printers',
+      params: {
+        'tenant_id': tenantId,
+        'branch_id': branchId,
+      },
+    );
 
-    if (r is List) {
-      return List<Map<String, dynamic>>.from(
-        r.map((e) => Map<String, dynamic>.from(e as Map)),
-      );
+    List<Map<String, dynamic>> asList(dynamic x) {
+      if (x is List) {
+        return x.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+      if (x is Map && x['items'] is List) {
+        return (x['items'] as List)
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      }
+      return <Map<String, dynamic>>[];
     }
-    return <Map<String, dynamic>>[];
+
+    return asList(r);
   }
 
   Future<List<Map<String, dynamic>>> listStations({

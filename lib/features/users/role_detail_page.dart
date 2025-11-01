@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:waah_frontend/app/providers.dart';
-import 'package:waah_frontend/data/api_client.dart';
 import 'package:waah_frontend/data/models.dart';
 
 /// Fetch a specific role (including permissions list)
@@ -271,7 +270,7 @@ class _AddPermDialogState extends ConsumerState<_AddPermDialog> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   DropdownButtonFormField<String>(
-                    value: _selectedPerm,
+                    initialValue: _selectedPerm,
                     items: available
                         .map(
                           (code) => DropdownMenuItem<String>(

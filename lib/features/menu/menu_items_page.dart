@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:waah_frontend/app/providers.dart';
 // Import the local DB models
 import 'package:waah_frontend/data/local/app_db.dart';
 import 'package:waah_frontend/data/repo/catalog_repo.dart';
-import 'package:waah_frontend/features/menu/menu_page.dart'; // For providers
+// For providers
 import 'package:waah_frontend/features/sync/sync_controller.dart';
 import 'package:waah_frontend/widgets/menu_media.dart';
 import 'menu_item_detail_page.dart';

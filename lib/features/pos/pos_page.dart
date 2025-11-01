@@ -1,16 +1,18 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:waah_frontend/app/providers.dart';
+import 'package:waah_frontend/app/providers.dart' hide ordersFutureProvider;
 import 'package:waah_frontend/data/models.dart';
 import 'package:waah_frontend/widgets/menu_media.dart';
 import 'dart:convert' as convert;
 import 'dart:math';
-import 'package:shared_preferences/shared_preferences.dart';
-
+import '../debug/queue_diag.dart';
 import '../../data/api_client.dart';
-import '../../data/repo/settings_repo.dart';
+import '../../orders/orders_page.dart';
+import '../kot/kot_page.dart';
+import '../orders/pending_orders.dart';
+
 typedef Read = T Function<T>(ProviderListenable<T> provider);
 
 // --- FAST CACHES for variants & modifiers (cleared on app restart) ---
@@ -142,13 +144,15 @@ final diningTablesProvider = StreamProvider<List<DiningTable>>((ref) {
 });
 
 // Top-level silent push that accepts a generic Ref (works with WidgetRef too)
-Future<void> _silentPush(Read read) async {
-    final client = read(apiClientProvider);
-    final ops = await _readQueuedOps(read);
+Future<void> _silentPush(Ref ref) async {
+  final client = ref.read(apiClientProvider);
+  final ops = await _readQueuedOps(ref.read); // This helper still takes ref.read
   if (ops.isEmpty) return;
+  final orderNos = _extractOrderNos(ops);
   try {
     await client.syncPush(deviceId: _kDeviceId, ops: ops);
-    await _writeQueuedOps(read, []);
+    await _writeQueuedOps(ref.read, []); // This helper still takes ref.read
+    ref.read(pendingOrdersProvider.notifier).removeByOrderNos(orderNos);
   } catch (_) {
     // ignore; autosync will retry
   }
@@ -157,8 +161,7 @@ Future<void> _silentPush(Read read) async {
 // Top-level autosync provider
 final _queueAutoSyncProvider = Provider<void>((ref) {
   final t = Timer.periodic(const Duration(seconds: 20), (_) {
-    // best-effort quiet sync
-    unawaited(_silentPush(ref.read));
+    unawaited(_silentPush(ref)); // This 'ref' (ProviderRef) is assignable to 'Ref<dynamic>'
   });
   ref.onDispose(t.cancel);
 });
@@ -459,11 +462,10 @@ class PosPage extends ConsumerWidget {
           IconButton(
             tooltip: 'Sync queued ops',
             icon: const Icon(Icons.sync),
-              onPressed: () async {
-                await pushQueueNow(context, ref.read);
-                // If you have one, invalidate your orders list here:
-                // ref.invalidate(ordersProvider);
-              },
+            onPressed: () async {
+              // This 'ref' (WidgetRef) is assignable to 'Ref<dynamic>'
+              await pushQueueNow(context, ref);
+            },
           ),
           IconButton(
             tooltip: 'Refresh menu',
@@ -471,6 +473,17 @@ class PosPage extends ConsumerWidget {
             onPressed: () {
               ref.invalidate(posCategoriesProvider);
               ref.invalidate(posItemsProvider);
+            },
+          ),
+          IconButton(
+            tooltip: 'Diagnostics',
+            icon: const Icon(Icons.bug_report),
+            onPressed: () {
+              showModalBottomSheet(
+                context: context,
+                isScrollControlled: true,
+                builder: (_) => const QueueDiagnosticsSheet(),
+              );
             },
           ),
         ],
@@ -969,7 +982,7 @@ class _AddToCartSheetState extends State<_AddToCartSheet> {
                           });
                         },
                       );
-                    }).toList(),
+                    }),
                   ],
                 )
               else
@@ -1041,11 +1054,11 @@ class _AddToCartSheetState extends State<_AddToCartSheet> {
                                 _toggleModifier(group, m, val);
                               },
                             );
-                          }).toList(),
+                          }),
                           const SizedBox(height: 8),
                         ],
                       );
-                    }).toList(),
+                    }),
                   ],
                 ),
 
@@ -1154,10 +1167,12 @@ Future<List<Map<String, dynamic>>> _readQueuedOps(Read read) async {
   final prefs = read(prefsProvider);
   final raw = prefs.getString(_kOpsQueueKey);
   if (raw == null || raw.trim().isEmpty) return <Map<String, dynamic>>[];
-  final decoded = convert.jsonDecode(raw);
-  if (decoded is List) {
-    return decoded.cast<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
-  }
+  try {
+    final decoded = convert.jsonDecode(raw);
+    if (decoded is List) {
+      return decoded.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
+  } catch (_) {}
   return <Map<String, dynamic>>[];
 }
 
@@ -1178,19 +1193,28 @@ Future<int> _queuedCount(Read read) async {
 }
 
 /// Pushes everything in one call to /sync/push. Clears queue on success.
-Future<void> pushQueueNow(BuildContext ctx, Read read) async {
-  final client = read(apiClientProvider);
-  final ops = await _readQueuedOps(read);
+Future<void> pushQueueNow(BuildContext ctx, WidgetRef ref) async {
+  final client = ref.read(apiClientProvider);
+  final ops = await _readQueuedOps(ref.read); // This helper is fine
   if (ops.isEmpty) {
     if (ctx.mounted) {
       ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Nothing to sync')));
     }
     return;
   }
-
+  final orderNos = _extractOrderNos(ops);
   try {
     await client.syncPush(deviceId: _kDeviceId, ops: ops);
-    await _writeQueuedOps(read, []);
+    await _writeQueuedOps(ref.read, []); // This helper is fine
+    ref.read(pendingOrdersProvider.notifier).removeByOrderNos(orderNos);
+
+    // --- Invalidation logic (no change needed here) ---
+    ref.invalidate(ordersFutureProvider);
+    for (final status in KOTStatus.values) {
+      ref.invalidate(kotTicketsProvider(status));
+    }
+    // --- END ---
+
     if (ctx.mounted) {
       ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Synced ${ops.length} op(s) ✅')));
     }
@@ -1213,7 +1237,7 @@ List<Map<String, dynamic>> buildCheckoutOps({
   required double amountDueHint,
 }) {
   String rid(String pfx, int i) =>
-      '$pfx-${DateTime.now().millisecondsSinceEpoch}-${i}-${Random().nextInt(1<<32)}';
+      '$pfx-${DateTime.now().millisecondsSinceEpoch}-$i-${Random().nextInt(1<<32)}';
 
   final ops = <Map<String, dynamic>>[];
 
@@ -1298,6 +1322,18 @@ List<Map<String, dynamic>> buildCheckoutOps({
   ]);
 
   return ops;
+}
+
+Set<String> _extractOrderNos(List<Map<String, dynamic>> ops) {
+  final out = <String>{};
+  for (final op in ops) {
+    final payload = op['payload'];
+    if (payload is Map && payload['order_no'] != null) {
+      final no = payload['order_no'].toString();
+      if (no.isNotEmpty) out.add(no);
+    }
+  }
+  return out;
 }
 
 /// ---------------- FAST ONLINE HELPERS (no queue, but much quicker) ----------------
@@ -1395,7 +1431,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     DropdownButtonFormField<OrderChannel>(
-                      value: chosenChannel,
+                      initialValue: chosenChannel,
                       decoration: const InputDecoration(labelText: 'Channel'),
                       items: OrderChannel.values.map((ch) {
                         return DropdownMenuItem<OrderChannel>(
@@ -1428,7 +1464,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
                     // Only show table picker for dine-in
                     if (chosenChannel == OrderChannel.DINE_IN)
                       DropdownButtonFormField<String?>(
-                        value: chosenTableId,
+                        initialValue: chosenTableId,
                         decoration: const InputDecoration(
                           labelText: 'Table',
                         ),
@@ -1494,6 +1530,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
     final tenantId = ref.read(activeTenantIdProvider);
     final branchId = ref.read(activeBranchIdProvider);
 
+    // Guard: must have tenant/branch
     if (tenantId.isEmpty || branchId.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1502,15 +1539,15 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       return;
     }
 
-    // A client-stable order number; server should de-duplicate by this.
-    final orderNo = 'POS1-${DateTime.now().millisecondsSinceEpoch}';
+    // Create a client-stable order number BEFORE using it anywhere.
+    final String orderNo = 'POS1-${DateTime.now().millisecondsSinceEpoch}';
 
-    // Very fast, totally offline path: queue ops and return immediately.
-    // Toggle this to false if you want to try the fast-online path by default.
-    const bool queueFirst = true;
+    // Fast, offline-first path
+    const bool queueFirst = false;
 
     if (queueFirst) {
-      final amountHint = cart.subTotal; // server will recompute exact taxes
+      // Prepare the compact ops batch with ALL required named params.
+      final double amountHint = cart.subTotal; // server will recompute exactly
       final ops = buildCheckoutOps(
         orderNo: orderNo,
         tenantId: tenantId,
@@ -1521,9 +1558,20 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
         lines: cart.lines,
         amountDueHint: amountHint,
       );
-      await _enqueueOps(ref.read, ops);
 
-      // Clear the cart immediately; feels instant.
+      // Queue locally for /sync/push
+      await _enqueueOps(ref.read, ops);
+      unawaited(pushQueueNow(context, ref));
+
+      // Show instantly in Orders (pending badge)
+      ref.read(pendingOrdersProvider.notifier).addQueued(
+        orderNo: orderNo,
+        channel: info.channel,
+        tableId: info.tableId,
+        openedAt: DateTime.now(),
+      );
+
+      // Clear the cart immediately; feels instant
       ref.read(posCartProvider.notifier).clear();
 
       if (!mounted) return;
@@ -1533,7 +1581,11 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
           duration: const Duration(seconds: 3),
         ),
       );
-      return;
+
+      // Optional: if your Orders list provider is accessible here, you can invalidate it
+      // ref.invalidate(ordersFutureProvider);
+
+      return; // Done (offline-first)
     }
 
     // ---------------- FAST ONLINE PATH (keeps backend as-is, but parallelizes) ----------------
@@ -1553,8 +1605,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       );
       orderId = created['id']?.toString() ?? '';
     } catch (e) {
-      if (!mounted) return;
-      // If online open fails, fallback to queue so the cashier isn’t blocked.
+      // If open fails → fallback to offline queue so cashier isn’t blocked
       final fallbackOps = buildCheckoutOps(
         orderNo: orderNo,
         tenantId: tenantId,
@@ -1566,12 +1617,21 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
         amountDueHint: cart.subTotal,
       );
       await _enqueueOps(ref.read, fallbackOps);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Went offline. Order queued as $orderNo.')),
+      ref.read(pendingOrdersProvider.notifier).addQueued(
+        orderNo: orderNo,
+        channel: info.channel,
+        tableId: info.tableId,
+        openedAt: DateTime.now(),
       );
       ref.read(posCartProvider.notifier).clear();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Went offline. Order queued as $orderNo.')),
+        );
+      }
       return;
     }
+
     if (orderId.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1591,31 +1651,31 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       return;
     }
 
-    // 3) Start non-blocking operations together
-    // Fire KOT (don’t block billing if it fails)
-    final kotF = client.fireKotForOrder(orderId: orderId, stationId: null).catchError((_) {});
+    // 3) Start non-blocking ops
+    final kotF = client
+        .fireKotForOrder(orderId: orderId, stationId: null)
+        .catchError((_) {});
+
     final tenantId2 = ref.read(activeTenantIdProvider);
     final branchId2 = ref.read(activeBranchIdProvider);
 
-    Future<void> _fanOutKotToKitchenPrinters() async {
+    Future<void> fanOutKotToKitchenPrinters() async {
       try {
         final printers = await client.listPrinters(
           tenantId: tenantId2,
           branchId: branchId2,
         );
-        // printers is List<Map<String,dynamic>>
         for (final p in printers) {
-          final type = (p['type'] as String?)?.toUpperCase();
+          final type = ((p['type'] as String?) ?? '').toUpperCase();
           final pid  = (p['id']   as String?) ?? '';
           if (type == 'KITCHEN' && pid.isNotEmpty) {
-            // Fire-and-forget; billing shouldn’t block on kitchen prints
             unawaited(client.printKot(orderId: orderId, printerId: pid));
           }
         }
       } catch (_) {/* best-effort */}
     }
+    unawaited(fanOutKotToKitchenPrinters());
 
-    unawaited(_fanOutKotToKitchenPrinters());
     // Totals → Pay
     late final OrderDetail detail;
     try {
@@ -1641,7 +1701,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
     // 4) After payment, do these in parallel (best-effort)
     final invoiceF = client.createInvoice(orderId).catchError((_) => <String, dynamic>{});
     final drawerF  = client.openDrawer(tenantId: tenantId, branchId: branchId).catchError((_) {});
-    await kotF; // ensure KOT attempt finished
+    await kotF;
 
     final invoiceResp = await invoiceF;
     final invoiceId   = invoiceResp['invoice_id']?.toString();
@@ -1651,13 +1711,12 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
     unawaited(drawerF);
 
     // 5) Done — clear cart & toast
+    ref.invalidate(ordersFutureProvider);
     ref.read(posCartProvider.notifier).clear();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          'Paid ₹${detail.totals.due.toStringAsFixed(2)} • Order $orderNo (${info.channel.name}) ✅',
-        ),
+        content: Text('Paid ₹${detail.totals.due.toStringAsFixed(2)} • Order $orderNo (${info.channel.name}) ✅'),
         duration: const Duration(seconds: 3),
       ),
     );

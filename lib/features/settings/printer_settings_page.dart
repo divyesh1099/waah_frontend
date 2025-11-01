@@ -7,7 +7,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/providers.dart';
 import '../../data/api_client.dart';
 import '../../data/models.dart';
-import '../../data/repo/settings_repo.dart';
 import 'package:go_router/go_router.dart';
 import 'package:dio/dio.dart'; // for DioException type checks
 
@@ -161,7 +160,7 @@ class PrinterSettingsPage extends ConsumerWidget {
                 TextField(controller: nameCtl,  decoration: const InputDecoration(labelText: 'Name'), autofocus: true),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<PrinterType>(
-                  value: type,
+                  initialValue: type,
                   decoration: const InputDecoration(labelText: 'Type'),
                   items: PrinterType.values.map((t) => DropdownMenuItem(value: t, child: Text(t.name))).toList(),
                   onChanged: (v) => setState(() {

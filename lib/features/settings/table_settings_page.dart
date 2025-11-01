@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';
 import '../../data/models.dart';
-import '../../data/repo/settings_repo.dart';
 import 'package:go_router/go_router.dart';
 
 class TableSettingsPage extends ConsumerWidget {

@@ -1,10 +1,9 @@
-﻿// ================================
+// ================================
 // lib/features/settings/settings_page.dart
 // ================================
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/providers.dart';
-import '../../data/repo/settings_repo.dart';
 import '../../data/models.dart';
 import 'package:go_router/go_router.dart';
 
@@ -23,7 +22,7 @@ class SettingsPage extends ConsumerWidget {
     // read branches to show current branch name in AppBar
     final branchesAsync = ref.watch(branchesStreamProvider);
 
-    String _branchLabel(List<BranchInfo> list, String id) {
+    String branchLabel(List<BranchInfo> list, String id) {
       final b = list.firstWhere(
             (x) => x.id == id,
         orElse: () => BranchInfo(id: id, tenantId: me?.tenantId ?? '', name: '—'),
@@ -47,7 +46,7 @@ class SettingsPage extends ConsumerWidget {
                     if (branchId.isNotEmpty)
                       Chip(
                         label: Text(
-                          _branchLabel(bs, branchId),
+                          branchLabel(bs, branchId),
                           style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                       ),

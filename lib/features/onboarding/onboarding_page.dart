@@ -727,7 +727,6 @@ class _AdminStep extends StatelessWidget {
   final TextEditingController pin;
 
   const _AdminStep({
-    super.key,
     required this.formKey,
     required this.appSecret,
     required this.tenantName,
@@ -870,7 +869,6 @@ class _BranchStep extends StatelessWidget {
   final TextEditingController branchAddr;
 
   const _BranchStep({
-    super.key,
     required this.formKey,
     required this.tenantId,
     required this.branchName,
@@ -986,7 +984,6 @@ class _BrandStep extends StatelessWidget {
   final TextEditingController restAddr;
 
   const _BrandStep({
-    super.key,
     required this.formKey,
     required this.branchId,
     required this.restName,
@@ -1077,7 +1074,6 @@ class _DoneStep extends StatelessWidget {
   final String password;
 
   const _DoneStep({
-    super.key,
     required this.mobile,
     required this.password,
   });

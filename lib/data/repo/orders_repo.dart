@@ -32,7 +32,7 @@ class OrdersRepo {
         final opened = o.openedAt;
         await _db.upsertOrder(OrdersCompanion(
           remoteId: Value(o.id ?? ''),
-          orderNo: Value('${o.orderNo ?? ''}'),
+          orderNo: Value(o.orderNo ?? ''),
           status: Value(o.status.name),
           channel: Value(o.channel.name),
           tableId: Value(o.tableId),
@@ -67,7 +67,7 @@ class OrdersRepo {
       // cache totals locally for offline
       await _db.upsertOrder(OrdersCompanion(
         remoteId: Value(o.id ?? orderId),
-        orderNo: Value('${o.orderNo ?? ''}'),
+        orderNo: Value(o.orderNo ?? ''),
         status: Value(o.status.name),
         channel: Value(o.channel.name),
         tableId: Value(o.tableId),
@@ -90,31 +90,31 @@ class OrdersRepo {
       // Pull tenant/branch from local settings if not provided
       final settings =
       await _db.select(_db.restaurantSettings).getSingleOrNull();
-      final _tenantId = tenantId ?? settings?.tenantId ?? '';
-      final _branchId = branchId ?? settings?.branchId ?? '';
+      final tenantId0 = tenantId ?? settings?.tenantId ?? '';
+      final branchId0 = branchId ?? settings?.branchId ?? '';
 
       // Safe defaults for required fields
-      final _sourceDeviceId = sourceDeviceId ?? 'offline-device';
-      final _customerId = customerId ?? 'OFFLINE';
-      final _openedByUserId = openedByUserId ?? 'OFFLINE';
-      final _closedByUserId = closedByUserId ?? 'OFFLINE';
-      final _closedAt = row.updatedAt ?? row.openedAt ?? DateTime.now();
+      final sourceDeviceId0 = sourceDeviceId ?? 'offline-device';
+      final customerId0 = customerId ?? 'OFFLINE';
+      final openedByUserId0 = openedByUserId ?? 'OFFLINE';
+      final closedByUserId0 = closedByUserId ?? 'OFFLINE';
+      final closedAt = row.updatedAt ?? row.openedAt ?? DateTime.now();
 
       // Build JSON that matches your Order.fromJson schema.
       // NOTE: status/channel are stored as enum names in DB → pass as strings so fromJson maps correctly.
       final orderJson = <String, dynamic>{
         'id': orderId,
-        'tenantId': _tenantId,
-        'branchId': _branchId,
+        'tenantId': tenantId0,
+        'branchId': branchId0,
         'orderNo': row.orderNo,
         'status': row.status,               // e.g. "open", "closed"
         'channel': row.channel,             // e.g. "dinein", "takeaway", "delivery"
         'provider': providerIfString,       // if your model expects String; if it expects enum, your fromJson will map
-        'customerId': _customerId,
-        'openedByUserId': _openedByUserId,
-        'closedByUserId': _closedByUserId,
-        'sourceDeviceId': _sourceDeviceId,
-        'closedAt': _closedAt.toIso8601String(),
+        'customerId': customerId0,
+        'openedByUserId': openedByUserId0,
+        'closedByUserId': closedByUserId0,
+        'sourceDeviceId': sourceDeviceId0,
+        'closedAt': closedAt.toIso8601String(),
         // Optional fields:
         'tableId': row.tableId,
         'pax': row.pax,

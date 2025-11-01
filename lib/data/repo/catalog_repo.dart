@@ -1,4 +1,4 @@
-﻿// lib/data/repo/catalog_repo.dart
+// lib/data/repo/catalog_repo.dart
 import 'dart:io' as io;
 
 import 'package:drift/drift.dart' show Value;
@@ -209,7 +209,7 @@ class CatalogRepo {
     // Read bytes (supports web/desktop)
     final bytes = file.bytes ?? await io.File(file.path!).readAsBytes();
 
-    String _inferMime(String name) {
+    String inferMime(String name) {
       final lower = name.toLowerCase();
       if (lower.endsWith('.png')) return 'image/png';
       if (lower.endsWith('.webp')) return 'image/webp';
@@ -222,7 +222,7 @@ class CatalogRepo {
       itemId: itemId,
       bytes: bytes,
       filename: file.name,
-      contentType: _inferMime(file.name),
+      contentType: inferMime(file.name),
     );
 
     // Update-only local write; do NOT insert partial rows
@@ -499,7 +499,7 @@ class CatalogRepo {
     );
     if (resp.data == null) return;
 
-    String _inferMime(String name) {
+    String inferMime(String name) {
       final lower = name.toLowerCase();
       if (lower.endsWith('.png')) return 'image/png';
       if (lower.endsWith('.webp')) return 'image/webp';
@@ -515,7 +515,7 @@ class CatalogRepo {
       itemId: itemId,
       bytes: resp.data!,
       filename: filename,
-      contentType: _inferMime(filename),
+      contentType: inferMime(filename),
     );
 
     // update-only locally

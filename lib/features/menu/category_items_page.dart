@@ -6,7 +6,7 @@ import 'package:waah_frontend/data/models.dart' as api;
 import 'package:waah_frontend/data/local/app_db.dart';
 import 'package:waah_frontend/data/repo/catalog_repo.dart';
 import 'package:waah_frontend/app/providers.dart';
-import 'package:waah_frontend/features/menu/menu_page.dart'; // For providers
+// For providers
 import 'package:waah_frontend/features/sync/sync_controller.dart';
 
 

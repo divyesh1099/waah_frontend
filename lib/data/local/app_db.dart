@@ -1,11 +1,9 @@
 // lib/data/local/app_db.dart
 import 'package:drift/drift.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:io';
 import 'package:drift/native.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
-import 'package:sqlite3_flutter_libs/sqlite3_flutter_libs.dart';
 
 // ⛔️ removed: import 'app_db.dart' as db;  // this file importing itself causes type resolution issues
 

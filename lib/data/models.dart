@@ -1,6 +1,5 @@
 // lib/data/models.dart
 
-import 'package:drift/drift.dart';
 
 /// ---------- Utilities ----------
 DateTime? _dt(dynamic v) {
@@ -951,7 +950,7 @@ class Ingredient {
   });
 
   factory Ingredient.fromJson(Map<String, dynamic> json) {
-    double _asDouble(dynamic v) {
+    double asDouble(dynamic v) {
       if (v == null) return 0;
       if (v is num) return v.toDouble();
       return double.tryParse(v.toString()) ?? 0;
@@ -962,8 +961,8 @@ class Ingredient {
       tenantId: (json['tenant_id'] ?? '') as String,
       name: (json['name'] ?? '') as String,
       uom: (json['uom'] ?? '') as String,
-      minLevel: _asDouble(json['min_level']),
-      qtyOnHand: json['qty_on_hand'] == null ? null : _asDouble(json['qty_on_hand']),
+      minLevel: asDouble(json['min_level']),
+      qtyOnHand: json['qty_on_hand'] == null ? null : asDouble(json['qty_on_hand']),
       imageUrl: _str(json['image_url']), // NEW
     );
   }
@@ -1277,9 +1276,9 @@ class KitchenTicket {
             const [];
     final parsedLines = (rawLines is List)
         ? rawLines
-        .where((e) => e is Map)
+        .whereType<Map>()
         .map((e) => KitchenTicketLine.fromJson(
-      Map<String, dynamic>.from(e as Map),
+      Map<String, dynamic>.from(e),
     ))
         .toList()
         : const <KitchenTicketLine>[];
@@ -1563,7 +1562,7 @@ class CashMovementInfo {
   });
 
   factory CashMovementInfo.fromJson(Map<String, dynamic> json) {
-    double _toDouble(dynamic v) {
+    double toDouble(dynamic v) {
       if (v is num) return v.toDouble();
       return double.tryParse(v?.toString() ?? '0') ?? 0.0;
     }
@@ -1571,7 +1570,7 @@ class CashMovementInfo {
     return CashMovementInfo(
       id: json['id']?.toString() ?? '',
       kind: json['kind']?.toString() ?? '',
-      amount: _toDouble(json['amount']),
+      amount: toDouble(json['amount']),
       reason: json['reason'] as String?,
       ts: json['ts'] != null
           ? DateTime.tryParse(json['ts'].toString())
@@ -1630,7 +1629,7 @@ class ShiftMovementInfo {
   });
 
   factory ShiftMovementInfo.fromJson(Map<String, dynamic> json) {
-    double _toDouble(dynamic v) {
+    double toDouble(dynamic v) {
       if (v is num) return v.toDouble();
       if (v is String) return double.tryParse(v) ?? 0.0;
       return 0.0;
@@ -1639,7 +1638,7 @@ class ShiftMovementInfo {
     return ShiftMovementInfo(
       id: json['id']?.toString() ?? '',
       kind: json['kind']?.toString() ?? '',
-      amount: _toDouble(json['amount']),
+      amount: toDouble(json['amount']),
       reason: json['reason']?.toString(),
       ts: json['ts'] != null ? DateTime.tryParse(json['ts'].toString()) : null,
     );
@@ -1667,7 +1666,7 @@ class ShiftStatus {
   });
 
   factory ShiftStatus.fromJson(Map<String, dynamic> json) {
-    double _toDouble(dynamic v) {
+    double toDouble(dynamic v) {
       if (v is num) return v.toDouble();
       if (v is String) return double.tryParse(v) ?? 0.0;
       return 0.0;
@@ -1685,8 +1684,8 @@ class ShiftStatus {
       openedAt: json['opened_at'] != null
           ? DateTime.tryParse(json['opened_at'].toString())
           : null,
-      openingFloat: _toDouble(json['opening_float']),
-      expectedNow: _toDouble(json['expected_now']),
+      openingFloat: toDouble(json['opening_float']),
+      expectedNow: toDouble(json['expected_now']),
       isOpenAndUnlocked:
       json['is_open_and_unlocked'] == true,
       movements: mvList,

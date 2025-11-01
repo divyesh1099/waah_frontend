@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:waah_frontend/data/models.dart';
@@ -434,7 +434,7 @@ class _PurchaseDialogState
           mainAxisSize: MainAxisSize.min,
           children: [
             DropdownButtonFormField<Ingredient>(
-              value: _selected,
+              initialValue: _selected,
               items: widget.ingredients
                   .map(
                     (i) => DropdownMenuItem(

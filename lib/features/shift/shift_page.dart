@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:waah_frontend/app/providers.dart';
@@ -89,7 +89,7 @@ class _ShiftHeaderCard extends ConsumerWidget {
     final expectedNow = shift?.expectedNow ?? 0.0;
 
     return Card(
-      color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(.2),
+      color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(.2),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
         side: BorderSide(

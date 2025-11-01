@@ -251,7 +251,7 @@ class _MenuItemDetailPageState extends ConsumerState<MenuItemDetailPage> {
           const SizedBox(height: 12),
 
           DropdownButtonFormField<double?>(
-            value: _gstPresetValue,
+            initialValue: _gstPresetValue,
             decoration: const InputDecoration(
               labelText: 'GST % (preset)',
               border: OutlineInputBorder(),

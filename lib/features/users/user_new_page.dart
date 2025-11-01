@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:waah_frontend/app/providers.dart';
-import 'package:waah_frontend/data/api_client.dart';
 import 'package:waah_frontend/data/models.dart';
 
 /// All roles for current tenant, for checkboxes in "New User" form.

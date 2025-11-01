@@ -94,7 +94,7 @@ class AuthController extends StateNotifier<AuthState> {
     final apiBase = _ref.read(apiBaseClientProvider);
 
     // Helper to finalize success (online)
-    Future<void> _afterOnlineLogin(String token, {String? usedPin}) async {
+    Future<void> afterOnlineLogin(String token, {String? usedPin}) async {
       await _prefs.setString(_kTokenKey, token);
       state = state.copyWith(token: token, loading: false, error: null, offline: false);
 
@@ -134,7 +134,7 @@ class AuthController extends StateNotifier<AuthState> {
     try {
       // Prefer PIN if provided (your backend already supports &pin=)
       final token = await apiBase.login(mobile: mobile, password: password, pin: pin);
-      await _afterOnlineLogin(token, usedPin: pin);
+      await afterOnlineLogin(token, usedPin: pin);
     } on ApiException catch (e) {
       // If network/host unreachable OR offline and user gave a PIN: try offline unlock
       final offlineOk = await _tryOfflineUnlock(mobile: mobile, pin: pin);
@@ -191,12 +191,12 @@ class AuthController extends StateNotifier<AuthState> {
     final canVerify = salt != null && hash != null && hash.isNotEmpty && meJson != null && cachedToken != null;
     if (!canVerify) return false;
 
-    final ok = verifyPin(mobile: mobile, pin: pin, salt: salt!, storedHash: hash!);
+    final ok = verifyPin(mobile: mobile, pin: pin, salt: salt, storedHash: hash);
     if (!ok) return false;
 
     // Accept offline unlock using cached token + me
     try {
-      final me = MeInfo.fromJson(jsonDecode(meJson!) as Map<String, dynamic>);
+      final me = MeInfo.fromJson(jsonDecode(meJson) as Map<String, dynamic>);
       state = AuthState(
         token: cachedToken,
         me: me,

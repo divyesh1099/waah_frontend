@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';
 import '../../data/models.dart';
-import '../../data/repo/settings_repo.dart';
 
 class BranchSettingsPage extends ConsumerWidget {
   const BranchSettingsPage({super.key});

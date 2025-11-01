@@ -67,7 +67,7 @@ Main Course,Butter Chicken,,5,true,true,Full,420,,BCH-001,2106,https://picsum.ph
 
       // Map headers -> index
       final header = csv.first.map((e) => (e?.toString() ?? '').trim().toLowerCase()).toList();
-      int _col(String name) => header.indexOf(name);
+      int col(String name) => header.indexOf(name);
 
       final requiredCols = ['category', 'name', 'variant_label', 'price'];
       for (final rc in requiredCols) {
@@ -81,26 +81,26 @@ Main Course,Butter Chicken,,5,true,true,Full,420,,BCH-001,2106,https://picsum.ph
       for (var i = 1; i < csv.length; i++) {
         final row = csv[i];
         if (row.isEmpty) continue;
-        String _val(String name) {
-          final idx = _col(name);
+        String val(String name) {
+          final idx = col(name);
           if (idx < 0 || idx >= row.length) return '';
           final v = row[idx];
           return (v == null) ? '' : v.toString().trim();
         }
 
         rows.add({
-          'category': _val('category'),
-          'name': _val('name'),
-          'description': _val('description'),
-          'gst_rate': _val('gst_rate'),
-          'tax_inclusive': _val('tax_inclusive'),
-          'is_active': _val('is_active'),
-          'variant_label': _val('variant_label'),
-          'price': _val('price'),
-          'mrp': _val('mrp'),
-          'sku': _val('sku'),
-          'hsn': _val('hsn'),
-          'image_url': _val('image_url'),
+          'category': val('category'),
+          'name': val('name'),
+          'description': val('description'),
+          'gst_rate': val('gst_rate'),
+          'tax_inclusive': val('tax_inclusive'),
+          'is_active': val('is_active'),
+          'variant_label': val('variant_label'),
+          'price': val('price'),
+          'mrp': val('mrp'),
+          'sku': val('sku'),
+          'hsn': val('hsn'),
+          'image_url': val('image_url'),
         });
       }
 

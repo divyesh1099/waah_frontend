@@ -9,10 +9,8 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:waah_frontend/app/providers.dart';
 import 'package:waah_frontend/data/api_client.dart';
 import 'package:waah_frontend/data/models.dart';
 import 'package:waah_frontend/data/local/app_db.dart' as db;

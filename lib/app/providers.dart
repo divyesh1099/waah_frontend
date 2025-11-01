@@ -1,6 +1,8 @@
 ﻿// ==============================
 // lib/app/providers.dart  (FULL REPLACEMENT)
 // ==============================
+import 'dart:math';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:dio/dio.dart';
@@ -10,7 +12,8 @@ import 'package:waah_frontend/data/local/app_db.dart'; // Drift DB
 import 'package:waah_frontend/features/auth/auth_controller.dart';
 import '../data/models.dart';
 import '../data/repo/orders_repo.dart';
-import '../data/repo/settings_repo.dart'; // NOTE: SettingsRepo class only (no provider inside this file)
+import '../data/repo/settings_repo.dart';
+import '../features/orders/pending_orders.dart'; // NOTE: SettingsRepo class only (no provider inside this file)
 
 // ---- Media base ----
 final mediaBaseUrlProvider = Provider<String>((ref) => '$kBaseUrl/media/');
@@ -287,3 +290,67 @@ final branchesStreamProvider =
 StreamProvider.autoDispose<List<BranchInfo>>((ref) {
   return ref.watch(settingsRepoProvider).watchBranches();
 });
+// Server orders page (filter by active tenant/branch)
+// Server orders page (returns List<Order> by unwrapping PageResult)
+final ordersFutureProvider =
+FutureProvider.autoDispose<List<Order>>((ref) async {
+  final api = ref.watch(apiClientProvider);
+
+  // Your ApiClient returns a PageResult<Order>
+  final page = await api.fetchOrders(page: 1, size: 100);
+
+  // If your PageResult uses a different field than `items`,
+  // change `items` to whatever it is (e.g. `data`).
+  return page.items;
+});
+
+// Persisted “device id” for syncPush
+final deviceIdProvider = Provider<String>((ref) {
+  final prefs = ref.watch(prefsProvider);
+  final existing = prefs.getString('device_id');
+  if (existing != null && existing.isNotEmpty) return existing;
+
+  final r = Random();
+  final id = 'dev-${DateTime.now().millisecondsSinceEpoch}-${r.nextInt(1 << 32)}';
+  prefs.setString('device_id', id);
+  return id;
+});
+// Count of "queued ops" (use pending placeholders as the proxy)
+final queuedOpsCountProvider = Provider<int?>((ref) {
+  final pend = ref.watch(pendingOrdersProvider);
+  return pend.length;
+});
+// TODO: Replace with your real queued ops (coalesced) list.
+final queueOpsProvider = Provider<List<Map<String, dynamic>>>((ref) {
+  // Example: return ref.read(syncQueueProvider).coalescedOps(onlyOpen: ...);
+  return const <Map<String, dynamic>>[];
+});
+
+// Push actions used by the diag buttons
+final queuePusherProvider = Provider<QueuePusher>((ref) => QueuePusher(ref));
+
+class QueuePusher {
+  QueuePusher(this._ref);
+  final Ref _ref;
+
+  Future<void> pushAllNow()  async => _push(onlyOpen: false);
+  Future<void> pushOpenOnly() async => _push(onlyOpen: true);
+
+  Future<void> _push({required bool onlyOpen}) async {
+    final api       = _ref.read(apiClientProvider);
+    final deviceId  = _ref.read(deviceIdProvider);
+
+    // If you can filter OPEN vs ALL, do it in the provider that builds ops.
+    // For the stub we just read whatever is available.
+    final ops = _ref.read(queueOpsProvider);
+
+    await api.syncPush(deviceId: deviceId, ops: ops);
+
+    // Refresh + reconcile placeholders using the fresh server page
+    final live    = await _ref.read(ordersFutureProvider.future);
+    final pending = _ref.read(pendingOrdersProvider.notifier);
+    pending.reconcileWithServer(live);
+    pending.reconcileLooseWithServer(live, skew: const Duration(minutes: 3));
+  }
+}
+
