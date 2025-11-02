@@ -19,6 +19,43 @@ typedef Read = T Function<T>(ProviderListenable<T> provider);
 final Map<String, List<ItemVariant>> _variantsCache = {};
 final Map<String, List<_ItemModifierGroupData>> _modsCache = {};
 
+// ---------------- SPEED CONFIG ----------------
+const bool _kAutoPrintKOT = true;
+const bool _kAutoPrintInvoice = true;
+const int _kAddItemsParallel = 8; // was 6
+const bool _kPreferFastPath = true; // true => fast online path; false => offline-first queue
+
+// Cache printer IDs per branch to avoid listPrinters() each time
+class _PrinterSnapshot {
+  final List<String> kitchenPrinterIds;
+  final List<String> billPrinterIds; // invoice / bill printers
+  const _PrinterSnapshot({
+    required this.kitchenPrinterIds,
+    required this.billPrinterIds,
+  });
+}
+
+// Fetch once per tenant/branch; invalidate when branch changes.
+final printerSnapshotProvider = FutureProvider<_PrinterSnapshot>((ref) async {
+  final client = ref.watch(apiClientProvider);
+  final tenantId = ref.watch(activeTenantIdProvider);
+  final branchId = ref.watch(activeBranchIdProvider);
+  if (tenantId.isEmpty || branchId.isEmpty) {
+    return const _PrinterSnapshot(kitchenPrinterIds: [], billPrinterIds: []);
+  }
+  final printers = await client.listPrinters(tenantId: tenantId, branchId: branchId);
+  final kitchen = <String>[];
+  final bill = <String>[];
+  for (final p in printers) {
+    final type = ((p['type'] as String?) ?? '').toUpperCase();
+    final pid = (p['id'] as String?) ?? '';
+    if (pid.isEmpty) continue;
+    if (type == 'KITCHEN') kitchen.add(pid);
+    if (type == 'BILLING' || type == 'RECEIPT' || type == 'FRONT') bill.add(pid);
+  }
+  return _PrinterSnapshot(kitchenPrinterIds: kitchen, billPrinterIds: bill);
+});
+
 Future<List<ItemVariant>> _getVariantsCached(WidgetRef ref, String itemId) async {
   final hit = _variantsCache[itemId];
   if (hit != null) return hit;
@@ -247,6 +284,7 @@ class PosCartNotifier extends Notifier<PosCartState> {
     final setA = a.map((m) => m.id ?? m.name).toSet();
     final setB = b.map((m) => m.id ?? m.name).toSet();
     return setA.length == setB.length && setA.containsAll(setB);
+
   }
 
   /// Internal helper: find matching line (item+variant+same modifiers).
@@ -488,173 +526,167 @@ class PosPage extends ConsumerWidget {
           ),
         ],
       ),
-      body: Column(
+      // NEW LAYOUT: Row
+      body: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // CATEGORIES BAR
-          catsAsync.when(
-            data: (cats) => _CategoryBar(categories: cats),
-            loading: () => const SizedBox(
-              height: 56,
-              child: Center(child: CircularProgressIndicator()),
-            ),
-            error: (e, st) => SizedBox(
-              height: 56,
-              child: Center(
-                child: Text(
-                  'Categories error: $e',
-                  style: const TextStyle(color: Colors.red),
-                ),
-              ),
-            ),
-          ),
-
-          const Divider(height: 0),
-
-          // MENU GRID
+          // --- LEFT SIDE (MENU) ---
           Expanded(
-            child: itemsAsync.when(
-              data: (items) {
-                if (items.isEmpty) {
-                  return const Center(
-                    child: Text('No items in this category'),
-                  );
-                }
-
-                return LayoutBuilder(
-                  builder: (context, cs) {
-                    // Responsive grid: wider screens show more columns
-                    final maxWidth = cs.maxWidth;
-                    final cross = maxWidth >= 1200
-                        ? 6
-                        : maxWidth >= 992
-                        ? 5
-                        : maxWidth >= 768
-                        ? 4
-                        : maxWidth >= 560
-                        ? 3
-                        : 2;
-                    // Prefetch for the first few visible items (no await → non-blocking)
-                    for (final it in items.take(24)) {
-                      final id = it.id;
-                      if (id != null && id.isNotEmpty) {
-                        unawaited(_getVariantsCached(ref, id));
-                        unawaited(_getModsCached(ref, id));
-                      }
-                    }
-
-                    return Scrollbar(
-                      child: GridView.builder(
-                        primary: true,
-                        padding: const EdgeInsets.all(12),
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: cross,
-                          mainAxisSpacing: 12,
-                          crossAxisSpacing: 12,
-                          childAspectRatio: 3 / 4,
-                        ),
-                        itemCount: items.length,
-                        cacheExtent: 800,                // prefetch offscreen widgets
-                        addAutomaticKeepAlives: false,   // fewer keepalive markers
-                        addRepaintBoundaries: true,      // isolate paints
-                        addSemanticIndexes: false,
-                        itemBuilder: (_, i) {
-                          final item = items[i];
-                          return _ItemCard(
-                            key: ValueKey(item.id ?? i),  // better element reuse
-                            item: item,
-                                                onTap: () async {
-                                                  if ((item.id ?? '').isEmpty) return;
-
-                                                  // fetch & cache in parallel
-                                                  final results = await Future.wait([
-                                                    _getVariantsCached(ref, item.id!),
-                                                    _getModsCached(ref, item.id!),
-                                                  ]);
-                                                  final variants = results[0] as List<ItemVariant>;
-                                                  final modifierGroups = results[1] as List<_ItemModifierGroupData>;
-
-                                                  // QUICK ADD if: no required groups AND <=1 variant
-                                                  final hasRequired = modifierGroups.any((g) => g.requiredGroup && (g.minSel > 0));
-                                                  if (!hasRequired && variants.length <= 1) {
-                                                    final chosen = variants.isEmpty ? null : variants.first;
-                                                    ref.read(posCartProvider.notifier).addItem(
-                                                      item: item,
-                                                      variant: chosen,
-                                                      modifiers: const [],
-                                                      qty: 1,
-                                                    );
-                                                    if (context.mounted) {
-                                                      ScaffoldMessenger.of(context).showSnackBar(
-                                                        SnackBar(
-                                                          content: Text('${item.name} x1 added to cart'),
-                                                          duration: const Duration(milliseconds: 700),
-                                                        ),
-                                                      );
-                                                    }
-                                                    return;
-                                                  }
-
-                                                  // otherwise, open chooser
-                                                  if (!context.mounted) return;
-                                                  final res = await showModalBottomSheet<_AddResult>(
-                                                    context: context,
-                                                    isScrollControlled: true,
-                                                    builder: (_) => _AddToCartSheet(
-                                                      item: item,
-                                                      variants: variants,
-                                                      modifierGroups: modifierGroups,
-                                                    ),
-                                                  );
-                                                  if (res == null) return;
-                                                  ref.read(posCartProvider.notifier).addItem(
-                                                    item: item,
-                                                    variant: res.variant,
-                                                    modifiers: res.modifiers,
-                                                    qty: res.qty.toDouble(),
-                                                  );
-                                                  if (context.mounted) {
-                                                    ScaffoldMessenger.of(context).showSnackBar(
-                                                      SnackBar(
-                                                        content: Text('${item.name} x${res.qty} added to cart'),
-                                                        duration: const Duration(milliseconds: 800),
-                                                      ),
-                                                    );
-                                                  }
-                                                },
-                                              );
-                        },
+            flex: 65, // 65% width
+            child: Column(
+              children: [
+                // CATEGORIES BAR
+                catsAsync.when(
+                  data: (cats) => _CategoryBar(categories: cats),
+                  loading: () => const SizedBox(
+                    height: 56,
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                  error: (e, st) => SizedBox(
+                    height: 56,
+                    child: Center(
+                      child: Text(
+                        'Categories error: $e',
+                        style: const TextStyle(color: Colors.red),
                       ),
-                    );
-                  },
-                );
-              },
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, st) => Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'Failed to load items:\n$e',
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 8),
-                      FilledButton(
-                        onPressed: () {
-                          ref.invalidate(posItemsProvider);
-                        },
-                        child: const Text('Retry'),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
+
+                const Divider(height: 0),
+
+                // MENU LIST
+                Expanded(
+                  child: itemsAsync.when(
+                    data: (items) {
+                      if (items.isEmpty) {
+                        return const Center(
+                          child: Text('No items in this category'),
+                        );
+                      }
+
+                      // Prefetch for the first few visible items (no await → non-blocking)
+                      for (final it in items.take(24)) {
+                        final id = it.id;
+                        if (id != null && id.isNotEmpty) {
+                          unawaited(_getVariantsCached(ref, id));
+                          unawaited(_getModsCached(ref, id));
+                        }
+                      }
+
+                      // Use ListView for "least scrolling"
+                      return Scrollbar(
+                        child: ListView.separated(
+                          primary: true,
+                          padding: const EdgeInsets.all(8),
+                          itemCount: items.length,
+                          cacheExtent: 800,
+                          addAutomaticKeepAlives: false,
+                          addRepaintBoundaries: false, // Rows are simple
+                          addSemanticIndexes: false,
+                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          itemBuilder: (_, i) {
+                            final item = items[i];
+                            return _MenuItemRow(
+                              key: ValueKey(item.id ?? i),
+                              item: item,
+                              onTap: () async {
+                                if ((item.id ?? '').isEmpty) return;
+
+                                // fetch & cache in parallel
+                                final results = await Future.wait([
+                                  _getVariantsCached(ref, item.id!),
+                                  _getModsCached(ref, item.id!),
+                                ]);
+                                final variants = results[0] as List<ItemVariant>;
+                                final modifierGroups = results[1] as List<_ItemModifierGroupData>;
+
+                                // QUICK ADD if: no required groups AND <=1 variant
+                                final hasRequired = modifierGroups.any((g) => g.requiredGroup && (g.minSel > 0));
+                                if (!hasRequired && variants.length <= 1) {
+                                  final chosen = variants.isEmpty ? null : variants.first;
+                                  ref.read(posCartProvider.notifier).addItem(
+                                    item: item,
+                                    variant: chosen,
+                                    modifiers: const [],
+                                    qty: 1,
+                                  );
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('${item.name} x1 added to cart'),
+                                        duration: const Duration(milliseconds: 700),
+                                      ),
+                                    );
+                                  }
+                                  return;
+                                }
+
+                                // otherwise, open chooser
+                                if (!context.mounted) return;
+                                final res = await showModalBottomSheet<_AddResult>(
+                                  context: context,
+                                  isScrollControlled: true,
+                                  builder: (_) => _AddToCartSheet(
+                                    item: item,
+                                    variants: variants,
+                                    modifierGroups: modifierGroups,
+                                  ),
+                                );
+                                if (res == null) return;
+                                ref.read(posCartProvider.notifier).addItem(
+                                  item: item,
+                                  variant: res.variant,
+                                  modifiers: res.modifiers,
+                                  qty: res.qty.toDouble(),
+                                );
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('${item.name} x${res.qty} added to cart'),
+                                      duration: const Duration(milliseconds: 800),
+                                    ),
+                                  );
+                                }
+                              },
+                            );
+                          },
+                        ),
+                      );
+                    },
+                    loading: () => const Center(child: CircularProgressIndicator()),
+                    error: (e, st) => Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'Failed to load items:\n$e',
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 8),
+                            FilledButton(
+                              onPressed: () {
+                                ref.invalidate(posItemsProvider);
+                              },
+                              child: const Text('Retry'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
 
-          // CART SUMMARY (capped height so it never "covers" the screen)
-          _CartSummary(cart: cart),
+          // --- RIGHT SIDE (CART) ---
+          Expanded(
+            flex: 35, // 35% width
+            child: _VerticalCartView(cart: cart),
+          ),
         ],
       ),
     );
@@ -711,45 +743,37 @@ class _CategoryBar extends ConsumerWidget {
   }
 }
 
-/// One menu item card in the grid (shows image if available)
-class _ItemCard extends StatelessWidget {
-  const _ItemCard({super.key, required this.item, required this.onTap});
+/// NEW: One menu item row (replaces _ItemCard)
+class _MenuItemRow extends StatelessWidget {
+  const _MenuItemRow({Key? key, required this.item, required this.onTap}) : super(key: key);
   final MenuItem item;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final hasImg = (item.imageUrl != null && item.imageUrl!.trim().isNotEmpty);
-
     return Material(
       color: Colors.brown.shade50,
-      borderRadius: BorderRadius.circular(10),
-      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Image area
-            AspectRatio(
-              aspectRatio: 4 / 3,
-              child: RepaintBoundary(
-                child: MenuBannerImage(
-                  path: item.imageUrl,
-                  borderRadius: 0,
-                  // TIP (optional): if MenuBannerImage lets you pass fit/filter:
-                  // fit: BoxFit.cover,
-                  // filterQuality: FilterQuality.low,
-                  // gapless: true,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              // Image (small)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: SizedBox(
+                  width: 50,
+                  height: 50,
+                  child: MenuBannerImage(
+                    path: item.imageUrl,
+                    borderRadius: 0,
+                  ),
                 ),
               ),
-            ),
-
-            // Texts
-            Expanded(
-              child: Padding(
-                padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              const SizedBox(width: 12),
+              // Text (prominent)
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -757,8 +781,9 @@ class _ItemCard extends StatelessWidget {
                       item.name,
                       style: const TextStyle(
                         fontWeight: FontWeight.w700,
+                        fontSize: 16, // Larger font
                       ),
-                      maxLines: 1,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
                     if (item.description != null &&
@@ -767,7 +792,7 @@ class _ItemCard extends StatelessWidget {
                         padding: const EdgeInsets.only(top: 2),
                         child: Text(
                           item.description!,
-                          maxLines: 2,
+                          maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 12,
@@ -775,32 +800,31 @@ class _ItemCard extends StatelessWidget {
                           ),
                         ),
                       ),
-                    const Spacer(),
-                    Align(
-                      alignment: Alignment.bottomRight,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.brown.shade300,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: const Text(
-                          'Add +',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ),
                   ],
                 ),
               ),
-            ),
-          ],
+              const SizedBox(width: 12),
+              // Add button
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.brown.shade300,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text(
+                  'Add +',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1338,12 +1362,18 @@ Set<String> _extractOrderNos(List<Map<String, dynamic>> ops) {
 
 /// ---------------- FAST ONLINE HELPERS (no queue, but much quicker) ----------------
 
-Future<void> _addItemsBulkFast(ApiClient client, String orderId, List<CartLine> lines,
-    {int parallel = 6}) async {
+Future<void> _addItemsBulkFast(
+    ApiClient client,
+    String orderId,
+    List<CartLine> lines, {
+      int parallel = _kAddItemsParallel, // ← uses SPEED CONFIG
+    }) async {
   // limit concurrency to avoid server overload
   final chunks = <List<CartLine>>[];
   for (var i = 0; i < lines.length; i += parallel) {
-    chunks.add(lines.sublist(i, i + parallel > lines.length ? lines.length : i + parallel));
+    chunks.add(
+      lines.sublist(i, i + parallel > lines.length ? lines.length : i + parallel),
+    );
   }
   for (final chunk in chunks) {
     await Future.wait(chunk.map((l) {
@@ -1371,21 +1401,27 @@ Future<void> _addItemsBulkFast(ApiClient client, String orderId, List<CartLine> 
         priceDelta: m.priceDelta,
       ))
           .toList();
-      return client.addOrderItem(orderId, orderItem, modifiers: mods);
+      // Add error handling inside the map to prevent one failure from
+      // killing the whole batch.
+      return client.addOrderItem(orderId, orderItem, modifiers: mods)
+          .catchError((e) {
+        debugPrint('Failed to add item ${l.item.name}: $e');
+        // Continue regardless of error
+      });
     }));
   }
 }
 
-/// Bottom cart: shows lines, lets you +/-/X, shows total, and checkout
-class _CartSummary extends ConsumerStatefulWidget {
-  const _CartSummary({required this.cart});
+/// NEW: Renamed from _CartSummary. This is now the vertical cart view.
+class _VerticalCartView extends ConsumerStatefulWidget {
+  const _VerticalCartView({required this.cart});
   final PosCartState cart;
 
   @override
-  ConsumerState<_CartSummary> createState() => _CartSummaryState();
+  ConsumerState<_VerticalCartView> createState() => _VerticalCartViewState();
 }
 
-class _CartSummaryState extends ConsumerState<_CartSummary> {
+class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
   bool _busy = false;
   late final ScrollController _cartCtl;
 
@@ -1523,10 +1559,85 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
     );
   }
 
-  // talk to backend: create order, add items, take cash, invoice, print
-  // talk to backend: create order, add items, SEND KOT, take cash, invoice, print
-  Future<void> _performCheckout(PosCartState cart, _CheckoutRequest info) async {
-    final client   = ref.read(apiClientProvider);
+  /// [OPTIMIZED]
+  /// Runs KOT, Invoice, Print, and Drawer ops in the background
+  /// *after* payment is successful. Does not block the UI.
+  Future<void> _runPostCheckoutTasks(
+      String orderId,
+      String tenantId,
+      String branchId, {
+        required bool autoPrintKot,
+        required bool autoPrintInvoice,
+      }) async {
+    // Use `ref.read` as this is a fire-and-forget task
+    // and we shouldn't watch providers.
+    final client = ref.read(apiClientProvider);
+
+    // We can run KOT, Invoice, and Drawer in parallel
+    final kotF = client
+        .fireKotForOrder(orderId: orderId, stationId: null)
+        .catchError((e) {
+      debugPrint('[BG] Failed to fire KOT for $orderId: $e');
+      return <String, dynamic>{}; // return dummy value
+    });
+
+    final invoiceF = client.createInvoice(orderId).catchError((e) {
+      debugPrint('[BG] Failed to create invoice for $orderId: $e');
+      return <String, dynamic>{}; // return dummy value
+    });
+
+    final drawerF = client
+        .openDrawer(tenantId: tenantId, branchId: branchId)
+        .catchError((e) {
+      debugPrint('[BG] Failed to open drawer for $branchId: $e');
+      return <String, dynamic>{}; // return dummy value
+    });
+
+    // Wait for the "primary" tasks to finish
+    // We only truly need to wait for invoiceF to know the invoiceId
+    final results = await Future.wait([kotF, invoiceF, drawerF]);
+    final invoiceResp = results[1] as Map<String, dynamic>; // from invoiceF
+
+    // --- Start "secondary" print tasks (which are also fire/forget) ---
+
+    // 1. Print KOTs (depends on kotF succeeding, though not strictly)
+    if (autoPrintKot) {
+      try {
+        // Use read, not watch, and get the future
+        final snap = await ref.read(printerSnapshotProvider.future);
+        for (final pid in snap.kitchenPrinterIds) {
+          // No need to await these individual prints
+          unawaited(client.printKot(orderId: orderId, printerId: pid)
+              .catchError((e) {
+            debugPrint('[BG] Failed to print KOT to $pid: $e');
+          }));
+        }
+      } catch (e) {
+        debugPrint('[BG] Failed to get printer snapshot for KOT: $e');
+      }
+    }
+
+    // 2. Print Invoice (depends on invoiceF succeeding)
+    final invoiceId = invoiceResp['invoice_id']?.toString();
+    if (autoPrintInvoice && invoiceId != null && invoiceId.isNotEmpty) {
+      // No need to await this
+      unawaited(client.printInvoice(invoiceId).catchError((e) {
+        debugPrint('[BG] Failed to print invoice $invoiceId: $e');
+      }));
+    }
+  }
+
+
+  /// [OPTIMIZED]
+  /// talk to backend: create order, add items, SEND KOT, take cash, invoice, print
+  Future<void> _performCheckout(
+      PosCartState cart,
+      _CheckoutRequest info, {
+        bool preferFastPath = _kPreferFastPath,
+        bool autoPrintKot = _kAutoPrintKOT,
+        bool autoPrintInvoice = _kAutoPrintInvoice,
+      }) async {
+    final client = ref.read(apiClientProvider);
     final tenantId = ref.read(activeTenantIdProvider);
     final branchId = ref.read(activeBranchIdProvider);
 
@@ -1542,12 +1653,9 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
     // Create a client-stable order number BEFORE using it anywhere.
     final String orderNo = 'POS1-${DateTime.now().millisecondsSinceEpoch}';
 
-    // Fast, offline-first path
-    const bool queueFirst = false;
-
-    if (queueFirst) {
-      // Prepare the compact ops batch with ALL required named params.
-      final double amountHint = cart.subTotal; // server will recompute exactly
+    // ---------------- OFFLINE-FIRST PATH (if requested) ----------------
+    if (!preferFastPath) {
+      final double amountHint = cart.subTotal; // server will recompute
       final ops = buildCheckoutOps(
         orderNo: orderNo,
         tenantId: tenantId,
@@ -1559,11 +1667,9 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
         amountDueHint: amountHint,
       );
 
-      // Queue locally for /sync/push
       await _enqueueOps(ref.read, ops);
       unawaited(pushQueueNow(context, ref));
 
-      // Show instantly in Orders (pending badge)
       ref.read(pendingOrdersProvider.notifier).addQueued(
         orderNo: orderNo,
         channel: info.channel,
@@ -1571,7 +1677,6 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
         openedAt: DateTime.now(),
       );
 
-      // Clear the cart immediately; feels instant
       ref.read(posCartProvider.notifier).clear();
 
       if (!mounted) return;
@@ -1581,14 +1686,10 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
           duration: const Duration(seconds: 3),
         ),
       );
-
-      // Optional: if your Orders list provider is accessible here, you can invalidate it
-      // ref.invalidate(ordersFutureProvider);
-
       return; // Done (offline-first)
     }
 
-    // ---------------- FAST ONLINE PATH (keeps backend as-is, but parallelizes) ----------------
+    // ---------------- FAST ONLINE PATH ----------------
 
     // 1) Open order (single call)
     late final String orderId;
@@ -1642,41 +1743,16 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
 
     // 2) Add items in parallel (chunked)
     try {
-      await _addItemsBulkFast(client, orderId, cart.lines, parallel: 6);
+      await _addItemsBulkFast(client, orderId, cart.lines);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to add items: $e')),
       );
-      return;
+      // Don't return; maybe some items were added. Try to proceed.
     }
 
-    // 3) Start non-blocking ops
-    final kotF = client
-        .fireKotForOrder(orderId: orderId, stationId: null)
-        .catchError((_) {});
-
-    final tenantId2 = ref.read(activeTenantIdProvider);
-    final branchId2 = ref.read(activeBranchIdProvider);
-
-    Future<void> fanOutKotToKitchenPrinters() async {
-      try {
-        final printers = await client.listPrinters(
-          tenantId: tenantId2,
-          branchId: branchId2,
-        );
-        for (final p in printers) {
-          final type = ((p['type'] as String?) ?? '').toUpperCase();
-          final pid  = (p['id']   as String?) ?? '';
-          if (type == 'KITCHEN' && pid.isNotEmpty) {
-            unawaited(client.printKot(orderId: orderId, printerId: pid));
-          }
-        }
-      } catch (_) {/* best-effort */}
-    }
-    unawaited(fanOutKotToKitchenPrinters());
-
-    // Totals → Pay
+    // 3) Get Totals → Pay
     late final OrderDetail detail;
     try {
       detail = await client.getOrderDetail(orderId);
@@ -1688,8 +1764,10 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       return;
     }
 
+    final double paidAmount;
     try {
-      await client.pay(orderId, PayMode.CASH, detail.totals.due);
+      paidAmount = detail.totals.due; // Get amount before pay call
+      await client.pay(orderId, PayMode.CASH, paidAmount);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1698,28 +1776,35 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
       return;
     }
 
-    // 4) After payment, do these in parallel (best-effort)
-    final invoiceF = client.createInvoice(orderId).catchError((_) => <String, dynamic>{});
-    final drawerF  = client.openDrawer(tenantId: tenantId, branchId: branchId).catchError((_) {});
-    await kotF;
-
-    final invoiceResp = await invoiceF;
-    final invoiceId   = invoiceResp['invoice_id']?.toString();
-    if (invoiceId != null && invoiceId.isNotEmpty) {
-      unawaited(client.printInvoice(invoiceId).catchError((_) {}));
-    }
-    unawaited(drawerF);
-
-    // 5) Done — clear cart & toast
-    ref.invalidate(ordersFutureProvider);
+    // 4) [OPTIMIZED] After payment, SHOW SUCCESS and clear cart IMMEDIATELY.
+    // The cashier's job is done.
     ref.read(posCartProvider.notifier).clear();
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Paid ₹${detail.totals.due.toStringAsFixed(2)} • Order $orderNo (${info.channel.name}) ✅'),
-        duration: const Duration(seconds: 3),
-      ),
-    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Paid ₹${paidAmount.toStringAsFixed(2)} • Order $orderNo (${info.channel.name}) ✅'),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+
+    // 5) [OPTIMIZED] Invalidate caches
+    ref.invalidate(ordersFutureProvider);
+    for (final status in KOTStatus.values) {
+      ref.invalidate(kotTicketsProvider(status));
+    }
+
+    // 6) [OPTIMIZED] Run all post-checkout tasks (KOT, Invoice, Print, Drawer)
+    //    in the background. DO NOT await this.
+    unawaited(_runPostCheckoutTasks(
+      orderId,
+      tenantId,
+      branchId,
+      autoPrintKot: autoPrintKot,
+      autoPrintInvoice: autoPrintInvoice,
+    ));
+
+    // We are done. The UI is already updated and non-blocking.
   }
 
   Future<void> _startCheckout() async {
@@ -1730,10 +1815,7 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
 
     try {
       final req = await _askCheckoutInfo(widget.cart);
-      if (req == null) {
-        return; // user cancelled
-      }
-
+      if (req == null) return; // user cancelled
       await _performCheckout(widget.cart, req);
     } finally {
       if (mounted) {
@@ -1744,241 +1826,229 @@ class _CartSummaryState extends ConsumerState<_CartSummary> {
     }
   }
 
+  // NEW BUILD METHOD for vertical cart
   @override
   Widget build(BuildContext context) {
     final lines = widget.cart.lines;
     final total = widget.cart.subTotal;
 
     return Material(
-      elevation: 10,
+      elevation: 4, // Side panel shadow
       color: Colors.brown.shade50,
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Cart lines list (capped height so it never overgrows)
-              if (lines.isNotEmpty)
-                ConstrainedBox(
-                  constraints: const BoxConstraints(
-                    maxHeight: 180,
-                  ),
-                  child: Scrollbar(
-                    controller: _cartCtl,
-                    child: ListView.separated(
-                      controller: _cartCtl,
-                      primary: false,          // ← don’t fight for PrimaryScrollController
-                      shrinkWrap: true,
-                      itemCount: lines.length,
-                      separatorBuilder: (_, __) => const Divider(height: 8),
-                      itemBuilder: (context, i) {
-                        final ln = lines[i];
-                        return Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // optional thumbnail (uses item.imageUrl)
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(6),
-                              child: SizedBox(
-                                width: 44,
-                                height: 44,
-                                child: (ln.item.imageUrl != null &&
-                                    ln.item.imageUrl!.trim().isNotEmpty)
-                                    ? MenuBannerImage(path: ln.item.imageUrl, borderRadius: 8,)
-                                    : Container(
-                                  color: Colors.brown.shade100,
-                                  child: const Icon(
-                                    Icons.fastfood_outlined,
-                                    size: 22,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min, // Fill the 35% height
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Header
+            Text(
+              'Current Order',
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Divider(height: 16),
 
-                            // name + modifiers + unit price
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    ln.displayName,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  if (ln.modifiers.isNotEmpty)
-                                    Text(
-                                      ln.modifiersSummary,
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.grey.shade600,
-                                      ),
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  Text(
-                                    '₹ ${ln.unitPrice.toStringAsFixed(2)}',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.grey.shade700,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-
-                            // qty stepper
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  icon:
-                                  const Icon(Icons.remove_circle_outline),
-                                  onPressed: _busy
-                                      ? null
-                                      : () {
-                                    ref
-                                        .read(
-                                        posCartProvider.notifier)
-                                        .decQty(i);
-                                  },
-                                ),
-                                Text(
-                                  ln.qty.toStringAsFixed(0),
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.add_circle_outline),
-                                  onPressed: _busy
-                                      ? null
-                                      : () {
-                                    ref
-                                        .read(
-                                        posCartProvider.notifier)
-                                        .incQty(i);
-                                  },
-                                ),
-                              ],
-                            ),
-                            const SizedBox(width: 8),
-
-                            // line total + delete button
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Text(
-                                  '₹ ${ln.lineTotal.toStringAsFixed(2)}',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.close),
-                                  tooltip: 'Remove line',
-                                  onPressed: _busy
-                                      ? null
-                                      : () {
-                                    ref
-                                        .read(
-                                        posCartProvider.notifier)
-                                        .removeLine(i);
-                                  },
-                                ),
-                              ],
-                            ),
-                          ],
-                        );
-                      },
-                    ),
-                  ),
-                )
-              else
-                const Text(
+            // Cart lines list (now expands)
+            Expanded(
+              child: lines.isEmpty
+                  ? const Center(
+                child: Text(
                   'Cart is empty',
                   style: TextStyle(
                     fontStyle: FontStyle.italic,
                   ),
                 ),
-
-              const SizedBox(height: 12),
-              const Divider(),
-              const SizedBox(height: 8),
-
-              // subtotal row
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      'Subtotal',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    '₹ ${total.toStringAsFixed(2)}',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
+              )
+                  : Scrollbar(
+                controller: _cartCtl,
+                child: ListView.separated(
+                  controller: _cartCtl,
+                  primary: false,
+                  shrinkWrap: true, // Important inside Column > Expanded
+                  itemCount: lines.length,
+                  separatorBuilder: (_, __) => const Divider(height: 8),
+                  itemBuilder: (context, i) {
+                    final ln = lines[i];
+                    // This is the new cart line item
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Row 1: Name and Total Price
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                ln.displayName,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '₹ ${ln.lineTotal.toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                        // Row 2: Modifiers
+                        if (ln.modifiers.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4.0),
+                            child: Text(
+                              ln.modifiersSummary,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade600,
+                              ),
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        // Row 3: Unit Price, Stepper, Delete
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4.0),
+                          child: Row(
+                            children: [
+                              Text(
+                                '₹ ${ln.unitPrice.toStringAsFixed(2)}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade700,
+                                ),
+                              ),
+                              const Spacer(),
+                              // Qty stepper (compact)
+                              IconButton(
+                                icon: const Icon(Icons.remove_circle_outline),
+                                iconSize: 20,
+                                visualDensity: VisualDensity.compact,
+                                padding: EdgeInsets.zero,
+                                onPressed: _busy
+                                    ? null
+                                    : () {
+                                  ref.read(posCartProvider.notifier).decQty(i);
+                                },
+                              ),
+                              Text(
+                                ln.qty.toStringAsFixed(0),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.add_circle_outline),
+                                iconSize: 20,
+                                visualDensity: VisualDensity.compact,
+                                padding: EdgeInsets.zero,
+                                onPressed: _busy
+                                    ? null
+                                    : () {
+                                  ref.read(posCartProvider.notifier).incQty(i);
+                                },
+                              ),
+                              // Delete button (compact)
+                              IconButton(
+                                icon: const Icon(Icons.close),
+                                iconSize: 20,
+                                visualDensity: VisualDensity.compact,
+                                padding: EdgeInsets.zero,
+                                tooltip: 'Remove line',
+                                onPressed: _busy
+                                    ? null
+                                    : () {
+                                  ref.read(posCartProvider.notifier).removeLine(i);
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
               ),
+            ),
 
-              const SizedBox(height: 12),
+            const SizedBox(height: 12),
+            const Divider(),
+            const SizedBox(height: 8),
 
-              Row(
-                children: [
-                  // CLEAR CART
-                  Expanded(
-                    child: FilledButton.icon(
-                      icon: const Icon(Icons.delete),
-                      label: const Text('Clear'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: Colors.brown.shade200,
-                      ),
-                      onPressed: lines.isEmpty || _busy
-                          ? null
-                          : () {
-                        ref.read(posCartProvider.notifier).clear();
-                      },
+            // subtotal row
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Subtotal',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
-
-                  const SizedBox(width: 12),
-
-                  // CHECKOUT
-                  Expanded(
-                    flex: 2,
-                    child: FilledButton.icon(
-                      icon: _busy
-                          ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child:
-                        CircularProgressIndicator(strokeWidth: 2),
-                      )
-                          : const Icon(Icons.point_of_sale),
-                      label: Text(
-                        _busy
-                            ? 'Processing...'
-                            : 'Checkout ₹ ${total.toStringAsFixed(2)}',
-                      ),
-                      onPressed: lines.isEmpty || _busy ? null : _startCheckout,
-                    ),
+                ),
+                Text(
+                  '₹ ${total.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
                   ),
-                ],
-              ),
-            ],
-          ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 12),
+
+            // Button row
+            Row(
+              children: [
+                // CLEAR CART
+                Expanded(
+                  child: FilledButton.icon(
+                    icon: const Icon(Icons.delete),
+                    label: const Text('Clear'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.brown.shade200,
+                    ),
+                    onPressed: lines.isEmpty || _busy
+                        ? null
+                        : () {
+                      ref.read(posCartProvider.notifier).clear();
+                    },
+                  ),
+                ),
+
+                const SizedBox(width: 12),
+
+                // CHECKOUT
+                Expanded(
+                  flex: 2,
+                  child: FilledButton.icon(
+                    icon: _busy
+                        ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                        : const Icon(Icons.point_of_sale),
+                    label: Text(
+                      _busy
+                          ? 'Processing...'
+                          : 'Checkout ₹ ${total.toStringAsFixed(2)}',
+                    ),
+                    onPressed: lines.isEmpty || _busy ? null : _startCheckout,
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
   }
 }
+

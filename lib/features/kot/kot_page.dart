@@ -1,13 +1,13 @@
 // features/kot/kot_page.dart
-// Fast + Online‑first KOT board (DROP‑IN v3.1)
+// Fast + Online‑first KOT board (DROP‑IN v3.2)
 //
-// What changed vs your last edit:
-// 1) Fixed all Riverpod typing errors by using `Ref` instead of `WidgetRef` in helpers.
-// 2) Moved helpers OUTSIDE of `_TicketCard` class to avoid “classes inside classes” errors.
-// 3) Added a top‑level `_askReason` function so `_doCancel` compiles.
-// 4) Kept `_ChannelChip` and `_TicketLineRow` as top‑level widgets (visible everywhere).
-// 5) Switched provider to ONLINE‑FIRST with offline fallback (set `_kOnlineFirst=false` to revert).
-// 6) Removed duplicate imports.
+// What’s new in v3.2 (to show “more details”):
+// • Richer ticket model: customer (name/phone), providerOrderId, address, rider info.
+// • Details sheet (tap ⋯ then “Details…”) shows ALL lines + full metadata.
+// • Inline expand/collapse: tap the chevron to reveal every line on the card.
+// • Better line parsing: accepts variantLabel/variant/variant_name & modifiers list/objects.
+// • Time: absolute (HH:MM / DD Mon, HH:MM) + relative “age”.
+// • Safe optimistic moves + offline queue preserved from v3.1.
 //
 // Paste this WHOLE file to replace your current features/kot/kot_page.dart.
 
@@ -16,6 +16,7 @@ import 'dart:convert' as convert;
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';
@@ -46,6 +47,47 @@ String _ago(DateTime? dt) {
 }
 
 String _fmtQty(num q) => (q % 1 == 0) ? q.toInt().toString() : q.toString();
+OnlineProvider? _extractProvider(dynamic t) {
+  try {
+    final p = t.provider;
+    if (p is OnlineProvider) return p;
+    if (p is String && p.isNotEmpty) {
+      return OnlineProvider.values
+          .firstWhere((e) => e.name == p, orElse: () => OnlineProvider.CUSTOM);
+    }
+  } catch (_) {}
+  // common alternate property names
+  try {
+    final p2 = t.onlineProvider;
+    if (p2 is String && p2.isNotEmpty) {
+      return OnlineProvider.values
+          .firstWhere((e) => e.name == p2, orElse: () => OnlineProvider.CUSTOM);
+    }
+  } catch (_) {}
+  return null;
+}
+
+// Absolute timestamp formatter
+String _fmtWhen(DateTime dt) {
+  final now = DateTime.now();
+  final isToday = dt.year == now.year && dt.month == now.month && dt.day == now.day;
+  String two(int v) => v.toString().padLeft(2, '0');
+  const mons = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  if (isToday) return '${two(dt.hour)}:${two(dt.minute)}';
+  return '${two(dt.day)} ${mons[dt.month - 1]}, ${two(dt.hour)}:${two(dt.minute)}';
+}
+
+// provider chip UI meta
+({IconData icon, String label}) _providerMeta(OnlineProvider p) {
+  switch (p) {
+    case OnlineProvider.ZOMATO:
+      return (icon: Icons.restaurant_menu, label: 'Zomato');
+    case OnlineProvider.SWIGGY:
+      return (icon: Icons.delivery_dining, label: 'Swiggy');
+    default:
+      return (icon: Icons.cloud, label: p.name);
+  }
+}
 
 OrderChannel? _extractChannel(dynamic t) {
   try {
@@ -63,17 +105,71 @@ OrderChannel? _extractChannel(dynamic t) {
   } catch (_) {}
   return null;
 }
+// DROP‑IN replacement for _extractCreatedAt (and a tiny helper)
+// Fixes "Expected an identifier" by removing invalid (t as dynamic).$k access
+// and safely handling Map, toJson(), and direct fields.
 
-DateTime? _extractCreatedAt(dynamic t) {
-  try {
-    final v = t.createdAt;
-    if (v is DateTime) return v;
-    if (v is String) return DateTime.tryParse(v);
-  } catch (_) {}
+DateTime? _asDate(dynamic v) {
+  if (v is DateTime) return v;
+  if (v is String) return DateTime.tryParse(v);
+  if (v is int) {
+    // Heuristic: seconds vs milliseconds epoch
+    if (v > 1000000000000) return DateTime.fromMillisecondsSinceEpoch(v, isUtc: true).toLocal();
+    if (v > 1000000000) return DateTime.fromMillisecondsSinceEpoch(v * 1000, isUtc: true).toLocal();
+  }
+  if (v is num) {
+    final iv = v.toInt();
+    if (iv > 1000000000000) return DateTime.fromMillisecondsSinceEpoch(iv, isUtc: true).toLocal();
+    if (iv > 1000000000) return DateTime.fromMillisecondsSinceEpoch(iv * 1000, isUtc: true).toLocal();
+  }
   return null;
 }
 
-// User‑facing channel chip text/icon
+DateTime? _extractCreatedAt(dynamic t) {
+  const keys = ['createdAt', 'created_at', 'openedAt'];
+
+  // 1) Map‑like object
+  try {
+    if (t is Map) {
+      for (final k in keys) {
+        final dt = _asDate(t[k]);
+        if (dt != null) return dt;
+      }
+    }
+  } catch (_) {}
+
+  // 2) toJson() that returns a Map
+  try {
+    final dynamic toJson = (t as dynamic).toJson;
+    if (toJson is Function) {
+      final m = toJson();
+      if (m is Map) {
+        for (final k in keys) {
+          final dt = _asDate(m[k]);
+          if (dt != null) return dt;
+        }
+      }
+    }
+  } catch (_) {}
+
+  // 3) Direct fields (no string‑based dynamic access)
+  try {
+    final dt = _asDate((t as dynamic).createdAt);
+    if (dt != null) return dt;
+  } catch (_) {}
+  try {
+    final dt = _asDate((t as dynamic).created_at);
+    if (dt != null) return dt;
+  } catch (_) {}
+  try {
+    final dt = _asDate((t as dynamic).openedAt);
+    if (dt != null) return dt;
+  } catch (_) {}
+
+  return null;
+}
+
+// channel chip text/icon
 ({IconData icon, String label}) _channelMeta(OrderChannel ch) {
   switch (ch) {
     case OrderChannel.DINE_IN:
@@ -111,15 +207,19 @@ class KotLineLite {
   };
 
   factory KotLineLite.fromMap(Map<String, dynamic> m) => KotLineLite(
-    qty: m['qty'] ?? 1,
+    qty: (m['qty'] is num)
+        ? m['qty'] as num
+        : num.tryParse(m['qty']?.toString() ?? '1') ?? 1,
     name: m['name']?.toString() ?? '',
-    variantLabel: (m['variantLabel']?.toString().isEmpty ?? true)
-        ? null
-        : m['variantLabel'].toString(),
-    modifiers: (m['modifiers'] as List?)
-        ?.map((e) => e.toString())
-        .toList() ??
-        const <String>[],
+    variantLabel: () {
+      final cands = ['variantLabel', 'variant', 'variant_name', 'variant_label'];
+      for (final k in cands) {
+        final v = m[k]?.toString();
+        if (v != null && v.isNotEmpty) return v;
+      }
+      return null;
+    }(),
+    modifiers: (m['modifiers'] as List?)?.map((e) => e.toString()).toList() ?? const <String>[],
   );
 }
 
@@ -134,7 +234,14 @@ class KotCardData {
   final String? orderId;
   final String? orderNote;
   final OrderChannel? channel;
+  final OnlineProvider? provider;
   final DateTime? createdAt;
+  final String? customerName;
+  final String? customerPhone;
+  final String? deliveryAddress;
+  final String? providerOrderId;
+  final String? riderName;
+  final String? riderStatus;
   final List<KotLineLite> lines;
 
   KotCardData({
@@ -148,7 +255,14 @@ class KotCardData {
     required this.orderId,
     required this.orderNote,
     required this.channel,
+    required this.provider,
     required this.createdAt,
+    required this.customerName,
+    required this.customerPhone,
+    required this.deliveryAddress,
+    required this.providerOrderId,
+    required this.riderName,
+    required this.riderStatus,
     required this.lines,
   });
 
@@ -163,7 +277,14 @@ class KotCardData {
     orderId: orderId,
     orderNote: orderNote,
     channel: channel,
+    provider: provider,
     createdAt: createdAt,
+    customerName: customerName,
+    customerPhone: customerPhone,
+    deliveryAddress: deliveryAddress,
+    providerOrderId: providerOrderId,
+    riderName: riderName,
+    riderStatus: riderStatus,
     lines: lines,
   );
 
@@ -179,49 +300,52 @@ class KotCardData {
     'orderNote': orderNote,
     'channel': channel?.name,
     'createdAt': createdAt?.toIso8601String(),
+    'provider': provider?.name,
+    'customerName': customerName,
+    'customerPhone': customerPhone,
+    'deliveryAddress': deliveryAddress,
+    'providerOrderId': providerOrderId,
+    'riderName': riderName,
+    'riderStatus': riderStatus,
     'lines': lines.map((e) => e.toMap()).toList(),
   };
 
   factory KotCardData.fromMap(Map<String, dynamic> m) => KotCardData(
     id: m['id']?.toString() ?? '',
     ticketNo: (m['ticketNo'] as num?)?.toInt() ?? 0,
-    status: KOTStatus.values
-        .firstWhere((e) => e.name == m['status'], orElse: () => KOTStatus.NEW),
-    stationName: (m['stationName']?.toString().isEmpty ?? true)
-        ? null
-        : m['stationName'].toString(),
-    tableCode: (m['tableCode']?.toString().isEmpty ?? true)
-        ? null
-        : m['tableCode'].toString(),
-    waiterName: (m['waiterName']?.toString().isEmpty ?? true)
-        ? null
-        : m['waiterName'].toString(),
-    orderNo: (m['orderNo']?.toString().isEmpty ?? true)
-        ? null
-        : m['orderNo'].toString(),
-    orderId: (m['orderId']?.toString().isEmpty ?? true)
-        ? null
-        : m['orderId'].toString(),
-    orderNote: (m['orderNote']?.toString().isEmpty ?? true)
-        ? null
-        : m['orderNote'].toString(),
+    status: KOTStatus.values.firstWhere((e) => e.name == m['status'], orElse: () => KOTStatus.NEW),
+    stationName: (m['stationName']?.toString().isEmpty ?? true) ? null : m['stationName'].toString(),
+    tableCode: (m['tableCode']?.toString().isEmpty ?? true) ? null : m['tableCode'].toString(),
+    waiterName: (m['waiterName']?.toString().isEmpty ?? true) ? null : m['waiterName'].toString(),
+    orderNo: (m['orderNo']?.toString().isEmpty ?? true) ? null : m['orderNo'].toString(),
+    orderId: (m['orderId']?.toString().isEmpty ?? true) ? null : m['orderId'].toString(),
+    orderNote: (m['orderNote']?.toString().isEmpty ?? true) ? null : m['orderNote'].toString(),
     channel: (() {
       final s = m['channel']?.toString();
       if (s == null || s.isEmpty) return null;
-      return OrderChannel.values
-          .firstWhere((e) => e.name == s, orElse: () => OrderChannel.TAKEAWAY);
+      return OrderChannel.values.firstWhere((e) => e.name == s, orElse: () => OrderChannel.TAKEAWAY);
     })(),
     createdAt: (() {
       final s = m['createdAt']?.toString();
       return s == null || s.isEmpty ? null : DateTime.tryParse(s);
     })(),
-    lines: (m['lines'] as List?)
-        ?.map((e) => KotLineLite.fromMap(Map<String, dynamic>.from(e)))
-        .toList() ??
+    provider: (() {
+      final s = m['provider']?.toString();
+      if (s == null || s.isEmpty) return null;
+      return OnlineProvider.values.firstWhere((e) => e.name == s, orElse: () => OnlineProvider.CUSTOM);
+    })(),
+    customerName: (m['customerName']?.toString().isEmpty ?? true) ? null : m['customerName'].toString(),
+    customerPhone: (m['customerPhone']?.toString().isEmpty ?? true) ? null : m['customerPhone'].toString(),
+    deliveryAddress: (m['deliveryAddress']?.toString().isEmpty ?? true) ? null : m['deliveryAddress'].toString(),
+    providerOrderId: (m['providerOrderId']?.toString().isEmpty ?? true) ? null : m['providerOrderId'].toString(),
+    riderName: (m['riderName']?.toString().isEmpty ?? true) ? null : m['riderName'].toString(),
+    riderStatus: (m['riderStatus']?.toString().isEmpty ?? true) ? null : m['riderStatus'].toString(),
+    lines: (m['lines'] as List?)?.map((e) => KotLineLite.fromMap(Map<String, dynamic>.from(e))).toList() ??
         const <KotLineLite>[],
   );
 
   static KotCardData fromKitchenTicket(KitchenTicket t) {
+    // Lines
     final List<KotLineLite> ls = <KotLineLite>[];
     try {
       final ln = t.lines;
@@ -231,34 +355,50 @@ class KotCardData {
         dynamic vlabel;
         List<String> mods = <String>[];
         try {
-          name = (l as dynamic).name;
+          name = (l as dynamic).name ?? (l as dynamic).itemName ?? (l as dynamic).title;
         } catch (_) {}
         try {
-          qty = (l as dynamic).qty;
+          qty = (l as dynamic).qty ?? (l as dynamic).quantity;
         } catch (_) {}
         try {
-          vlabel = (l as dynamic).variantLabel;
+          vlabel = (l as dynamic).variantLabel ?? (l as dynamic).variant ?? (l as dynamic).variant_name;
         } catch (_) {}
         try {
-          final raw = (l as dynamic).modifiers;
+          final raw = (l as dynamic).modifiers ?? (l as dynamic).mods;
           if (raw is List) {
             mods = raw
                 .map((e) => e is String
                 ? e
-                : ((e as dynamic).name ?? e.toString()).toString())
+                : ((e as dynamic).name ?? (e as dynamic).label ?? e.toString()).toString())
                 .toList();
           }
         } catch (_) {}
         ls.add(KotLineLite(
           qty: (qty is num) ? qty : num.tryParse(qty?.toString() ?? '1') ?? 1,
           name: name?.toString() ?? '',
-          variantLabel: (vlabel?.toString().isEmpty ?? true)
-              ? null
-              : vlabel.toString(),
+          variantLabel: (vlabel?.toString().isEmpty ?? true) ? null : vlabel.toString(),
           modifiers: mods,
         ));
       }
     } catch (_) {}
+
+    // Extra info
+    String? _s(dynamic x) => (x == null) ? null : (x.toString().trim().isEmpty ? null : x.toString());
+
+    String? customerName;
+    String? customerPhone;
+    String? deliveryAddress;
+    String? providerOrderId;
+    String? riderName;
+    String? riderStatus;
+
+    // Try multiple likely fields to be robust across backends
+    try { customerName = _s((t as dynamic).customerName ?? (t as dynamic).customer?.name); } catch (_) {}
+    try { customerPhone = _s((t as dynamic).customerPhone ?? (t as dynamic).customer?.phone); } catch (_) {}
+    try { deliveryAddress = _s((t as dynamic).deliveryAddress ?? (t as dynamic).address); } catch (_) {}
+    try { providerOrderId = _s((t as dynamic).providerOrderId ?? (t as dynamic).externalOrderId); } catch (_) {}
+    try { riderName = _s((t as dynamic).riderName ?? (t as dynamic).agentName); } catch (_) {}
+    try { riderStatus = _s((t as dynamic).riderStatus ?? (t as dynamic).agentStatus); } catch (_) {}
 
     return KotCardData(
       id: (t.id ?? '').toString(),
@@ -272,6 +412,13 @@ class KotCardData {
       orderNote: (t.orderNote?.trim().isNotEmpty ?? false) ? t.orderNote : null,
       channel: _extractChannel(t),
       createdAt: _extractCreatedAt(t),
+      provider: _extractProvider(t),
+      customerName: customerName,
+      customerPhone: customerPhone,
+      deliveryAddress: deliveryAddress,
+      providerOrderId: providerOrderId,
+      riderName: riderName,
+      riderStatus: riderStatus,
       lines: ls,
     );
   }
@@ -599,181 +746,294 @@ class _KotColumn extends ConsumerWidget {
   }
 }
 
-class _TicketCard extends ConsumerWidget {
+class _TicketCard extends ConsumerStatefulWidget {
   const _TicketCard({super.key, required this.ticket});
   final KotCardData ticket;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final bgColor = _statusColor(ticket.status);
-    final next = _nextStatus(ticket.status);
-    final prev = _prevStatus(ticket.status);
+  ConsumerState<_TicketCard> createState() => _TicketCardState();
+}
+
+class _TicketCardState extends ConsumerState<_TicketCard> {
+  bool _expanded = false; // show all lines on the card
+
+  @override
+  Widget build(BuildContext context) {
+    final t = widget.ticket;
+    final bgColor = _statusColor(t.status);
+    final next = _nextStatus(t.status);
+    final prev = _prevStatus(t.status);
 
     return Card(
       color: bgColor,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      child: InkWell(
-        onTap: next == null
-            ? null
-            : () => _changeStatus(
-          context,
-          ref.read,
-          ref.invalidate,
-          ticket,
-          next,
-          sourceStatus: ticket.status,
-        ),
-        onLongPress: prev == null
-            ? null
-            : () => _changeStatus(
-          context,
-          ref.read,
-          ref.invalidate,
-          ticket,
-          prev,
-          sourceStatus: ticket.status,
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: DefaultTextStyle(
-            style: const TextStyle(fontSize: 13, color: Colors.black),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Header: KOT, station, channel, age
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Wrap(
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        spacing: 6,
-                        runSpacing: 4,
-                        children: [
-                          Text('KOT #${ticket.ticketNo}',
-                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                          if ((ticket.stationName ?? '').isNotEmpty)
-                            const Text('• ', style: TextStyle(fontSize: 12)),
-                          if ((ticket.stationName ?? '').isNotEmpty)
-                            Text(ticket.stationName!, style: const TextStyle(fontSize: 12)),
-                          if (ticket.channel != null) _ChannelChip(channel: ticket.channel!),
-                          if (ticket.createdAt != null)
-                            Text('• ${_ago(ticket.createdAt)} ago',
-                                style: const TextStyle(fontSize: 11)),
-                        ],
-                      ),
-                    ),
-                    PopupMenuButton<String>(
-                      onSelected: (choice) async {
-                        switch (choice) {
-                          case 'reprint':
-                            await _doReprint(context, ref.read, ref.invalidate, ticket);
-                            break;
-                          case 'cancel':
-                            await _doCancel(context, ref.read, ref.invalidate, ticket);
-                            break;
-                          case 'status':
-                            await _pickStatus(context, ref.read, ref.invalidate, ticket);
-                            break;
-                        }
-                      },
-                      itemBuilder: (_) => const [
-                        PopupMenuItem<String>(value: 'status', child: Text('Change status…')),
-                        PopupMenuItem<String>(value: 'reprint', child: Text('Reprint')),
-                        PopupMenuItem<String>(value: 'cancel', child: Text('Cancel')),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: DefaultTextStyle(
+          style: const TextStyle(fontSize: 13, color: Colors.black),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header: KOT, station, channel, age
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: [
+                        Text('KOT #${t.ticketNo}',
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                        if ((t.stationName ?? '').isNotEmpty)
+                          const Text('• ', style: TextStyle(fontSize: 12)),
+                        if ((t.stationName ?? '').isNotEmpty)
+                          Text(t.stationName!, style: const TextStyle(fontSize: 12)),
+
+                        if (t.channel != null) _ChannelChip(channel: t.channel!),
+                        if (t.provider != null) _ProviderChip(provider: t.provider!),
+
+                        if (t.createdAt != null)
+                          Text('• ${_fmtWhen(t.createdAt!)}', style: const TextStyle(fontSize: 11)),
+                        if (t.createdAt != null)
+                          Text('(${_ago(t.createdAt)} ago)', style: const TextStyle(fontSize: 11)),
                       ],
                     ),
-                  ],
-                ),
-
-                const SizedBox(height: 4),
-
-                // table / waiter
-                Text(
-                  [
-                    if ((ticket.tableCode ?? '').isNotEmpty) 'Table ${ticket.tableCode}',
-                    if ((ticket.waiterName ?? '').isNotEmpty) 'By ${ticket.waiterName}',
-                  ].join(' • '),
-                  style: const TextStyle(fontSize: 12),
-                ),
-
-                const SizedBox(height: 2),
-
-                // order id/no & quick item hints
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        (ticket.orderNo != null && ticket.orderNo!.isNotEmpty)
-                            ? 'Order ${ticket.orderNo}'
-                            : (ticket.orderId != null ? 'Order ${ticket.orderId}' : 'Order'),
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                    ),
-                    if (ticket.lines.isNotEmpty)
-                      Text('${ticket.lines.length} items', style: const TextStyle(fontSize: 12)),
-                  ],
-                ),
-
-                if ((ticket.orderNote ?? '').isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text('Note: ${ticket.orderNote}',
-                      style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic)),
-                ],
-
-                // Quick item hint line
-                if (ticket.lines.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    _hintFromLines(ticket.lines),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12),
+                  ),
+                  // menu
+                  PopupMenuButton<String>(
+                    onSelected: (choice) async {
+                      switch (choice) {
+                        case 'details':
+                          await _showDetailsSheet(context, t);
+                          break;
+                        case 'copyid':
+                          final text = (t.orderNo?.isNotEmpty ?? false) ? t.orderNo! : (t.orderId ?? '');
+                          if (text.isNotEmpty) {
+                            await Clipboard.setData(ClipboardData(text: text));
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied')));
+                            }
+                          }
+                          break;
+                        case 'reprint':
+                          await _doReprint(context, ref.read, ref.invalidate, t);
+                          break;
+                        case 'cancel':
+                          await _doCancel(context, ref.read, ref.invalidate, t);
+                          break;
+                        case 'status':
+                          await _pickStatus(context, ref.read, ref.invalidate, t);
+                          break;
+                      }
+                    },
+                    itemBuilder: (_) => const [
+                      PopupMenuItem<String>(value: 'details', child: Text('Details…')),
+                      PopupMenuItem<String>(value: 'status', child: Text('Change status…')),
+                      PopupMenuItem<String>(value: 'reprint', child: Text('Reprint')),
+                      PopupMenuItem<String>(value: 'cancel', child: Text('Cancel')),
+                      PopupMenuItem<String>(value: 'copyid', child: Text('Copy Order #')),
+                    ],
                   ),
                 ],
+              ),
 
-                // Lines (bounded; show max 6 + overflow indicator)
-                if (ticket.lines.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  ...() {
-                    final cap = min(6, ticket.lines.length);
-                    final List<Widget> shown =
-                    ticket.lines.take(cap).map<Widget>((ln) => _TicketLineRow(line: ln)).toList();
-                    if (ticket.lines.length > cap) {
-                      shown.add(const Padding(
-                        padding: EdgeInsets.only(top: 2),
-                        child: Text('+more…', style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic)),
-                      ));
-                    }
-                    return shown;
-                  }(),
+              const SizedBox(height: 4),
+
+              // table / waiter / provider order id
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  if ((t.tableCode ?? '').isNotEmpty)
+                    Text('Table ${t.tableCode}', style: const TextStyle(fontSize: 12)),
+                  if ((t.waiterName ?? '').isNotEmpty)
+                    Text('By ${t.waiterName}', style: const TextStyle(fontSize: 12)),
+                  if ((t.providerOrderId ?? '').isNotEmpty)
+                    Text('Ext #${t.providerOrderId}', style: const TextStyle(fontSize: 12)),
                 ],
+              ),
 
-                const SizedBox(height: 8),
-                // Action row (back/forward)
-                Row(
+              const SizedBox(height: 2),
+
+              // order id/no & quick item hints + chevron to expand
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text(
+                      (t.orderNo != null && t.orderNo!.isNotEmpty)
+                          ? 'Order ${t.orderNo}'
+                          : (t.orderId != null ? 'Order ${t.orderId}' : 'Order'),
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                  if (t.lines.isNotEmpty)
+                    Text('${t.lines.length} items', style: const TextStyle(fontSize: 12)),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    iconSize: 18,
+                    tooltip: _expanded ? 'Collapse' : 'Expand',
+                    onPressed: () => setState(() => _expanded = !_expanded),
+                    icon: Icon(_expanded ? Icons.expand_less : Icons.expand_more),
+                  ),
+                ],
+              ),
+
+              // Customer & address row
+              if ((t.customerName ?? '').isNotEmpty || (t.customerPhone ?? '').isNotEmpty || (t.deliveryAddress ?? '').isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
                   children: [
-                    if (prev != null)
-                      TextButton.icon(
-                        onPressed: () => _changeStatus(context, ref.read, ref.invalidate, ticket, prev, sourceStatus: ticket.status),
-                        icon: const Icon(Icons.arrow_back),
-                        label: Text('Back to ${prev.name}'),
-                      ),
-                    const Spacer(),
-                    if (next != null)
-                      FilledButton.icon(
-                        onPressed: () => _changeStatus(context, ref.read, ref.invalidate, ticket, next, sourceStatus: ticket.status),
-                        icon: const Icon(Icons.check),
-                        label: Text('Mark ${next.name}'),
+                    if ((t.customerName ?? '').isNotEmpty)
+                      Text('Cust: ${t.customerName}', style: const TextStyle(fontSize: 12)),
+                    if ((t.customerPhone ?? '').isNotEmpty)
+                      Text('📞 ${t.customerPhone}', style: const TextStyle(fontSize: 12)),
+                    if ((t.deliveryAddress ?? '').isNotEmpty)
+                      Text(
+                        t.deliveryAddress!,
+                        style: const TextStyle(fontSize: 12),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
                   ],
                 ),
               ],
-            ),
+
+              // Rider info
+              if ((t.riderName ?? '').isNotEmpty || (t.riderStatus ?? '').isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(
+                  [
+                    if ((t.riderName ?? '').isNotEmpty) 'Rider: ${t.riderName}',
+                    if ((t.riderStatus ?? '').isNotEmpty) '(${t.riderStatus})',
+                  ].join(' '),
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ],
+
+              if ((t.orderNote ?? '').isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text('Note: ${t.orderNote}', style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic)),
+              ],
+
+              // Quick item hint line
+              if (!_expanded && t.lines.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  _hintFromLines(t.lines),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ],
+
+              // Lines (bounded by cap when collapsed; all when expanded)
+              if (t.lines.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                ...() {
+                  final cap = _expanded ? t.lines.length : min(6, t.lines.length);
+                  final List<Widget> shown = t.lines.take(cap).map<Widget>((ln) => _TicketLineRow(line: ln)).toList();
+                  if (!_expanded && t.lines.length > cap) {
+                    shown.add(const Padding(
+                      padding: EdgeInsets.only(top: 2),
+                      child: Text('+more…', style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic)),
+                    ));
+                  }
+                  return shown;
+                }(),
+              ],
+
+              const SizedBox(height: 8),
+
+              // Action row (back/forward)
+              Row(
+                children: [
+                  if (prev != null)
+                    TextButton.icon(
+                      onPressed: () => _changeStatus(context, ref.read, ref.invalidate, t, prev, sourceStatus: t.status),
+                      icon: const Icon(Icons.arrow_back),
+                      label: Text('Back to ${prev.name}'),
+                    ),
+                  const Spacer(),
+                  if (next != null)
+                    FilledButton.icon(
+                      onPressed: () => _changeStatus(context, ref.read, ref.invalidate, t, next, sourceStatus: t.status),
+                      icon: const Icon(Icons.check),
+                      label: Text('Mark ${next.name}'),
+                    ),
+                ],
+              ),
+            ],
           ),
         ),
       ),
+    );
+  }
+
+  Future<void> _showDetailsSheet(BuildContext context, KotCardData t) async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Text('KOT #${t.ticketNo}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                      const Spacer(),
+                      if (t.createdAt != null)
+                        Text(_fmtWhen(t.createdAt!), style: const TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      if ((t.stationName ?? '').isNotEmpty) Chip(label: Text('Station: ${t.stationName}')),
+                      if (t.channel != null) Chip(label: Text(_channelMeta(t.channel!).label)),
+                      if (t.provider != null) Chip(label: Text(_providerMeta(t.provider!).label)),
+                      if ((t.tableCode ?? '').isNotEmpty) Chip(label: Text('Table ${t.tableCode}')),
+                      if ((t.waiterName ?? '').isNotEmpty) Chip(label: Text('By ${t.waiterName}')),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    (t.orderNo?.isNotEmpty ?? false) ? 'Order #${t.orderNo}' : (t.orderId != null ? 'Order ID ${t.orderId}' : 'Order'),
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  if ((t.providerOrderId ?? '').isNotEmpty)
+                    Text('External Ref: ${t.providerOrderId}'),
+                  if ((t.customerName ?? '').isNotEmpty || (t.customerPhone ?? '').isNotEmpty)
+                    Text('Customer: ${[t.customerName, t.customerPhone].where((e) => (e ?? '').isNotEmpty).join(' • ')}'),
+                  if ((t.deliveryAddress ?? '').isNotEmpty)
+                    Text('Address: ${t.deliveryAddress}'),
+                  if ((t.riderName ?? '').isNotEmpty || (t.riderStatus ?? '').isNotEmpty)
+                    Text('Rider: ${[t.riderName, t.riderStatus].where((e) => (e ?? '').isNotEmpty).join(' • ')}'),
+                  if ((t.orderNote ?? '').isNotEmpty) Text('Note: ${t.orderNote}'),
+                  const SizedBox(height: 12),
+                  const Divider(),
+                  const SizedBox(height: 8),
+                  Text('Items (${t.lines.length})', style: const TextStyle(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 6),
+                  ...t.lines.map((ln) => _TicketLineRow(line: ln, padding: const EdgeInsets.symmetric(vertical: 3))),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -1014,10 +1274,7 @@ void _optimisticRemove(Read read, String tenantId, String branchId, KotCardData 
 
 // Render one ticket line (qty × name [+ variant/mods]) -----------------------
 class _TicketLineRow extends StatelessWidget {
-  const _TicketLineRow({
-    required this.line,
-    this.padding = const EdgeInsets.only(top: 2),
-  });
+  const _TicketLineRow({required this.line, this.padding = const EdgeInsets.only(top: 2)});
 
   // NOTE: Use KotLineLite (offline‑friendly) not KitchenTicketLine
   final KotLineLite line;
@@ -1038,8 +1295,8 @@ class _TicketLineRow extends StatelessWidget {
           Expanded(
             child: Text(
               '${line.name}$variant$mods',
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
+              maxLines: 99,
+              overflow: TextOverflow.visible,
             ),
           ),
         ],
@@ -1055,6 +1312,31 @@ class _ChannelChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final meta = _channelMeta(channel);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(.08),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(meta.icon, size: 12),
+          const SizedBox(width: 4),
+          Text(meta.label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProviderChip extends StatelessWidget {
+  const _ProviderChip({required this.provider});
+  final OnlineProvider provider;
+
+  @override
+  Widget build(BuildContext context) {
+    final meta = _providerMeta(provider);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
