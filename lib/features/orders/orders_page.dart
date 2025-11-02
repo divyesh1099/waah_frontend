@@ -451,6 +451,19 @@ class _StatusChip extends StatelessWidget {
 class OrderDetailSheet extends ConsumerWidget {
   const OrderDetailSheet({super.key, required this.orderId});
   final String orderId;
+  String? _extractInvoiceId(Map<String, dynamic> m) {
+    final direct = m['invoice_id'] ?? m['id'] ?? m['invoiceId'];
+    if (direct is String && direct.isNotEmpty) return direct;
+    if (direct is int) return direct.toString();
+
+    final inv = m['invoice'];
+    if (inv is Map) {
+      final id = inv['invoice_id'] ?? inv['id'] ?? inv['invoiceId'];
+      if (id is String && id.isNotEmpty) return id;
+      if (id is int) return id.toString();
+    }
+    return null;
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -539,52 +552,42 @@ class OrderDetailSheet extends ConsumerWidget {
                         child: FilledButton.icon(
                           icon: const Icon(Icons.receipt_long),
                           label: const Text('Invoice'),
-                          onPressed: () async {
-                            final client   = ref.read(apiClientProvider);
-                            final tenantId = ref.read(activeTenantIdProvider);
-                            final branchId = ref.read(activeBranchIdProvider);
-                            try {
-                              // Ensure we have at least one BILL/RECEIPT printer on this branch
-                              final printers = await client.listPrinters(
-                                tenantId: tenantId,
-                                branchId: branchId,
-                              );
-                              bool isBillType(Map<String, dynamic> p) {
-                                final raw = (p['type'] ?? p['printer_type'] ?? p['category'])?.toString() ?? '';
-                                final t = raw.toUpperCase();
-                                return t.contains('BILL') || t.contains('RECEIPT');
-                              }
-                              final hasBill = printers.any(isBillType);
+                            onPressed: () async {
+                              final api      = ref.read(apiClientProvider);
+                              final tenantId = ref.read(activeTenantIdProvider);
+                              final branchId = ref.read(activeBranchIdProvider);
 
-                              if (!hasBill) {
+                              try {
+                                // Idempotent on most backends: returns existing or creates a new invoice
+                                final resp = await api.createInvoice(orderId);
+                                final invoiceId = _extractInvoiceId(Map<String, dynamic>.from(resp));
+
+                                if (invoiceId == null) {
+                                  throw Exception('Could not determine invoice id from server response.');
+                                }
+
+                                await api.printInvoiceSmart(
+                                  tenantId: tenantId,
+                                  branchId: branchId,
+                                  invoiceId: invoiceId,
+                                );
+
                                 if (context.mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('No BILL printer configured for this branch. Add one in Settings → Printers.')),
+                                    const SnackBar(content: Text('Invoice printed ✅')),
                                   );
                                 }
-                                return;
-                              }
 
-                              // Create (or reuse) invoice and print
-                              final resp = await client.createInvoice(orderId);
-                              final invoiceId = resp['invoice_id']?.toString();
-                              if (invoiceId != null && invoiceId.isNotEmpty) {
-                                await client.printInvoice(invoiceId);
+                                // Optional: refresh orders to reflect state changes
+                                ref.invalidate(ordersFutureProvider);
+                              } catch (e) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Invoice print failed: $e')),
+                                  );
+                                }
                               }
-
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Invoice printed ✅')),
-                                );
-                              }
-                            } catch (e) {
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Invoice print failed: $e')),
-                                );
-                              }
-                            }
-                          },
+                            },
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -592,46 +595,31 @@ class OrderDetailSheet extends ConsumerWidget {
                         child: FilledButton.icon(
                           icon: const Icon(Icons.print),
                           label: const Text('Print Bill'),
-                          onPressed: () async {
-                            final client   = ref.read(apiClientProvider);
-                            final tenantId = ref.read(activeTenantIdProvider);
-                            final branchId = ref.read(activeBranchIdProvider);
-                            try {
-                              final printers = await client.listPrinters(
-                                tenantId: tenantId,
-                                branchId: branchId,
-                              );
-                              bool isBillType(Map<String, dynamic> p) {
-                                final raw = (p['type'] ?? p['printer_type'] ?? p['category'])?.toString() ?? '';
-                                final t = raw.toUpperCase();
-                                return t.contains('BILL') || t.contains('RECEIPT');
-                              }
+                            onPressed: () async {
+                              final api      = ref.read(apiClientProvider);
+                              final tenantId = ref.read(activeTenantIdProvider);
+                              final branchId = ref.read(activeBranchIdProvider);
 
-                              // AFTER (both places)
-                              final hasBill = printers.any(isBillType);
-                              if (!hasBill) {
+                              try {
+                                await api.printBillSmart(
+                                  tenantId: tenantId,
+                                  branchId: branchId,
+                                  orderId: orderId,
+                                );
+
                                 if (context.mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('No BILL printer configured for this branch. Add one in Settings → Printers.')),
+                                    const SnackBar(content: Text('Bill sent to printer 🧾')),
                                   );
                                 }
-                                return;
+                              } catch (e) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Bill print failed: $e')),
+                                  );
+                                }
                               }
-
-                              await client.printBill(orderId);
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Bill sent to printer 🧾')),
-                                );
-                              }
-                            } catch (e) {
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Bill print failed: $e')),
-                                );
-                              }
-                            }
-                          },
+                            },
                         ),
                       ),
                     ],

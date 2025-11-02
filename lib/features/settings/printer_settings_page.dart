@@ -86,10 +86,30 @@ class PrinterSettingsPage extends ConsumerWidget {
                       icon: Icon(p.isDefault ? Icons.check_circle : Icons.radio_button_unchecked),
                       tooltip: 'Make Default Billing',
                       onPressed: () async {
+                        // 1) Toggle in your local repo (optimistic)
                         final updated = p.toJson()..['is_default'] = true;
                         await ref.read(settingsRepoProvider).updatePrinterOptimistic(
-                          tenantId, branchId, Printer.fromJson(updated),
+                          tenantId,
+                          branchId,
+                          Printer.fromJson(updated),
                         );
+
+                        // 2) Persist branch default in RestaurantSettings
+                        try {
+                          await ref.read(apiClientProvider).saveRestaurantSettings({
+                            'tenant_id': tenantId,
+                            'branch_id': branchId,
+                            'billing_printer_id': p.id,
+                          });
+                        } catch (_) {
+                          // non-blocking
+                        }
+
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Default billing printer set to ${p.name}')),
+                          );
+                        }
                       },
                     ),
                   IconButton(
@@ -139,7 +159,7 @@ class PrinterSettingsPage extends ConsumerWidget {
         Printer? initial,
       }) async {
     final nameCtl = TextEditingController(text: initial?.name ?? '');
-    final urlCtl  = TextEditingController(text: initial?.connectionUrl ?? '');
+    final urlCtl = TextEditingController(text: initial?.connectionUrl ?? '');
     final drawerCtl = TextEditingController(text: initial?.cashDrawerCode ?? '');
     var type = initial?.type ?? PrinterType.BILLING;
     var isDefault = initial?.isDefault ?? (type == PrinterType.BILLING);
@@ -150,26 +170,41 @@ class PrinterSettingsPage extends ConsumerWidget {
       barrierDismissible: true,
       builder: (dialogCtx) {
         var closing = false;
-        void safePop(bool v) { if (!closing) { closing = true; Navigator.of(dialogCtx).pop(v); } }
+        void safePop(bool v) {
+          if (!closing) {
+            closing = true;
+            Navigator.of(dialogCtx).pop(v);
+          }
+        }
 
         return StatefulBuilder(builder: (c, setState) {
           return AlertDialog(
             title: Text(initial == null ? 'Add Printer' : 'Edit Printer'),
             content: SingleChildScrollView(
               child: Column(mainAxisSize: MainAxisSize.min, children: [
-                TextField(controller: nameCtl,  decoration: const InputDecoration(labelText: 'Name'), autofocus: true),
+                TextField(
+                  controller: nameCtl,
+                  decoration: const InputDecoration(labelText: 'Name'),
+                  autofocus: true,
+                ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<PrinterType>(
-                  initialValue: type,
+                  value: type, // <-- FIX: must be `value`, not `initialValue`
                   decoration: const InputDecoration(labelText: 'Type'),
-                  items: PrinterType.values.map((t) => DropdownMenuItem(value: t, child: Text(t.name))).toList(),
+                  items: PrinterType.values
+                      .map((t) => DropdownMenuItem(value: t, child: Text(t.name)))
+                      .toList(),
                   onChanged: (v) => setState(() {
                     type = v ?? PrinterType.BILLING;
                     if (type == PrinterType.KITCHEN) isDefault = false;
                   }),
                 ),
                 const SizedBox(height: 8),
-                TextField(controller: urlCtl,     decoration: const InputDecoration(labelText: 'Connection URL (e.g. http://ip:9100/print)')),
+                TextField(
+                  controller: urlCtl,
+                  decoration:
+                  const InputDecoration(labelText: 'Connection URL (e.g. http://ip:9100/print)'),
+                ),
                 const SizedBox(height: 8),
                 if (type == PrinterType.BILLING)
                   SwitchListTile(
@@ -184,7 +219,10 @@ class PrinterSettingsPage extends ConsumerWidget {
                   onChanged: (v) => setState(() => drawer = v),
                 ),
                 if (drawer)
-                  TextField(controller: drawerCtl, decoration: const InputDecoration(labelText: 'Cash Drawer Code (optional)')),
+                  TextField(
+                    controller: drawerCtl,
+                    decoration: const InputDecoration(labelText: 'Cash Drawer Code (optional)'),
+                  ),
               ]),
             ),
             actions: [
@@ -198,8 +236,9 @@ class PrinterSettingsPage extends ConsumerWidget {
     if (ok != true) return;
 
     final repo = ref.read(settingsRepoProvider);
-    final p = Printer(
-      id: initial?.id ?? 'tmp-\${DateTime.now().millisecondsSinceEpoch}',
+    final printer = Printer(
+      // FIX: proper interpolation; no backslash
+      id: initial?.id ?? 'tmp-${DateTime.now().millisecondsSinceEpoch}',
       tenantId: tenantId,
       branchId: branchId,
       name: nameCtl.text.trim(),
@@ -211,9 +250,20 @@ class PrinterSettingsPage extends ConsumerWidget {
     );
 
     if (initial == null) {
-      await repo.createPrinterOptimistic(tenantId, branchId, p);
+      await repo.createPrinterOptimistic(tenantId, branchId, printer);
     } else {
-      await repo.updatePrinterOptimistic(tenantId, branchId, p);
+      await repo.updatePrinterOptimistic(tenantId, branchId, printer);
+    }
+
+    // If made default while adding/editing, stamp settings immediately
+    if (printer.type == PrinterType.BILLING && printer.isDefault) {
+      try {
+        await ref.read(apiClientProvider).saveRestaurantSettings({
+          'tenant_id': tenantId,
+          'branch_id': branchId,
+          'billing_printer_id': printer.id,
+        });
+      } catch (_) {/* non-blocking */}
     }
   }
 
@@ -238,7 +288,8 @@ class PrinterSettingsPage extends ConsumerWidget {
     if (ok == true) {
       await ref.read(settingsRepoProvider).deletePrinterOptimistic(tenantId, branchId, id);
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Printer deleted')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Printer deleted')));
       }
     }
   }

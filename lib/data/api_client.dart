@@ -814,23 +814,40 @@ class ApiClient {
 
   // ---------- Print / Drawer ----------
 
+
   Future<void> printInvoice(
       String invoiceId, {
         String? reason,
+        String? tenantId,
+        String? branchId,
+        String? printerId,
       }) async {
     await _post(
       '/print/invoice/$invoiceId',
-      params: {'reason': reason},
+      params: {
+        if (reason != null && reason.isNotEmpty) 'reason': reason,
+        if (tenantId != null && tenantId.isNotEmpty) 'tenant_id': tenantId,
+        if (branchId != null && branchId.isNotEmpty) 'branch_id': branchId,
+        if (printerId != null && printerId.isNotEmpty) 'printer_id': printerId,
+      },
     );
   }
 
   Future<void> printBill(
       String orderId, {
         String? reason,
+        String? tenantId,
+        String? branchId,
+        String? printerId,
       }) async {
     await _post(
       '/print/bill/$orderId',
-      params: {'reason': reason},
+      params: {
+        if (reason != null && reason.isNotEmpty) 'reason': reason,
+        if (tenantId != null && tenantId.isNotEmpty) 'tenant_id': tenantId,
+        if (branchId != null && branchId.isNotEmpty) 'branch_id': branchId,
+        if (printerId != null && printerId.isNotEmpty) 'printer_id': printerId,
+      },
     );
   }
 
@@ -1203,11 +1220,14 @@ class ApiClient {
 
   /// Print a GST invoice for an already-created invoice record.
   /// POST /print/invoice/{invoice_id}
-  Future<void> printInvoiceById(String invoiceId, {String? reason}) async {
+  Future<void> printInvoiceById(String invoiceId, {String? reason, String? tenantId, String? branchId, String? printerId}) async {
     await _post(
       '/print/invoice/$invoiceId',
-      body: {
-        if (reason != null) 'reason': reason,
+      params: {
+        if (reason != null && reason.isNotEmpty) 'reason': reason,
+        if (tenantId != null && tenantId.isNotEmpty) 'tenant_id': tenantId,
+        if (branchId != null && branchId.isNotEmpty) 'branch_id': branchId,
+        if (printerId != null && printerId.isNotEmpty) 'printer_id': printerId,
       },
     );
   }
@@ -1896,4 +1916,133 @@ class ApiClient {
     final r = await http.post(uri, headers: _headers());
     _decodeOrThrow(r); // throws ApiException with parsed message if non-2xx
   }
+
+  // --- In ApiClient class (near other helpers) ---
+  Future<String?> resolveDefaultBillingPrinterId({
+    required String tenantId,
+    required String branchId,
+  }) async {
+    final list = await listPrinters(tenantId: tenantId, branchId: branchId);
+
+    String? pickId(Map<String, dynamic> p) =>
+        (p['id'] is String) ? p['id'] as String
+            : p['id']?.toString();
+
+    // 1) Explicit default BILLING
+    for (final p in list) {
+      final type = (p['type'] ?? '').toString().toUpperCase();
+      if (type == 'BILLING' && p['is_default'] == true) return pickId(p);
+    }
+    // 2) Any BILLING
+    for (final p in list) {
+      final type = (p['type'] ?? '').toString().toUpperCase();
+      if (type == 'BILLING') return pickId(p);
+    }
+    // 3) Single printer fallback
+    if (list.length == 1) return pickId(list.first);
+
+    return null; // nothing suitable
+  }
+
+  // --- Helper: first non-empty value among keys in a Map ---
+  String? _firstNonEmptyStr(Map<String, dynamic> m, List<String> keys) {
+    for (final k in keys) {
+      final v = m[k];
+      if (v is String && v.trim().isNotEmpty) return v.trim();
+    }
+    return null;
+  }
+
+  /// Resolve default billing printer from (in order):
+  /// 1) Restaurant settings (billing_printer_id, billingPrinterId, default_billing_printer_id)
+  /// 2) Any printer marked is_default and type=BILLING
+  /// 3) Any BILLING printer
+  /// 4) If only one printer exists, use that
+  Future<String?> _resolveBillingPrinterIdFromBranch({
+    required String tenantId,
+    required String branchId,
+  }) async {
+    // Try settings map (lightweight)
+    try {
+      final rs = await fetchRestaurantSettings(tenantId: tenantId, branchId: branchId);
+      if (rs.isNotEmpty) {
+        final pid = _firstNonEmptyStr(rs, [
+          'billing_printer_id',
+          'billingPrinterId',
+          'default_billing_printer_id',
+        ]);
+        if (pid != null) return pid;
+      }
+    } catch (_) {
+      // ignore
+    }
+
+    // Try explicit default / any BILLING / single printer
+    final list = await listPrinters(tenantId: tenantId, branchId: branchId);
+
+    String? pickId(Map<String, dynamic> p) {
+      final x = p['id'];
+      return (x is String) ? x : x?.toString();
+    }
+
+    for (final p in list) {
+      final isBilling = (p['type'] ?? '').toString().toUpperCase() == 'BILLING';
+      if (isBilling && p['is_default'] == true) return pickId(p);
+    }
+    for (final p in list) {
+      final isBilling = (p['type'] ?? '').toString().toUpperCase() == 'BILLING';
+      if (isBilling) return pickId(p);
+    }
+    if (list.length == 1) return pickId(list.first);
+    return null;
+  }
+
+  /// Smart Bill print (resolves printer if caller doesn't pass one)
+  Future<void> printBillSmart({
+    required String tenantId,
+    required String branchId,
+    required String orderId,
+    String? printerId,
+    String? reason,
+  }) async {
+    var pid = (printerId ?? '').trim();
+    if (pid.isEmpty) {
+      pid = await _resolveBillingPrinterIdFromBranch(tenantId: tenantId, branchId: branchId) ?? '';
+    }
+    if (pid.isEmpty) {
+      throw ApiException('No default billing printer configured for this branch');
+    }
+    await printBill(
+      orderId,
+      reason: reason,
+      tenantId: tenantId,
+      branchId: branchId,
+      printerId: pid,
+    );
+  }
+
+  /// Smart Invoice print (resolves printer if caller doesn't pass one)
+  Future<void> printInvoiceSmart({
+    required String tenantId,
+    required String branchId,
+    required String invoiceId,
+    String? printerId,
+    String? reason,
+  }) async {
+    var pid = (printerId ?? '').trim();
+    if (pid.isEmpty) {
+      pid = await _resolveBillingPrinterIdFromBranch(tenantId: tenantId, branchId: branchId) ?? '';
+    }
+    if (pid.isEmpty) {
+      throw ApiException('No default billing printer configured for this branch');
+    }
+    await printInvoice(
+      invoiceId,
+      reason: reason,
+      tenantId: tenantId,
+      branchId: branchId,
+      printerId: pid,
+    );
+  }
+
 }
