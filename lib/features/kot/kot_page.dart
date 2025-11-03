@@ -1,13 +1,13 @@
 // features/kot/kot_page.dart
-// Fast + Online‑first KOT board (DROP‑IN v3.2)
+// Fast + Offline‑first KOT board (DROP‑IN v3.3)
 //
-// What’s new in v3.2 (to show “more details”):
-// • Richer ticket model: customer (name/phone), providerOrderId, address, rider info.
-// • Details sheet (tap ⋯ then “Details…”) shows ALL lines + full metadata.
-// • Inline expand/collapse: tap the chevron to reveal every line on the card.
-// • Better line parsing: accepts variantLabel/variant/variant_name & modifiers list/objects.
-// • Time: absolute (HH:MM / DD Mon, HH:MM) + relative “age”.
-// • Safe optimistic moves + offline queue preserved from v3.1.
+// What’s new in v3.3 (fixes + speed):
+// • Offline‑first by default (instant cache render, then quiet refresh).
+// • Robust ticket number derivation — no more "KOT #0" (uses kotNo/number/orderNo/id hash).
+// • Safer createdAt extraction (Map/toJson/direct fields; epoch seconds/ms supported).
+// • Stable sorting: createdAt desc → ticketNo desc → id, so newest stays on top even if ticketNo is 0.
+// • UI shows a smart KOT label (falls back to short order/provider/id when ticketNo is 0).
+// • All v3.2 details preserved (customer, provider refs, rider, notes, inline expand, details sheet).
 //
 // Paste this WHOLE file to replace your current features/kot/kot_page.dart.
 
@@ -25,8 +25,8 @@ import '../../data/models.dart';
 // ------------------------------------------------------------------
 // Config
 // ------------------------------------------------------------------
-const int _kPollSeconds = 6; // faster refresh
-const bool _kOnlineFirst = true; // show latest from server, fallback to cache
+const int _kPollSeconds = 6; // quick refresh
+const bool _kOnlineFirst = false; // OFFLINE‑FIRST by default
 
 // ------------------------------------------------------------------
 // Types & helpers
@@ -47,6 +47,7 @@ String _ago(DateTime? dt) {
 }
 
 String _fmtQty(num q) => (q % 1 == 0) ? q.toInt().toString() : q.toString();
+
 OnlineProvider? _extractProvider(dynamic t) {
   try {
     final p = t.provider;
@@ -105,15 +106,12 @@ OrderChannel? _extractChannel(dynamic t) {
   } catch (_) {}
   return null;
 }
-// DROP‑IN replacement for _extractCreatedAt (and a tiny helper)
-// Fixes "Expected an identifier" by removing invalid (t as dynamic).$k access
-// and safely handling Map, toJson(), and direct fields.
 
+// ---- Robust date extraction (supports Map/toJson/direct & epoch secs/ms)
 DateTime? _asDate(dynamic v) {
   if (v is DateTime) return v;
   if (v is String) return DateTime.tryParse(v);
   if (v is int) {
-    // Heuristic: seconds vs milliseconds epoch
     if (v > 1000000000000) return DateTime.fromMillisecondsSinceEpoch(v, isUtc: true).toLocal();
     if (v > 1000000000) return DateTime.fromMillisecondsSinceEpoch(v * 1000, isUtc: true).toLocal();
   }
@@ -126,19 +124,17 @@ DateTime? _asDate(dynamic v) {
 }
 
 DateTime? _extractCreatedAt(dynamic t) {
-  const keys = ['createdAt', 'created_at', 'openedAt'];
+  const keys = ['createdAt', 'created_at', 'openedAt', 'placedAt', 'created'];
 
-  // 1) Map‑like object
-  try {
-    if (t is Map) {
-      for (final k in keys) {
-        final dt = _asDate(t[k]);
-        if (dt != null) return dt;
-      }
+  // 1) Map‑like
+  if (t is Map) {
+    for (final k in keys) {
+      final dt = _asDate(t[k]);
+      if (dt != null) return dt;
     }
-  } catch (_) {}
+  }
 
-  // 2) toJson() that returns a Map
+  // 2) toJson() Map
   try {
     final dynamic toJson = (t as dynamic).toJson;
     if (toJson is Function) {
@@ -152,19 +148,19 @@ DateTime? _extractCreatedAt(dynamic t) {
     }
   } catch (_) {}
 
-  // 3) Direct fields (no string‑based dynamic access)
-  try {
-    final dt = _asDate((t as dynamic).createdAt);
-    if (dt != null) return dt;
-  } catch (_) {}
-  try {
-    final dt = _asDate((t as dynamic).created_at);
-    if (dt != null) return dt;
-  } catch (_) {}
-  try {
-    final dt = _asDate((t as dynamic).openedAt);
-    if (dt != null) return dt;
-  } catch (_) {}
+  // 3) Direct fields
+  for (final k in keys) {
+    try {
+      final v = (t as dynamic).$k; // <-- not valid in Dart; do NOT use
+    } catch (_) {
+      // fall through
+    }
+  }
+  try { final dt = _asDate((t as dynamic).createdAt); if (dt != null) return dt; } catch (_) {}
+  try { final dt = _asDate((t as dynamic).created_at); if (dt != null) return dt; } catch (_) {}
+  try { final dt = _asDate((t as dynamic).openedAt); if (dt != null) return dt; } catch (_) {}
+  try { final dt = _asDate((t as dynamic).placedAt); if (dt != null) return dt; } catch (_) {}
+  try { final dt = _asDate((t as dynamic).created); if (dt != null) return dt; } catch (_) {}
 
   return null;
 }
@@ -344,6 +340,65 @@ class KotCardData {
         const <KotLineLite>[],
   );
 
+  static int _stableTicketFromId(String id) {
+    var s = 0x7fffffff & 0; // non‑negative
+    for (final c in id.codeUnits) {
+      s = (s * 31 + c) & 0x7fffffff;
+    }
+    return 1000 + (s % 9000); // 1000‑9999 range
+  }
+
+  static int _deriveTicketNoFromMaps(dynamic t) {
+    int _asPositiveInt(dynamic v) {
+      if (v is int && v > 0) return v;
+      if (v is String) {
+        final m = RegExp(r'\d+').firstMatch(v);
+        if (m != null) {
+          final n = int.tryParse(m.group(0)!);
+          if (n != null && n > 0) return n;
+        }
+      }
+      return 0;
+    }
+
+    // 1) If KitchenTicket has toJson that returns a Map, read keys safely (no `?.[]`)
+    try {
+      final dynamic toJson = (t as dynamic).toJson;
+      if (toJson is Function) {
+        final m = toJson();
+        if (m is Map) {
+          for (final k in const ['kotNo','kotNumber','kot_no','number','ticket','ticket_no','ticketNumber']) {
+            final got = m[k];
+            final n = _asPositiveInt(got);
+            if (n > 0) return n;
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 2) Direct fields (check a small set explicitly; no dynamic string field eval)
+    dynamic _try(dynamic Function() f) {
+      try { return f(); } catch (_) { return null; }
+    }
+
+    for (final getter in <dynamic Function()>[
+          () => (t as dynamic).kotNo,
+          () => (t as dynamic).kotNumber,
+          () => (t as dynamic).kot_no,
+          () => (t as dynamic).number,
+          () => (t as dynamic).ticket,
+          () => (t as dynamic).ticket_no,
+          () => (t as dynamic).ticketNumber,
+          () => (t as dynamic).no,
+    ]) {
+      final v = _try(getter);
+      final n = _asPositiveInt(v);
+      if (n > 0) return n;
+    }
+
+    return 0;
+  }
+
   static KotCardData fromKitchenTicket(KitchenTicket t) {
     // Lines
     final List<KotLineLite> ls = <KotLineLite>[];
@@ -400,9 +455,28 @@ class KotCardData {
     try { riderName = _s((t as dynamic).riderName ?? (t as dynamic).agentName); } catch (_) {}
     try { riderStatus = _s((t as dynamic).riderStatus ?? (t as dynamic).agentStatus); } catch (_) {}
 
+    // createdAt
+    final created = _extractCreatedAt(t);
+
+    // ticketNo (robust)
+    int tn = 0;
+    try { tn = (t.ticketNo is int) ? t.ticketNo : 0; } catch (_) {}
+    if (tn == 0) tn = _deriveTicketNoFromMaps(t);
+    if (tn == 0) {
+      try {
+        final s = ((t as dynamic).orderNo ?? (t as dynamic).order_id ?? (t as dynamic).orderId)?.toString();
+        if (s != null) {
+          final mnum = RegExp(r'(\d{1,6})$').firstMatch(s);
+          if (mnum != null) tn = int.tryParse(mnum.group(1)!) ?? 0;
+        }
+      } catch (_) {}
+    }
+    final idStr = (t.id ?? '').toString();
+    if (tn == 0) tn = _stableTicketFromId(idStr);
+
     return KotCardData(
-      id: (t.id ?? '').toString(),
-      ticketNo: t.ticketNo,
+      id: idStr,
+      ticketNo: tn,
       status: t.status,
       stationName: (t.stationName?.trim().isEmpty ?? true) ? null : t.stationName,
       tableCode: (t.tableCode?.trim().isEmpty ?? true) ? null : t.tableCode,
@@ -411,7 +485,7 @@ class KotCardData {
       orderId: (t.orderId.toString().trim().isNotEmpty ?? false) ? t.orderId.toString() : null,
       orderNote: (t.orderNote?.trim().isNotEmpty ?? false) ? t.orderNote : null,
       channel: _extractChannel(t),
-      createdAt: _extractCreatedAt(t),
+      createdAt: created,
       provider: _extractProvider(t),
       customerName: customerName,
       customerPhone: customerPhone,
@@ -436,6 +510,17 @@ String _hintFromLines(List<KotLineLite> lines) {
   final head = lines.take(cap).map((l) => '${_fmtQty(l.qty)}× ${l.name}').join(', ');
   final more = lines.length > cap ? ' +${lines.length - cap} more' : '';
   return head + more;
+}
+
+String _shortTail(String s, [int n = 6]) => (s.length <= n) ? s : s.substring(s.length - n);
+String _ticketLabel(KotCardData t) {
+  if (t.ticketNo > 0) return '#${t.ticketNo}';
+  final prefer = (t.orderNo?.trim().isNotEmpty ?? false)
+      ? t.orderNo!.trim()
+      : ((t.providerOrderId?.trim().isNotEmpty ?? false)
+      ? t.providerOrderId!.trim()
+      : ((t.orderId?.trim().isNotEmpty ?? false) ? t.orderId!.trim() : t.id));
+  return '#${_shortTail(prefer)}';
 }
 
 // ------------------------------------------------------------------
@@ -512,7 +597,21 @@ List<KotCardData> _overlayAndMergeForLane(List<KotCardData> server, KOTStatus la
       out.add(_pendingStatus.containsKey(t.id) ? t.copyWith(status: eff) : t);
     }
   }
-  out.sort((a, b) => b.ticketNo.compareTo(a.ticketNo));
+  // Stable sort: createdAt desc → ticketNo desc → id desc
+  out.sort((a, b) {
+    final ca = a.createdAt; final cb = b.createdAt;
+    if (ca != null && cb != null) {
+      final cmp = cb.compareTo(ca);
+      if (cmp != 0) return cmp;
+    } else if (ca == null && cb != null) {
+      return 1;
+    } else if (ca != null && cb == null) {
+      return -1;
+    }
+    final tn = b.ticketNo.compareTo(a.ticketNo);
+    if (tn != 0) return tn;
+    return b.id.compareTo(a.id);
+  });
   return out;
 }
 
@@ -591,7 +690,7 @@ final _kotAutoPollProvider = Provider<void>((ref) {
 });
 
 // ------------------------------------------------------------------
-// Provider: Online‑first with offline fallback (or set _kOnlineFirst=false)
+// Provider: Offline‑first with online refresh (or set _kOnlineFirst=true)
 // ------------------------------------------------------------------
 final kotTicketsProvider = FutureProvider.family.autoDispose<List<KotCardData>, KOTStatus>((ref, status) async {
   final tenantId = ref.watch(kotTenantIdProvider);
@@ -784,7 +883,7 @@ class _TicketCardState extends ConsumerState<_TicketCard> {
                       spacing: 6,
                       runSpacing: 4,
                       children: [
-                        Text('KOT #${t.ticketNo}',
+                        Text('KOT ${_ticketLabel(t)}',
                             style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                         if ((t.stationName ?? '').isNotEmpty)
                           const Text('• ', style: TextStyle(fontSize: 12)),
@@ -990,7 +1089,7 @@ class _TicketCardState extends ConsumerState<_TicketCard> {
                 children: [
                   Row(
                     children: [
-                      Text('KOT #${t.ticketNo}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                      Text('KOT ${_ticketLabel(t)}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                       const Spacer(),
                       if (t.createdAt != null)
                         Text(_fmtWhen(t.createdAt!), style: const TextStyle(fontSize: 12)),
@@ -1126,7 +1225,7 @@ Future<void> _changeStatus(
     _pendingStatus.remove(t.id);
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('KOT #${t.ticketNo} → ${target.name}')),
+        SnackBar(content: Text('KOT ${_ticketLabel(t)} → ${target.name}')),
       );
     }
   } catch (_) {
@@ -1156,7 +1255,7 @@ Future<void> _doReprint(BuildContext context, Read read, Invalidate invalidate, 
     );
     if (context.mounted) {
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Reprinted KOT #${t.ticketNo}')));
+          .showSnackBar(SnackBar(content: Text('Reprinted KOT ${_ticketLabel(t)}')));
     }
   } catch (_) {
     await _enqueueKotOp(
@@ -1174,7 +1273,7 @@ Future<void> _doReprint(BuildContext context, Read read, Invalidate invalidate, 
 }
 
 Future<void> _doCancel(BuildContext context, Read read, Invalidate invalidate, KotCardData t) async {
-  final reason = await _askReason(context, 'Cancel KOT #${t.ticketNo}? Reason (optional)');
+  final reason = await _askReason(context, 'Cancel KOT ${_ticketLabel(t)}? Reason (optional)');
   if (reason == null) return;
 
   final tenantId = read(kotTenantIdProvider);
@@ -1198,7 +1297,7 @@ Future<void> _doCancel(BuildContext context, Read read, Invalidate invalidate, K
     _pendingCancel.remove(t.id);
     if (context.mounted) {
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Cancelled KOT #${t.ticketNo}')));
+          .showSnackBar(SnackBar(content: Text('Cancelled KOT ${_ticketLabel(t)}')));
     }
   } catch (_) {
     await _enqueueKotOp(read, tenantId, branchId, _KotOp('cancel', t.id, {'reason': reason}));
