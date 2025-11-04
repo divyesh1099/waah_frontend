@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:collection';
+import 'dart:developer' as dev;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -23,7 +25,7 @@ final Map<String, List<_ItemModifierGroupData>> _modsCache = {};
 const bool _kAutoPrintKOT = true;
 const bool _kAutoPrintInvoice = true;
 const int _kAddItemsParallel = 8; // was 6
-const bool _kPreferFastPath = true; // true => fast online path; false => offline-first queue
+const bool _kPreferFastPath = false; // true => fast online path; false => offline-first queue
 
 // Cache printer IDs per branch to avoid listPrinters() each time
 class _PrinterSnapshot {
@@ -76,6 +78,29 @@ Future<List<_ItemModifierGroupData>> _getModsCached(WidgetRef ref, String itemId
   _modsCache[itemId] = parsed;
   return parsed;
 }
+
+class _Gate {
+  _Gate(this._max);
+  final int _max;
+  int _in = 0;
+  final Queue<Completer<void>> _q = Queue();
+
+  Future<T> withPermit<T>(Future<T> Function() run) async {
+    if (_in >= _max) {
+      final c = Completer<void>();
+      _q.add(c);
+      await c.future;
+    }
+    _in++;
+    try { return await run(); }
+    finally {
+      _in--;
+      if (_q.isNotEmpty) _q.removeFirst().complete();
+    }
+  }
+}
+final _prefetchGate = _Gate(3); // <=3 concurrent
+
 
 class _BranchSwitcherAction extends ConsumerWidget {
   const _BranchSwitcherAction();
@@ -195,13 +220,29 @@ Future<void> _silentPush(Ref ref) async {
   }
 }
 
+final netBusyProvider = StateProvider<bool>((_) => false);
+
 // Top-level autosync provider
 final _queueAutoSyncProvider = Provider<void>((ref) {
   final t = Timer.periodic(const Duration(seconds: 20), (_) {
-    unawaited(_silentPush(ref)); // This 'ref' (ProviderRef) is assignable to 'Ref<dynamic>'
+    if (!ref.read(netBusyProvider)) {
+      unawaited(_silentPush(ref));
+    }
   });
   ref.onDispose(t.cancel);
 });
+
+class _PhaseTimer {
+  final _t0 = DateTime.now();
+  DateTime _last = DateTime.now();
+  void lap(String name) {
+    final now = DateTime.now();
+    final inc = now.difference(_last).inMilliseconds;
+    final total = now.difference(_t0).inMilliseconds;
+    dev.log('+$inc ms (total ${total} ms)', name: 'pos.timer.$name');
+    _last = now;
+  }
+}
 
 /// ------------------------------------------------------------
 /// CART STATE
@@ -569,8 +610,8 @@ class PosPage extends ConsumerWidget {
                       for (final it in items.take(24)) {
                         final id = it.id;
                         if (id != null && id.isNotEmpty) {
-                          unawaited(_getVariantsCached(ref, id));
-                          unawaited(_getModsCached(ref, id));
+                          unawaited(_prefetchGate.withPermit(() => _getVariantsCached(ref, id)));
+                          unawaited(_prefetchGate.withPermit(() => _getModsCached(ref, id)));
                         }
                       }
 
@@ -1219,7 +1260,7 @@ Future<int> _queuedCount(Read read) async {
 /// Pushes everything in one call to /sync/push. Clears queue on success.
 Future<void> pushQueueNow(BuildContext ctx, WidgetRef ref) async {
   final client = ref.read(apiClientProvider);
-  final ops = await _readQueuedOps(ref.read); // This helper is fine
+  final ops = await _readQueuedOps(ref.read);
   if (ops.isEmpty) {
     if (ctx.mounted) {
       ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Nothing to sync')));
@@ -1228,19 +1269,27 @@ Future<void> pushQueueNow(BuildContext ctx, WidgetRef ref) async {
   }
   final orderNos = _extractOrderNos(ops);
   try {
-    await client.syncPush(deviceId: _kDeviceId, ops: ops);
-    await _writeQueuedOps(ref.read, []); // This helper is fine
+    dev.log(convert.jsonEncode({'ops_preview': ops.take(3).toList(), 'count': ops.length}),
+        name: 'pos.sync.request'); // 🔧
+    final resp = await client.syncPush(deviceId: _kDeviceId, ops: ops);
+    dev.log(convert.jsonEncode(resp), name: 'pos.sync.response');        // 🔧
+
+    // Optional: show applied/error counts if backend returns them
+    final applied = (resp['applied'] ?? 0).toString();
+    final errors  = (resp['errors']  ?? 0).toString();
+
+    await _writeQueuedOps(ref.read, []); // clear only on success
     ref.read(pendingOrdersProvider.notifier).removeByOrderNos(orderNos);
 
-    // --- Invalidation logic (no change needed here) ---
     ref.invalidate(ordersFutureProvider);
     for (final status in KOTStatus.values) {
       ref.invalidate(kotTicketsProvider(status));
     }
-    // --- END ---
 
     if (ctx.mounted) {
-      ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Synced ${ops.length} op(s) ✅')));
+      ScaffoldMessenger.of(ctx).showSnackBar(
+        SnackBar(content: Text('Synced ${ops.length} op(s) • applied: $applied • errors: $errors ✅')),
+      );
     }
   } catch (e) {
     if (ctx.mounted) {
@@ -1250,6 +1299,7 @@ Future<void> pushQueueNow(BuildContext ctx, WidgetRef ref) async {
 }
 
 /// Build a compact batch of checkout ops for one order (OPEN → ADD_ITEM* → FIRE_KOT → PAY → INVOICE → PRINT → DRAWER)
+// pos_page.dart
 List<Map<String, dynamic>> buildCheckoutOps({
   required String orderNo,
   required String tenantId,
@@ -1258,95 +1308,43 @@ List<Map<String, dynamic>> buildCheckoutOps({
   required int? pax,
   required String? tableId,
   required List<CartLine> lines,
-  required double amountDueHint,
+  required double amountDueHint, // unused here; backend recomputes anyway
 }) {
-  String rid(String pfx, int i) =>
-      '$pfx-${DateTime.now().millisecondsSinceEpoch}-$i-${Random().nextInt(1<<32)}';
-
-  final ops = <Map<String, dynamic>>[];
-
-  // OPEN ORDER
-  ops.add({
-    'entity': 'order',
-    'entity_id': orderNo,     // client-supplied id; server should map to real id
-    'op': 'OPEN',
-    'payload': {
-      'tenant_id': tenantId,
-      'branch_id': branchId,
-      'order_no': orderNo,
-      'channel': channel.name,
-      if (pax != null) 'pax': pax,
-      if (tableId != null) 'table_id': tableId,
-      'note': null,
-    },
-  });
-
-  // ADD ITEMS
-  for (var i = 0; i < lines.length; i++) {
-    final l = lines[i];
-    ops.add({
-      'entity': 'order_item',
-      'entity_id': rid('oi', i), // client-generated row id (just for de-dupe)
-      'op': 'ADD',
-      'payload': {
-        'order_no': orderNo,
-        'item_id': l.item.id,
-        'variant_id': l.variant?.id,
-        'qty': l.qty,
-        'unit_price': l.unitPrice,
-        'modifiers': l.modifiers.map((m) => {
-          'modifier_id': m.id ?? m.name,
-          'qty': 1,
-          'price_delta': m.priceDelta,
-        }).toList(),
-      },
+  final items = <Map<String, dynamic>>[];
+  for (final l in lines) {
+    items.add({
+      'item_id': l.item.id,
+      'variant_id': l.variant?.id,
+      'qty': l.qty,
+      'unit_price': l.unitPrice,
+      'line_discount': 0.0,
+      'gst_rate': l.item.gstRate,
+      // If you later want modifiers persisted in OrderItem:
+      // 'modifiers': l.modifiers.map((m)=>{'modifier_id':m.id??m.name,'qty':1,'price_delta':m.priceDelta}).toList(),
     });
   }
 
-  // FIRE KOT
-  ops.add({
-    'entity': 'kot',
-    'entity_id': orderNo,
-    'op': 'FIRE',
-    'payload': {'order_no': orderNo, 'station_id': null},
-  });
-
-  // PAY (cash)
-  ops.add({
-    'entity': 'payment',
-    'entity_id': orderNo,
-    'op': 'PAY',
-    'payload': {
-      'order_no': orderNo,
-      'mode': 'CASH',
-      'amount': amountDueHint, // server should recompute if needed
-    },
-  });
-
-  // INVOICE → PRINT → DRAWER
-  ops.addAll([
+  return [
     {
-      'entity': 'invoice',
-      'entity_id': orderNo,
-      'op': 'CREATE',
-      'payload': {'order_no': orderNo},
+      'entity': 'Order',           // 🔧 capital “O” to match backend
+      'entity_id': orderNo,        // optional but nice for tracing
+      'op': 'UPSERT',              // 🔧 matches apply_ops
+      'payload': {
+        'tenant_id': tenantId,
+        'branch_id': branchId,
+        'order_no': orderNo,
+        'channel': channel.name,
+        'status': 'OPEN',
+        if (pax != null) 'pax': pax,
+        if (tableId != null) 'table_id': tableId,
+        'opened_at': DateTime.now().toUtc().toIso8601String(),
+        'items': items,            // 🔧 embed lines here
+        // 'note': null,
+      },
     },
-    {
-      'entity': 'invoice',
-      'entity_id': orderNo,
-      'op': 'PRINT',
-      'payload': {'order_no': orderNo},
-    },
-    {
-      'entity': 'drawer',
-      'entity_id': branchId,
-      'op': 'OPEN',
-      'payload': {'tenant_id': tenantId, 'branch_id': branchId},
-    },
-  ]);
-
-  return ops;
+  ];
 }
+
 
 Set<String> _extractOrderNos(List<Map<String, dynamic>> ops) {
   final out = <String>{};
@@ -1445,7 +1443,7 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
   // dialog to choose DINE_IN / TAKEAWAY / DELIVERY and pax and table
   Future<_CheckoutRequest?> _askCheckoutInfo(PosCartState cart) async {
     // Preload tables before showing dialog to avoid async gap inside the builder.
-    final tables = await ref.read(diningTablesProvider.future);
+    // final tables = await ref.read(diningTablesProvider.future);
 
     if (!mounted) return null;
 
@@ -1460,6 +1458,9 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setLocalState) {
+            final tablesAsync = ref.watch(diningTablesProvider);
+            final tables = tablesAsync.asData?.value ?? const <DiningTable>[];
+            final tablesLoading = tablesAsync.isLoading;
             return AlertDialog(
               title: const Text('Checkout details'),
               content: SingleChildScrollView(
@@ -1637,6 +1638,7 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
         bool autoPrintKot = _kAutoPrintKOT,
         bool autoPrintInvoice = _kAutoPrintInvoice,
       }) async {
+    final t = _PhaseTimer();
     final client = ref.read(apiClientProvider);
     final tenantId = ref.read(activeTenantIdProvider);
     final branchId = ref.read(activeBranchIdProvider);
@@ -1704,6 +1706,7 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
         customerId: null,
         note: null,
       );
+      t.lap('open order');
       orderId = created['id']?.toString() ?? '';
     } catch (e) {
       // If open fails → fallback to offline queue so cashier isn’t blocked
@@ -1744,6 +1747,7 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
     // 2) Add items in parallel (chunked)
     try {
       await _addItemsBulkFast(client, orderId, cart.lines);
+      t.lap('add items (bulk)');
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1756,6 +1760,7 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
     late final OrderDetail detail;
     try {
       detail = await client.getOrderDetail(orderId);
+      t.lap('get totals');
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1768,6 +1773,7 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
     try {
       paidAmount = detail.totals.due; // Get amount before pay call
       await client.pay(orderId, PayMode.CASH, paidAmount);
+      t.lap('pay');
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1803,6 +1809,7 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
       autoPrintKot: autoPrintKot,
       autoPrintInvoice: autoPrintInvoice,
     ));
+    t.lap('post-checkout spawn');
 
     // We are done. The UI is already updated and non-blocking.
   }
@@ -1816,7 +1823,12 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
     try {
       final req = await _askCheckoutInfo(widget.cart);
       if (req == null) return; // user cancelled
-      await _performCheckout(widget.cart, req);
+      ref.read(netBusyProvider.notifier).state = true;
+      try {
+        await _performCheckout(widget.cart, req);
+      } finally {
+       ref.read(netBusyProvider.notifier).state = false;
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -1866,7 +1878,6 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
                 child: ListView.separated(
                   controller: _cartCtl,
                   primary: false,
-                  shrinkWrap: true, // Important inside Column > Expanded
                   itemCount: lines.length,
                   separatorBuilder: (_, __) => const Divider(height: 8),
                   itemBuilder: (context, i) {

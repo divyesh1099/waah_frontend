@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:convert' as convert;
+import 'dart:developer' as dev;
 import 'package:http/http.dart' as http;
 import 'package:dio/dio.dart';
 import 'package:http_parser/http_parser.dart';
@@ -1059,17 +1061,17 @@ class ApiClient {
 
   // ---------- Sync ----------
 
-  Future<void> syncPush({
+  Future<Map<String, dynamic>> syncPush({
     required String deviceId,
     required List<Map<String, dynamic>> ops,
   }) async {
-    await _post(
+    final r = await _post(
       '/sync/push',
-      body: {
-        'device_id': deviceId,
-        'ops': ops,
-      },
+      body: {'device_id': deviceId, 'ops': ops},
     );
+    if (r is Map<String, dynamic>) return r;
+    if (r is Map) return Map<String, dynamic>.from(r);
+    return const <String, dynamic>{}; // fallback if server returns nothing
   }
 
   Future<Map<String, dynamic>> syncPull({
