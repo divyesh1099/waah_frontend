@@ -27,7 +27,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 // ------------------------------------------------------------------
 // Config
 // ------------------------------------------------------------------
-const int _kPollSeconds = 6; // quick refresh
+const int _kPollSeconds = 8; // quick refresh
 const bool _kOnlineFirst = false; // OFFLINE‑FIRST by default
 
 // ------------------------------------------------------------------
@@ -531,6 +531,7 @@ final Map<String, KotCardData> _ticketById = {}; // last known copy (any lane)
 final Map<String, KOTStatus> _pendingStatus = {}; // ticketId -> target
 final Set<String> _pendingCancel = <String>{};
 final Set<String> _busyTickets = <String>{}; // dedupe rapid taps
+final Set<KOTStatus> _refreshInFlight = <KOTStatus>{};
 
 class _KotOp {
   final String type; // 'status' | 'reprint' | 'cancel'
@@ -727,12 +728,16 @@ Future<List<KotCardData>> _fetchFresh(Read read, String tenantId, String branchI
   } catch (_) {}
   return effective;
 }
-
 Future<void> _refreshKot(Read read, String tenantId, String branchId, KOTStatus status) async {
+  if (_refreshInFlight.contains(status)) return;
+  _refreshInFlight.add(status);
   try {
     await _fetchFresh(read, tenantId, branchId, status);
-  } catch (_) {}
+  } finally {
+    _refreshInFlight.remove(status);
+  }
 }
+
 
 // ------------------------------------------------------------------
 // Auto-refresh + queue pusher (polling every _kPollSeconds)
