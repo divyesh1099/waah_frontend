@@ -598,6 +598,8 @@ class ApiClient {
     String? tenantId,                 // current tenant
     String? branchId,                 // current branch
     OnlineProvider? provider,         // e.g. OnlineProvider.ZOMATO
+    DateTime? startDt,                // NEW: Date filter
+    DateTime? endDt,                  // NEW: Date filter
   }) {
     final params = <String, dynamic>{
       'status': status?.name,
@@ -607,6 +609,8 @@ class ApiClient {
       if (tenantId != null && tenantId.isNotEmpty) 'tenant_id': tenantId,
       if (branchId != null && branchId.isNotEmpty) 'branch_id': branchId,
       if (provider != null) 'provider': provider.name,
+      if (startDt != null) 'start_dt': startDt.toUtc().toIso8601String(), // NEW
+      if (endDt != null) 'end_dt': endDt.toUtc().toIso8601String(),       // NEW
     };
 
     return listPage<Order>(
@@ -661,6 +665,14 @@ class ApiClient {
   Future<Order> getOrder(String id) async {
     final d = await getOrderDetail(id);
     return d.order;
+  }
+
+  // NEW: Call PATCH /orders/{order_id}/status
+  Future<void> updateOrderStatus(String orderId, OrderStatusUpdate data) async {
+    await _patch(
+      '/orders/$orderId/status',
+      body: data.toJson(),
+    );
   }
 
   // We keep this for other flows that pass a full Order object
@@ -1235,11 +1247,12 @@ class ApiClient {
   }
 
   // ---------- KOT (Kitchen) ----------
-
   Future<List<KitchenTicket>> fetchKitchenTickets({
     KOTStatus? status,
     String? tenantId,
     String? branchId,
+    DateTime? startDt, // NEW
+    DateTime? endDt,   // NEW
   }) {
     final params = <String, dynamic>{
       'status': status?.name,
@@ -1252,6 +1265,15 @@ class ApiClient {
     if (branchId != null && branchId.trim().isNotEmpty) {
       params['branch_id'] = branchId.trim();
     }
+
+    // --- FIX starts here ---
+    if (startDt != null) {
+      params['start_dt'] = startDt.toUtc().toIso8601String();
+    }
+    if (endDt != null) {
+      params['end_dt'] = endDt.toUtc().toIso8601String();
+    }
+    // --- FIX ends here ---
 
     return listAll<KitchenTicket>(
       path: '/kot/tickets',

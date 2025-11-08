@@ -18,6 +18,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart'; // NEW: For date formatting
 
 import '../../app/providers.dart';
 import '../../data/api_client.dart';
@@ -705,12 +706,22 @@ Future<void> _pushKotQueue(Read read, String tenantId, String branchId) async {
 // ------------------------------------------------------------------
 // Network fetch + SWR cache update
 // ------------------------------------------------------------------
-Future<List<KotCardData>> _fetchFresh(Read read, String tenantId, String branchId, KOTStatus status) async {
+// UPDATED: Now accepts optional date filters
+Future<List<KotCardData>> _fetchFresh(
+    Read read,
+    String tenantId,
+    String branchId,
+    KOTStatus status, {
+      DateTime? startDt,
+      DateTime? endDt,
+    }) async {
   final api = read(apiClientProvider);
   final list = await api.fetchKitchenTickets(
     status: status,
     tenantId: tenantId.isEmpty ? null : tenantId,
     branchId: branchId.isEmpty ? null : branchId,
+    startDt: startDt, // Pass filter
+    endDt: endDt,     // Pass filter
   );
   final mapped = list.map(KotCardData.fromKitchenTicket).toList();
   // update registry
@@ -720,19 +731,39 @@ Future<List<KotCardData>> _fetchFresh(Read read, String tenantId, String branchI
   final effective = _overlayAndMergeForLane(mapped, status);
 
   // Write caches (overlayed view) + disk
+  // ONLY cache if we are NOT filtering by date
   final key = _kb(tenantId, branchId, status);
   _memCache[key] = effective;
-  final prefs = read(prefsProvider);
-  try {
-    await prefs.setString(key, convert.jsonEncode(effective.map((e) => e.toMap()).toList()));
-  } catch (_) {}
+
+  if (startDt == null && endDt == null) {
+    final prefs = read(prefsProvider);
+    try {
+      await prefs.setString(key, convert.jsonEncode(effective.map((e) => e.toMap()).toList()));
+    } catch (_) {}
+  }
   return effective;
 }
-Future<void> _refreshKot(Read read, String tenantId, String branchId, KOTStatus status) async {
+
+// UPDATED: Now accepts optional date filters
+Future<void> _refreshKot(
+    Read read,
+    String tenantId,
+    String branchId,
+    KOTStatus status, {
+      DateTime? startDt,
+      DateTime? endDt,
+    }) async {
   if (_refreshInFlight.contains(status)) return;
   _refreshInFlight.add(status);
   try {
-    await _fetchFresh(read, tenantId, branchId, status);
+    await _fetchFresh(
+      read,
+      tenantId,
+      branchId,
+      status,
+      startDt: startDt, // Pass filter
+      endDt: endDt,     // Pass filter
+    );
   } finally {
     _refreshInFlight.remove(status);
   }
@@ -747,10 +778,20 @@ final _kotAutoPollProvider = Provider<void>((ref) {
   final branchId = ref.watch(kotBranchIdProvider);
 
   final t = Timer.periodic(Duration(seconds: _kPollSeconds), (_) {
+    // UPDATED: Read filter state to pass to poll refresh
+    final filter = ref.read(kotFilterProvider);
+
     for (final st in KOTStatus.values) {
       // Run refresh, then invalidate so the provider rebuilds with fresh cache.
       unawaited(() async {
-        await _refreshKot(ref.read, tenantId, branchId, st);
+        await _refreshKot(
+          ref.read,
+          tenantId,
+          branchId,
+          st,
+          startDt: filter.startDt, // Pass filter
+          endDt: filter.endDt,     // Pass filter
+        );
         ref.invalidate(kotTicketsProvider(st)); // <-- PATCH: notify UI
       }());
     }
@@ -767,6 +808,22 @@ final kotTicketsProvider = FutureProvider.family.autoDispose<List<KotCardData>, 
   final tenantId = ref.watch(kotTenantIdProvider);
   final branchId = ref.watch(kotBranchIdProvider);
   final key = _kb(tenantId, branchId, status);
+
+  // UPDATED: Watch the filter provider
+  final filter = ref.watch(kotFilterProvider);
+  final bool isFiltered = filter.startDt != null || filter.endDt != null;
+
+  // If any date filter is active, bypass cache and go straight to network
+  if (isFiltered) {
+    return _fetchFresh(
+      ref.read,
+      tenantId,
+      branchId,
+      status,
+      startDt: filter.startDt,
+      endDt: filter.endDt,
+    );
+  }
 
   if (_kOnlineFirst) {
     // Network first; fallback to cache
@@ -829,10 +886,27 @@ class KotPage extends ConsumerWidget {
     final screenWidth = MediaQuery.of(context).size.width;
     final isTablet = screenWidth > kTabletBreakpoint;
 
+    // NEW: Watch filter state to show filter chip
+    final filter = ref.watch(kotFilterProvider);
+    final bool isFiltered = filter.startDt != null || filter.endDt != null;
+
     // Define the header row (title + refresh button)
     final headerRow = Row(
       children: [
         const Text('Kitchen Tickets', style: TextStyle(fontWeight: FontWeight.w700)),
+        const SizedBox(width: 8),
+        // NEW: Filter Button
+        IconButton(
+          tooltip: 'Filter by Date',
+          icon: Icon(isFiltered ? Icons.filter_list : Icons.filter_list_off),
+          color: isFiltered ? Theme.of(context).colorScheme.primary : null,
+          onPressed: () {
+            showModalBottomSheet(
+              context: context,
+              builder: (_) => const _FilterSheet(),
+            );
+          },
+        ),
         const Spacer(),
         IconButton(
           tooltip: 'Refresh all',
@@ -936,13 +1010,13 @@ class _KotColumn extends ConsumerWidget {
                 iconSize: 18,
                 padding: EdgeInsets.zero,
                 visualDensity: VisualDensity.compact,
-                onPressed: () async {
-                  final t = ref.read(kotTenantIdProvider);
-                  final b = ref.read(kotBranchIdProvider);
+                onPressed: () { // <--- Removed async
+                  // FINAL FIX:
+                  // Don't call _refreshKot here with the widget's ref.read.
+                  // Just invalidate the provider. The provider itself will
+                  // call _refreshKot or _fetchFresh with its own, safe ref.
                   for (final st in KOTStatus.values) {
-                    await _refreshKot(ref.read, t, b, st);
-                    if (!context.mounted) return;               // <-- guard
-                    ref.invalidate(kotTicketsProvider(st));     // safe only if still mounted
+                    ref.invalidate(kotTicketsProvider(st));
                   }
                 },
               ),
@@ -1609,6 +1683,117 @@ class _ProviderChip extends StatelessWidget {
           Icon(meta.icon, size: 12),
           const SizedBox(width: 4),
           Text(meta.label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+}
+
+// NEW: Filter Sheet Widget
+class _FilterSheet extends ConsumerWidget {
+  const _FilterSheet();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final filter = ref.watch(kotFilterProvider);
+    final notifier = ref.read(kotFilterProvider.notifier);
+    final now = DateTime.now();
+
+    // Helper to get a "clean" date (no time component)
+    DateTime _dateOnly(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+
+    void _pickRange() async {
+      final range = await showDateRangePicker(
+        context: context,
+        firstDate: DateTime(2023, 1, 1),
+        lastDate: now,
+        initialDateRange: filter.startDt != null && filter.endDt != null
+            ? DateTimeRange(start: filter.startDt!, end: filter.endDt!)
+            : null,
+      );
+      if (range != null) {
+        // Set range from start of first day to end of second day
+        notifier.setDateRange(
+          _dateOnly(range.start),
+          _dateOnly(range.end).add(const Duration(days: 1, milliseconds: -1)),
+        );
+        if (context.mounted) Navigator.pop(context);
+      }
+    }
+
+    void _setToday() {
+      final start = _dateOnly(now);
+      final end = start.add(const Duration(days: 1, milliseconds: -1));
+      notifier.setDateRange(start, end);
+      Navigator.pop(context);
+    }
+
+    void _setYesterday() {
+      final start = _dateOnly(now.subtract(const Duration(days: 1)));
+      final end = start.add(const Duration(days: 1, milliseconds: -1));
+      notifier.setDateRange(start, end);
+      Navigator.pop(context);
+    }
+
+    void _clear() {
+      notifier.clear();
+      Navigator.pop(context);
+    }
+
+    String _formatRange() {
+      if (filter.startDt == null || filter.endDt == null) return 'None';
+      final fmt = DateFormat('MMM d, yyyy');
+      // Check for single-day range
+      if (filter.startDt!.year == filter.endDt!.year &&
+          filter.startDt!.month == filter.endDt!.month &&
+          filter.startDt!.day == filter.endDt!.day) {
+        return fmt.format(filter.startDt!);
+      }
+      return '${fmt.format(filter.startDt!)} - ${fmt.format(filter.endDt!)}';
+    }
+
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Text(
+                'Filter KOTs by Date',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const Spacer(),
+              if (filter.startDt != null)
+                IconButton(
+                  icon: const Icon(Icons.clear),
+                  onPressed: _clear,
+                )
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text('Current: ${_formatRange()}'),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.tonal(
+                onPressed: _setToday,
+                child: const Text('Today'),
+              ),
+              FilledButton.tonal(
+                onPressed: _setYesterday,
+                child: const Text('Yesterday'),
+              ),
+              FilledButton(
+                onPressed: _pickRange,
+                child: const Text('Custom Range...'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
         ],
       ),
     );

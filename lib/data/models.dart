@@ -1167,6 +1167,18 @@ class OrderDetail {
   final OrderTotals totals;
   OrderDetail({required this.order, required this.totals});
 }
+
+class OrderStatusUpdate {
+  final OrderStatus status;
+  final String? reason;
+
+  OrderStatusUpdate({required this.status, this.reason});
+
+  Map<String, dynamic> toJson() => {
+    'status': status.name,
+    if (reason != null && reason!.isNotEmpty) 'reason': reason,
+  };
+}
 /// ---------- KOT line model (add this) ----------
 class KitchenTicketLine {
   final String? id;

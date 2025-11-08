@@ -1,162 +1,83 @@
-// lib/features/orders/orders_page.dart
 import 'dart:async';
-import 'dart:convert' as convert;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart'; // NEW: For navigation
+import 'package:intl/intl.dart'; // NEW: For date formatting
+
 import '../debug/queue_diag.dart';
 import '../../app/providers.dart';
 import '../orders/pending_orders.dart';
 import '../../data/models.dart';
-import '../kot/kot_page.dart';
+import '../kot/kot_page.dart'; // For invalidating kotTicketsProvider
 
-// ---- Local queue helpers (same key/device as POS page) ----
-const _kOpsQueueKey = 'pos_offline_ops_v1';
-const _kDeviceId    = 'flutter-pos';
-
-// --- FIX: Add the missing typedef ---
-typedef Read = T Function<T>(ProviderListenable<T> provider);
-
-
-// --- FIX: Change '_Read' to 'Read' ---
-Future<List<Map<String, dynamic>>> _readQueuedOpsOrders(Read read) async {
-  final prefs = read(prefsProvider);
-  final raw = prefs.getString(_kOpsQueueKey);
-  if (raw == null || raw.trim().isEmpty) return <Map<String, dynamic>>[];
-  try {
-    final decoded = convert.jsonDecode(raw);
-    if (decoded is List) {
-      return decoded.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
-    }
-  } catch (_) {}
-  return <Map<String, dynamic>>[];
-}
-
-// --- FIX: Change '_Read' to 'Read' ---
-Future<void> _writeQueuedOpsOrders(Read read, List<Map<String, dynamic>> ops) async {
-  final prefs = read(prefsProvider);
-  await prefs.setString(_kOpsQueueKey, convert.jsonEncode(ops));
-}
-
-Set<String> _extractOrderNosOrders(List<Map<String, dynamic>> ops) {
-  // ... (no change here)
-  final out = <String>{};
-  for (final op in ops) {
-    final payload = op['payload'];
-    if (payload is Map && payload['order_no'] != null) {
-      final no = payload['order_no'].toString();
-      if (no.isNotEmpty) out.add(no);
-    }
-  }
-  return out;
-}
-
-// --- FIX: Change 'Ref' to 'ConsumerRef' ---
-Future<void> _pushQueueFromOrders(BuildContext ctx, WidgetRef ref) async {
-  final client = ref.read(apiClientProvider);
-  final ops = await _readQueuedOpsOrders(ref.read); // This helper is fine
-  if (ops.isEmpty) {
-    if (ctx.mounted) {
-      ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Nothing to sync')));
-    }
-    return;
-  }
-  final orderNos = _extractOrderNosOrders(ops);
-  try {
-    await client.syncPush(deviceId: _kDeviceId, ops: ops);
-    await _writeQueuedOpsOrders(ref.read, []); // This helper is fine
-    ref.read(pendingOrdersProvider.notifier).removeByOrderNos(orderNos);
-
-    // --- FIX: Use 'ref.invalidate(provider)' ---
-    ref.invalidate(ordersFutureProvider); // For OrdersPage
-    // For KotPage (invalidate all columns)
-    for (final status in KOTStatus.values) {
-      ref.invalidate(kotTicketsProvider(status));
-    }
-    // --- END FIX ---
-
-    if (ctx.mounted) {
-      ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Synced ${ops.length} op(s) ✅')));
-    }
-  } catch (e) {
-    if (ctx.mounted) {
-      ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Sync failed: $e')));
-    }
-  }
-}
-
-/// ---- Filters ----
-/// null = show all
-final orderStatusFilterProvider = StateProvider<OrderStatus?>((_) => null);
-
-/// ---- Orders list (one page for now) ----
-final ordersFutureProvider =
-FutureProvider.autoDispose<List<Order>>((ref) async {
-  final client   = ref.watch(apiClientProvider);
-  final status   = ref.watch(orderStatusFilterProvider);
-  final tenantId = ref.watch(activeTenantIdProvider);
-  final branchId = ref.watch(activeBranchIdProvider);
-
-  final page = await client.fetchOrders(
-    status: status,
-    tenantId: tenantId.isEmpty ? null : tenantId,
-    branchId: branchId.isEmpty ? null : branchId,
-    size: 100,
-  );
-  return page.items;
-});
-
-/// ---- Single order detail (with totals) ----
-/// We'll fetch this when user taps an order row.
-final orderDetailFutureProvider = FutureProvider.autoDispose
-    .family<OrderDetail, String>((ref, orderId) async {
-  final client = ref.watch(apiClientProvider);
-  return client.getOrderDetail(orderId);
-});
-
-final _ordersAutoRefreshProvider = Provider<void>((ref) {
-  final timer = Timer.periodic(const Duration(seconds: 20), (_) {
-    ref.invalidate(ordersFutureProvider);
-  });
-  ref.onDispose(timer.cancel);
-});
+// Note: All local queue helpers and local providers have been removed,
+// as they are now handled by global providers from app/providers.dart
 
 class OrdersPage extends ConsumerWidget {
   const OrdersPage({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    ref.watch(_ordersAutoRefreshProvider); // optional ticker
-
+    // Watch the new filter-aware provider from app/providers.dart
     final ordersAsync = ref.watch(ordersFutureProvider);
-    final status      = ref.watch(orderStatusFilterProvider);
-    final pending     = ref.watch(pendingOrdersProvider);
+    // Watch the filter state itself to update the UI
+    final filter = ref.watch(orderFilterProvider);
+    final pending = ref.watch(pendingOrdersProvider);
 
     List<PendingOrder> filterPending(List<PendingOrder> src) {
-      if (status == null) return src;
-      return src.where((p) => p.status == status).toList();
+      if (filter.status == null) return src;
+      return src.where((p) => p.status == filter.status).toList();
     }
+
     List<Order> filterLive(List<Order> src) {
-      if (status == null) return src;
-      return src.where((o) => o.status == status).toList();
+      if (filter.status == null) return src;
+      return src.where((o) => o.status == filter.status).toList();
     }
+
+    // Check if any filters are active
+    final bool isFiltered = filter.status != null || filter.startDt != null;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Orders'),
         actions: [
+          // NEW: Filter Button
+          IconButton(
+            tooltip: 'Filter Orders',
+            icon: Icon(isFiltered ? Icons.filter_list : Icons.filter_list_off),
+            color: isFiltered ? Theme.of(context).colorScheme.primary : null,
+            onPressed: () {
+              showModalBottomSheet(
+                context: context,
+                isScrollControlled: true, // Allows sheet to grow
+                builder: (_) => const _OrderFilterSheet(),
+              );
+            },
+          ),
           IconButton(
             tooltip: 'Sync Online',
             icon: const Icon(Icons.sync),
             onPressed: () async {
-              // --- PASS 'ref' (not 'ref.read') ---
-              await _pushQueueFromOrders(context, ref);
-              // after pushing local ops, fetch fresh from server to reconcile
-              ref.invalidate(ordersFutureProvider);
+              // UPDATED: Use the global queuePusherProvider
+              try {
+                await ref.read(queuePusherProvider).pushAllNow();
+                ref.invalidate(ordersFutureProvider);
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(const SnackBar(content: Text('Sync Complete ✅')));
+                }
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(SnackBar(content: Text('Sync Failed: $e')));
+                }
+              }
             },
           ),
           IconButton(
             tooltip: 'Refresh list',
             icon: const Icon(Icons.refresh),
+            // UPDATED: Invalidate the global provider
             onPressed: () => ref.invalidate(ordersFutureProvider),
           ),
           IconButton(
@@ -197,10 +118,9 @@ class OrdersPage extends ConsumerWidget {
       ),
       body: Column(
         children: [
-          _FilterBar(
-            status: status,
-            onChanged: (s) => ref.read(orderStatusFilterProvider.notifier).state = s,
-          ),
+          // REMOVED: Old _FilterBar
+          // NEW: Show active filters
+          const _ActiveFilters(),
           const Divider(height: 0),
           Expanded(
             child: ordersAsync.when(
@@ -212,10 +132,10 @@ class OrdersPage extends ConsumerWidget {
                 });
 
                 final pendings = filterPending(pending);
-                final orders   = filterLive(live);
+                final orders = filterLive(live);
 
                 if (pendings.isEmpty && orders.isEmpty) {
-                  return const _Empty();
+                  return _Empty(isFiltered: isFiltered);
                 }
 
                 return RefreshIndicator(
@@ -239,11 +159,8 @@ class OrdersPage extends ConsumerWidget {
                             );
                             return;
                           }
-                          showModalBottomSheet(
-                            context: context,
-                            isScrollControlled: true,
-                            builder: (ctx) => OrderDetailSheet(orderId: o.id!),
-                          );
+                          // UPDATED: Navigate to the new OrderDetailPage
+                          context.go('/order/${o.id}', extra: o);
                         },
                       );
                     },
@@ -282,47 +199,198 @@ class OrdersPage extends ConsumerWidget {
   }
 }
 
-/// Top bar with status dropdown etc.
-class _FilterBar extends StatelessWidget {
-  const _FilterBar({
-    required this.status,
-    required this.onChanged,
-  });
-
-  final OrderStatus? status;
-  final void Function(OrderStatus?) onChanged;
+/// NEW: Shows active filters as dismissible chips
+class _ActiveFilters extends ConsumerWidget {
+  const _ActiveFilters();
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding:
-      const EdgeInsets.fromLTRB(12, 8, 12, 8),
-      child: Row(
+  Widget build(BuildContext context, WidgetRef ref) {
+    final filter = ref.watch(orderFilterProvider);
+    final notifier = ref.read(orderFilterProvider.notifier);
+
+    final hasStatus = filter.status != null;
+    final hasDate = filter.startDt != null;
+
+    if (!hasStatus && !hasDate) {
+      return const SizedBox.shrink(); // No filters, show nothing
+    }
+
+    String formatDateRange() {
+      if (filter.startDt == null || filter.endDt == null) return '';
+      final fmt = DateFormat('MMM d');
+      // Check for single-day range (e.g., Today, Yesterday)
+      if (filter.startDt!.year == filter.endDt!.year &&
+          filter.startDt!.month == filter.endDt!.month &&
+          filter.startDt!.day == filter.endDt!.day) {
+        return fmt.format(filter.startDt!); // e.g., "Nov 8"
+      }
+      // Multi-day range
+      return '${fmt.format(filter.startDt!)} - ${fmt.format(filter.endDt!)}';
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      width: double.infinity,
+      color: Theme.of(context).colorScheme.surfaceContainerLowest,
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          const Text(
-            'Status:',
-            style: TextStyle(fontWeight: FontWeight.w500),
+          Text(
+            "Filters:",
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
-          const SizedBox(width: 12),
-          DropdownButton<OrderStatus?>(
-            value: status,
-            onChanged: onChanged,
-            items: [
-              const DropdownMenuItem<OrderStatus?>(
-                value: null,
-                child: Text('All'),
-              ),
-              ...OrderStatus.values.map(
-                    (s) => DropdownMenuItem<OrderStatus?>(
-                  value: s,
-                  child: Text(s.name),
-                ),
-              ),
-            ],
-          ),
-          const Spacer(),
-          // room for future: search/date filters
+          if (hasStatus)
+            Chip(
+              label: Text('Status: ${filter.status!.name}'),
+              labelStyle: Theme.of(context).textTheme.bodySmall,
+              onDeleted: () => notifier.setStatus(null),
+            ),
+          if (hasDate)
+            Chip(
+              label: Text('Date: ${formatDateRange()}'),
+              labelStyle: Theme.of(context).textTheme.bodySmall,
+              onDeleted: () => notifier.setDateRange(null, null),
+            ),
         ],
+      ),
+    );
+  }
+}
+
+/// NEW: Bottom sheet for setting status and date filters
+class _OrderFilterSheet extends ConsumerWidget {
+  const _OrderFilterSheet();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final filter = ref.watch(orderFilterProvider);
+    final notifier = ref.read(orderFilterProvider.notifier);
+    final now = DateTime.now();
+
+    // Helper to get a "clean" date (no time component)
+    DateTime _dateOnly(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+
+    void _pickRange() async {
+      final range = await showDateRangePicker(
+        context: context,
+        firstDate: DateTime(2023, 1, 1),
+        lastDate: now,
+        initialDateRange: filter.startDt != null && filter.endDt != null
+            ? DateTimeRange(start: filter.startDt!, end: filter.endDt!)
+            : null,
+      );
+      if (range != null) {
+        // Set range from start of first day to end of second day
+        notifier.setDateRange(
+          _dateOnly(range.start),
+          _dateOnly(range.end).add(const Duration(days: 1, milliseconds: -1)),
+        );
+      }
+    }
+
+    void _setToday() {
+      final start = _dateOnly(now);
+      final end = start.add(const Duration(days: 1, milliseconds: -1));
+      notifier.setDateRange(start, end);
+    }
+
+    void _setYesterday() {
+      final start = _dateOnly(now.subtract(const Duration(days: 1)));
+      final end = start.add(const Duration(days: 1, milliseconds: -1));
+      notifier.setDateRange(start, end);
+    }
+
+    void _clearDates() {
+      notifier.setDateRange(null, null);
+    }
+
+    String _formatRange() {
+      if (filter.startDt == null || filter.endDt == null) return 'Any Date';
+      final fmt = DateFormat('MMM d, yyyy');
+      // Check for single-day range
+      if (filter.startDt!.year == filter.endDt!.year &&
+          filter.startDt!.month == filter.endDt!.month &&
+          filter.startDt!.day == filter.endDt!.day) {
+        return fmt.format(filter.startDt!);
+      }
+      return '${fmt.format(filter.startDt!)} - ${fmt.format(filter.endDt!)}';
+    }
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Filter Orders', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 24),
+
+            // Status Dropdown
+            DropdownButtonFormField<OrderStatus?>(
+              value: filter.status,
+              decoration: const InputDecoration(
+                labelText: 'Status',
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                const DropdownMenuItem(value: null, child: Text('All Statuses')),
+                ...OrderStatus.values.map(
+                      (s) => DropdownMenuItem(value: s, child: Text(s.name)),
+                ),
+              ],
+              onChanged: (val) => notifier.setStatus(val),
+            ),
+            const SizedBox(height: 24),
+
+            // Date Filters
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Date: ${_formatRange()}',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                ),
+                if (filter.startDt != null)
+                  IconButton(
+                    icon: const Icon(Icons.clear),
+                    onPressed: _clearDates,
+                    tooltip: 'Clear Date Filter',
+                  )
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.tonal(
+                  onPressed: _setToday,
+                  child: const Text('Today'),
+                ),
+                FilledButton.tonal(
+                  onPressed: _setYesterday,
+                  child: const Text('Yesterday'),
+                ),
+                FilledButton(
+                  onPressed: _pickRange,
+                  child: const Text('Custom...'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Done'),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
       ),
     );
   }
@@ -395,7 +463,8 @@ class _QueuedOrderTile extends ConsumerWidget {
         ),
       ),
       onTap: () async {
-        await _pushQueueFromOrders(context, ref);
+        // UPDATED: Use the global queuePusherProvider
+        await ref.read(queuePusherProvider).pushAllNow();
         ref.invalidate(ordersFutureProvider);
       },
     );
@@ -447,227 +516,8 @@ class _StatusChip extends StatelessWidget {
   }
 }
 
-/// Bottom sheet with order totals
-class OrderDetailSheet extends ConsumerWidget {
-  const OrderDetailSheet({super.key, required this.orderId});
-  final String orderId;
-  String? _extractInvoiceId(Map<String, dynamic> m) {
-    final direct = m['invoice_id'] ?? m['id'] ?? m['invoiceId'];
-    if (direct is String && direct.isNotEmpty) return direct;
-    if (direct is int) return direct.toString();
-
-    final inv = m['invoice'];
-    if (inv is Map) {
-      final id = inv['invoice_id'] ?? inv['id'] ?? inv['invoiceId'];
-      if (id is String && id.isNotEmpty) return id;
-      if (id is int) return id.toString();
-    }
-    return null;
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final detailAsync =
-    ref.watch(orderDetailFutureProvider(orderId));
-
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(
-            16, 16, 16, 24),
-        child: detailAsync.when(
-          data: (detail) {
-            final o = detail.order;
-            final t = detail.totals;
-
-            return SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment:
-                CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        'Order #${o.orderNo}',
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      _StatusChip(status: o.status),
-                      const Spacer(),
-                      IconButton(
-                        icon: const Icon(Icons.close),
-                        onPressed: () =>
-                            Navigator.of(context).pop(),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Channel: ${o.channel.name}'
-                        '${o.tableId != null ? ' | Table: ${o.tableId}' : ''}',
-                  ),
-                  if (o.pax != null)
-                    Text('PAX: ${o.pax}'),
-                  if (o.note != null &&
-                      o.note!.trim().isNotEmpty)
-                    Text(
-                      'Note: ${o.note}',
-                      style: const TextStyle(
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  const SizedBox(height: 16),
-                  const Divider(),
-                  const SizedBox(height: 8),
-                  _TotalRow(
-                      label: 'Subtotal',
-                      value: t.subtotal),
-                  _TotalRow(
-                      label: 'Tax',
-                      value: t.tax),
-                  const Divider(),
-                  _TotalRow(
-                    label: 'Total',
-                    value: t.total,
-                    isBold: true,
-                  ),
-                  const SizedBox(height: 8),
-                  _TotalRow(
-                    label: 'Paid',
-                    value: t.paid,
-                  ),
-                  _TotalRow(
-                    label: 'Due',
-                    value: t.due,
-                    isBold: true,
-                    highlight: t.due > 0.01,
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: FilledButton.icon(
-                          icon: const Icon(Icons.receipt_long),
-                          label: const Text('Invoice'),
-                            onPressed: () async {
-                              final api      = ref.read(apiClientProvider);
-                              final tenantId = ref.read(activeTenantIdProvider);
-                              final branchId = ref.read(activeBranchIdProvider);
-
-                              try {
-                                // Idempotent on most backends: returns existing or creates a new invoice
-                                final resp = await api.createInvoice(orderId);
-                                final invoiceId = _extractInvoiceId(Map<String, dynamic>.from(resp));
-
-                                if (invoiceId == null) {
-                                  throw Exception('Could not determine invoice id from server response.');
-                                }
-
-                                await api.printInvoiceSmart(
-                                  tenantId: tenantId,
-                                  branchId: branchId,
-                                  invoiceId: invoiceId,
-                                );
-
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('Invoice printed ✅')),
-                                  );
-                                }
-
-                                // Optional: refresh orders to reflect state changes
-                                ref.invalidate(ordersFutureProvider);
-                              } catch (e) {
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('Invoice print failed: $e')),
-                                  );
-                                }
-                              }
-                            },
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: FilledButton.icon(
-                          icon: const Icon(Icons.print),
-                          label: const Text('Print Bill'),
-                            onPressed: () async {
-                              final api      = ref.read(apiClientProvider);
-                              final tenantId = ref.read(activeTenantIdProvider);
-                              final branchId = ref.read(activeBranchIdProvider);
-
-                              try {
-                                await api.printBillSmart(
-                                  tenantId: tenantId,
-                                  branchId: branchId,
-                                  orderId: orderId,
-                                );
-
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('Bill sent to printer 🧾')),
-                                  );
-                                }
-                              } catch (e) {
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('Bill print failed: $e')),
-                                  );
-                                }
-                              }
-                            },
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            );
-          },
-          loading: () => const SizedBox(
-            height: 200,
-            child: Center(
-              child: CircularProgressIndicator(),
-            ),
-          ),
-          error: (e, st) => SizedBox(
-            height: 200,
-            child: Center(
-              child: Padding(
-                padding:
-                const EdgeInsets.all(16),
-                child: Column(
-                  mainAxisSize:
-                  MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Failed to load order:\n$e',
-                      textAlign:
-                      TextAlign.center,
-                    ),
-                    const SizedBox(height: 12),
-                    FilledButton(
-                      onPressed: () => ref
-                          .invalidate(
-                          orderDetailFutureProvider(
-                              orderId)),
-                      child: const Text(
-                          'Retry'),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
+// REMOVED: OrderDetailSheet
+// This is now replaced by the full-page OrderDetailPage
 
 /// row like  "Subtotal .... 123.45"
 class _TotalRow extends StatelessWidget {
@@ -716,14 +566,17 @@ class _TotalRow extends StatelessWidget {
 }
 
 class _Empty extends StatelessWidget {
-  const _Empty();
+  const _Empty({this.isFiltered = false});
+  final bool isFiltered;
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
+    return Center(
       child: Padding(
-        padding: EdgeInsets.all(24),
-        child: Text('No orders yet.'),
+        padding: const EdgeInsets.all(24),
+        child: Text(
+          isFiltered ? 'No orders match these filters.' : 'No orders yet.',
+        ),
       ),
     );
   }

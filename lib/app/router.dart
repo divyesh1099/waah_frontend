@@ -8,6 +8,7 @@ import 'package:waah_frontend/app/providers.dart';
 import 'package:waah_frontend/data/models.dart';
 
 import '../data/repo/catalog_repo.dart';
+import '../features/orders/order_detail_page.dart';
 import '../features/users/role_detail_page.dart';
 import 'shell.dart';
 
@@ -212,6 +213,21 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: '/orders',
             name: 'orders',
             builder: (c, s) => const OrdersPage(),
+          ),
+
+          // NEW: Order Detail / Edit Page
+          GoRoute(
+            path: '/order/:id',
+            name: 'order-detail',
+            builder: (context, state) {
+              final id = state.pathParameters['id']!;
+              // We can pass the Order object as 'extra' to avoid a re-fetch
+              final initialOrder = state.extra is Order ? state.extra as Order : null;
+              return OrderDetailPage(
+                orderId: id,
+                initialOrder: initialOrder,
+              );
+            },
           ),
 
           // Choose/Change Branch

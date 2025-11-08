@@ -4,15 +4,17 @@ import 'dart:developer' as dev;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:waah_frontend/app/providers.dart' hide ordersFutureProvider;
+// UPDATED: No longer hiding ordersFutureProvider
+import 'package:waah_frontend/app/providers.dart';
 import 'package:waah_frontend/data/models.dart';
 import 'package:waah_frontend/widgets/menu_media.dart';
 import 'dart:convert' as convert;
 import 'dart:math';
 import '../debug/queue_diag.dart';
 import '../../data/api_client.dart';
-import '../../orders/orders_page.dart';
-import '../kot/kot_page.dart';
+// REMOVED: This provider is now in app/providers.dart
+// import '../../orders/orders_page.dart';
+import '../kot/kot_page.dart'; // Keep this for kotTicketsProvider
 import '../orders/pending_orders.dart';
 
 typedef Read = T Function<T>(ProviderListenable<T> provider);
@@ -25,7 +27,7 @@ final Map<String, List<_ItemModifierGroupData>> _modsCache = {};
 const bool _kAutoPrintKOT = true;
 const bool _kAutoPrintInvoice = true;
 const int _kAddItemsParallel = 8; // was 6
-const bool _kPreferFastPath = false; // true => fast online path; false => offline-first queue
+const bool _kPreferFastPath = true; // true => fast online path; false => offline-first queue
 
 // Cache printer IDs per branch to avoid listPrinters() each time
 class _PrinterSnapshot {
@@ -492,10 +494,12 @@ class _CheckoutRequest {
   final OrderChannel channel;
   final int? pax;
   final String? tableId;
+  final OrderStatus targetStatus; // NEW: Add status
   _CheckoutRequest({
     required this.channel,
     this.pax,
     this.tableId,
+    required this.targetStatus, // NEW: Add status
   });
 }
 
@@ -1347,7 +1351,10 @@ Future<void> pushQueueNow(BuildContext ctx, WidgetRef ref) async {
     await _writeQueuedOps(ref.read, []); // clear only on success
     ref.read(pendingOrdersProvider.notifier).removeByOrderNos(orderNos);
 
+    // This now invalidates the filter-aware provider
     ref.invalidate(ordersFutureProvider);
+
+    // This invalidates the KANBAN board provider from kot_page.dart
     for (final status in KOTStatus.values) {
       ref.invalidate(kotTicketsProvider(status));
     }
@@ -1515,6 +1522,8 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
 
     OrderChannel chosenChannel = OrderChannel.TAKEAWAY;
     String? chosenTableId;
+    // NEW: Add state for order status, default to KITCHEN
+    OrderStatus chosenStatus = OrderStatus.KITCHEN;
     final paxCtl = TextEditingController(
       text: _paxGuess(cart).toString(),
     );
@@ -1597,8 +1606,30 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
                         },
                       ),
 
-                    // TODO later:
-                    // if DELIVERY -> ask phone/address
+                    const SizedBox(height: 12),
+                    // NEW: Add Order Status dropdown
+                    DropdownButtonFormField<OrderStatus>(
+                      value: chosenStatus,
+                      decoration: const InputDecoration(labelText: 'Set Order Status'),
+                      // Only allow setting to "KITCHEN" or "OPEN"
+                      items: [
+                        OrderStatus.KITCHEN,
+                        OrderStatus.OPEN,
+                        OrderStatus.READY,
+                      ].map((st) {
+                        return DropdownMenuItem<OrderStatus>(
+                          value: st,
+                          child: Text(st.name.replaceAll('_', ' ')),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setLocalState(() {
+                            chosenStatus = val;
+                          });
+                        }
+                      },
+                    ),
                   ],
                 ),
               ),
@@ -1616,6 +1647,7 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
                         channel: chosenChannel,
                         pax: paxVal,
                         tableId: chosenTableId,
+                        targetStatus: chosenStatus, // NEW: Pass status
                       ),
                     );
                   },
@@ -1698,8 +1730,8 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
   }
 
 
-  /// [OPTIMIZED]
-  /// talk to backend: create order, add items, SEND KOT, take cash, invoice, print
+  /// [MODIFIED]
+  /// talk to backend: create order, add items, SEND KOT, AND SET STATUS (no payment)
   Future<void> _performCheckout(
       PosCartState cart,
       _CheckoutRequest info, {
@@ -1825,60 +1857,55 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
       // Don't return; maybe some items were added. Try to proceed.
     }
 
-    // 3) Get Totals → Pay
-    late final OrderDetail detail;
+    // 3) [NEW] Fire KOT immediately
     try {
-      detail = await client.getOrderDetail(orderId);
-      t.lap('get totals');
+      await client.fireKotForOrder(orderId: orderId, stationId: null);
+      t.lap('fire KOT');
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Totals failed: $e')),
-      );
-      return;
+      debugPrint('Failed to fire KOT for $orderId: $e');
+      // Don't block on KOT failure, proceed to status update
     }
 
-    final double paidAmount;
+    // 4) [NEW] Update status to the one selected in the dialog
     try {
-      paidAmount = detail.totals.due; // Get amount before pay call
-      await client.pay(orderId, PayMode.CASH, paidAmount);
-      t.lap('pay');
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Payment failed: $e')),
+      await client.updateOrderStatus(
+        orderId,
+        OrderStatusUpdate(status: info.targetStatus),
       );
-      return;
+      t.lap('update status');
+    } catch (e) {
+      debugPrint('Failed to update status for $orderId: $e');
+      // Don't block
     }
 
-    // 4) [OPTIMIZED] After payment, SHOW SUCCESS and clear cart IMMEDIATELY.
-    // The cashier's job is done.
+    // 5) [REMOVED] Get Totals → Pay
+    // We are NOT paying here. The "pay" block is removed.
+
+    // 6) [MODIFIED] After firing KOT, SHOW SUCCESS and clear cart IMMEDIATELY.
     ref.read(posCartProvider.notifier).clear();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Paid ₹${paidAmount.toStringAsFixed(2)} • Order $orderNo (${info.channel.name}) ✅'),
+          content: Text(
+            'Order $orderNo (${info.channel.name}) sent to kitchen! ✅',
+          ),
           duration: const Duration(seconds: 3),
         ),
       );
     }
 
-    // 5) [OPTIMIZED] Invalidate caches
-    ref.invalidate(ordersFutureProvider);
+    // 7) [MODIFIED] Invalidate caches
+    ref.invalidate(ordersFutureProvider); // Update Orders page
+    // Update KOT page
     for (final status in KOTStatus.values) {
+      // Use the filter-aware provider from kot_page.dart
       ref.invalidate(kotTicketsProvider(status));
     }
 
-    // 6) [OPTIMIZED] Run all post-checkout tasks (KOT, Invoice, Print, Drawer)
-    //    in the background. DO NOT await this.
-    unawaited(_runPostCheckoutTasks(
-      orderId,
-      tenantId,
-      branchId,
-      autoPrintKot: autoPrintKot,
-      autoPrintInvoice: autoPrintInvoice,
-    ));
-    t.lap('post-checkout spawn');
+    // 8) [REMOVED] Run all post-checkout tasks
+    // We removed this as we already fired the KOT and are skipping payment/invoice.
+    // unawaited(_runPostCheckoutTasks(...));
+    t.lap('checkout complete (no payment)');
 
     // We are done. The UI is already updated and non-blocking.
   }

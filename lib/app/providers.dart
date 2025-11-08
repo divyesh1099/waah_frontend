@@ -290,18 +290,131 @@ final branchesStreamProvider =
 StreamProvider.autoDispose<List<BranchInfo>>((ref) {
   return ref.watch(settingsRepoProvider).watchBranches();
 });
+// NEW: Filter state for the main Orders list
+class OrderFilterState {
+  final OrderStatus? status;
+  final DateTime? startDt;
+  final DateTime? endDt;
+
+  OrderFilterState({this.status, this.startDt, this.endDt});
+
+  OrderFilterState copyWith({
+    OrderStatus? status,
+    DateTime? startDt,
+    DateTime? endDt,
+  }) {
+    return OrderFilterState(
+      status: status ?? this.status,
+      startDt: startDt ?? this.startDt,
+      endDt: endDt ?? this.endDt,
+    );
+  }
+}
+
+class OrderFilterNotifier extends StateNotifier<OrderFilterState> {
+  OrderFilterNotifier() : super(OrderFilterState());
+
+  void setStatus(OrderStatus? status) {
+    state = state.copyWith(status: status);
+  }
+
+  void setDateRange(DateTime? start, DateTime? end) {
+    state = state.copyWith(startDt: start, endDt: end);
+  }
+
+  void clear() {
+    state = OrderFilterState();
+  }
+}
+
+final orderFilterProvider =
+StateNotifierProvider<OrderFilterNotifier, OrderFilterState>(
+      (ref) => OrderFilterNotifier(),
+);
+
 // Server orders page (filter by active tenant/branch)
 // Server orders page (returns List<Order> by unwrapping PageResult)
+// UPDATED: This provider now watches the filter state
 final ordersFutureProvider =
 FutureProvider.autoDispose<List<Order>>((ref) async {
   final api = ref.watch(apiClientProvider);
+  final tenantId = ref.watch(activeTenantIdProvider);
+  final branchId = ref.watch(activeBranchIdProvider);
+  final filter = ref.watch(orderFilterProvider); // WATCH the filter
 
   // Your ApiClient returns a PageResult<Order>
-  final page = await api.fetchOrders(page: 1, size: 100);
+  final page = await api.fetchOrders(
+    page: 1,
+    size: 100,
+    tenantId: tenantId, // Pass tenant
+    branchId: branchId, // Pass branch
+    status: filter.status, // Pass filter status
+    startDt: filter.startDt, // Pass filter start date
+    endDt: filter.endDt, // Pass filter end date
+  );
 
   // If your PageResult uses a different field than `items`,
   // change `items` to whatever it is (e.g. `data`).
   return page.items;
+});
+
+// NEW: Filter state for a standalone KOT list
+class KotFilterState {
+  final KOTStatus? status;
+  final DateTime? startDt;
+  final DateTime? endDt;
+
+  KotFilterState({this.status, this.startDt, this.endDt});
+
+  KotFilterState copyWith({
+    KOTStatus? status,
+    DateTime? startDt,
+    DateTime? endDt,
+  }) {
+    return KotFilterState(
+      status: status ?? this.status,
+      startDt: startDt ?? this.startDt,
+      endDt: endDt ?? this.endDt,
+    );
+  }
+}
+
+class KotFilterNotifier extends StateNotifier<KotFilterState> {
+  KotFilterNotifier() : super(KotFilterState());
+
+  void setStatus(KOTStatus? status) {
+    state = state.copyWith(status: status);
+  }
+
+  void setDateRange(DateTime? start, DateTime? end) {
+    state = state.copyWith(startDt: start, endDt: end);
+  }
+
+  void clear() {
+    state = KotFilterState();
+  }
+}
+
+final kotFilterProvider =
+StateNotifierProvider<KotFilterNotifier, KotFilterState>(
+      (ref) => KotFilterNotifier(),
+);
+
+// NEW: A filterable provider for KOTs, separate from the one in kot_page.dart
+final filteredKotTicketsProvider =
+FutureProvider.autoDispose<List<KitchenTicket>>((ref) {
+  final api = ref.watch(apiClientProvider);
+  final tenantId = ref.watch(activeTenantIdProvider);
+  final branchId = ref.watch(activeBranchIdProvider);
+  final filter = ref.watch(kotFilterProvider); // WATCH the filter
+
+  return api.fetchKitchenTickets(
+    tenantId: tenantId,
+    branchId: branchId,
+    status: filter.status,
+    startDt: filter.startDt,
+    endDt: filter.endDt,
+  );
 });
 
 // Persisted “device id” for syncPush
