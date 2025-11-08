@@ -27,7 +27,8 @@ final Map<String, List<_ItemModifierGroupData>> _modsCache = {};
 const bool _kAutoPrintKOT = true;
 const bool _kAutoPrintInvoice = true;
 const int _kAddItemsParallel = 8; // was 6
-const bool _kPreferFastPath = true; // true => fast online path; false => offline-first queue
+// UPDATED: Set back to false to enable offline-first path
+const bool _kPreferFastPath = false;
 
 // Cache printer IDs per branch to avoid listPrinters() each time
 class _PrinterSnapshot {
@@ -217,6 +218,13 @@ Future<void> _silentPush(Ref ref) async {
     await client.syncPush(deviceId: _kDeviceId, ops: ops);
     await _writeQueuedOps(ref.read, []); // This helper still takes ref.read
     ref.read(pendingOrdersProvider.notifier).removeByOrderNos(orderNos);
+
+    // UPDATED: Invalidate providers on successful auto-sync
+    ref.invalidate(ordersFutureProvider);
+    for (final status in KOTStatus.values) {
+      ref.invalidate(kotTicketsProvider(status));
+    }
+
   } catch (_) {
     // ignore; autosync will retry
   }
@@ -1371,48 +1379,89 @@ Future<void> pushQueueNow(BuildContext ctx, WidgetRef ref) async {
   }
 }
 
-/// Build a compact batch of checkout ops for one order (OPEN → ADD_ITEM* → FIRE_KOT → PAY → INVOICE → PRINT → DRAWER)
-// pos_page.dart
+/// MODIFIED: This function now builds *both* an Order op and a KOT op.
 List<Map<String, dynamic>> buildCheckoutOps({
   required String orderNo,
   required String tenantId,
   required String branchId,
   required OrderChannel channel,
+  required OrderStatus targetStatus, // NEW
   required int? pax,
   required String? tableId,
   required List<CartLine> lines,
   required double amountDueHint, // unused here; backend recomputes anyway
 }) {
-  final items = <Map<String, dynamic>>[];
+  // 1. Build the list of items for the Order payload
+  final orderItemsPayload = <Map<String, dynamic>>[];
+  // 2. Build a separate list of lines for the KOT payload
+  final kotLinesPayload = <Map<String, dynamic>>[];
+
   for (final l in lines) {
-    items.add({
+    // Generate a unique client-side ID for this line item
+    final clientLineId = 'li-${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(999)}';
+
+    orderItemsPayload.add({
+      'client_id': clientLineId, // Send a client-side ID for linking
       'item_id': l.item.id,
       'variant_id': l.variant?.id,
       'qty': l.qty,
       'unit_price': l.unitPrice,
       'line_discount': 0.0,
       'gst_rate': l.item.gstRate,
-      // If you later want modifiers persisted in OrderItem:
-      // 'modifiers': l.modifiers.map((m)=>{'modifier_id':m.id??m.name,'qty':1,'price_delta':m.priceDelta}).toList(),
+      // ... any other fields your OrderItem op needs
+    });
+
+    // KOT line payload is simpler
+    kotLinesPayload.add({
+      'order_item_client_id': clientLineId, // Reference the client-side line ID
+      'name': l.item.name, // Send name/qty for printing
+      'qty': l.qty,
+      'variant_label': l.variant?.label,
+      'modifiers': l.modifiers.map((m) => m.name).toList(), // Send modifier names
     });
   }
 
+  // NEW: Generate a client-side UUID for the KOT
+  final String clientKotId = 'kot-${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(999)}';
+
+  // Return a list of *two* operations
   return [
+    // --- OP 1: The Order ---
     {
-      'entity': 'Order',           // 🔧 capital “O” to match backend
-      'entity_id': orderNo,        // optional but nice for tracing
-      'op': 'UPSERT',              // 🔧 matches apply_ops
+      'entity': 'Order',
+      'entity_id': orderNo, // Use orderNo as the client-side ID
+      'op': 'UPSERT',
       'payload': {
         'tenant_id': tenantId,
         'branch_id': branchId,
         'order_no': orderNo,
         'channel': channel.name,
-        'status': 'OPEN',
+        'status': targetStatus.name, // Use the selected status
         if (pax != null) 'pax': pax,
         if (tableId != null) 'table_id': tableId,
         'opened_at': DateTime.now().toUtc().toIso8601String(),
-        'items': items,            // 🔧 embed lines here
-        // 'note': null,
+        'items': orderItemsPayload, // Use the detailed item list
+      },
+    },
+    // --- OP 2: The Kitchen Ticket ---
+    {
+      'entity': 'KitchenTicket',
+      'entity_id': clientKotId, // A new client-side ID for this KOT
+      'op': 'UPSERT',
+      'payload': {
+        // We link by the client-side order_no.
+        // The backend /sync/push *must* be smart enough to find the
+        // Order.id from the first op and use it here.
+        'order_no_ref': orderNo,
+        'tenant_id': tenantId,
+        'branch_id': branchId,
+        'ticket_no_client': Random().nextInt(9000) + 1000, // A temp ticket#
+        'status': KOTStatus.NEW.name, // KOTs always start as NEW
+        'printed_at': DateTime.now().toUtc().toIso8601String(),
+        'lines': kotLinesPayload, // Send the simplified lines for printing
+        // Note: We are only creating one KOT for all items.
+        // A smarter implementation would group lines by 'kitchenStationId'
+        // and create one KOT op *per station*.
       },
     },
   ];
@@ -1759,19 +1808,22 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
     // ---------------- OFFLINE-FIRST PATH (if requested) ----------------
     if (!preferFastPath) {
       final double amountHint = cart.subTotal; // server will recompute
+
+      // UPDATED: Pass targetStatus and all cart lines to build the ops
       final ops = buildCheckoutOps(
         orderNo: orderNo,
         tenantId: tenantId,
         branchId: branchId,
         channel: info.channel,
+        targetStatus: info.targetStatus, // Pass selected status
         pax: info.pax,
         tableId: info.tableId,
-        lines: cart.lines,
+        lines: cart.lines, // Pass full cart lines
         amountDueHint: amountHint,
       );
 
       await _enqueueOps(ref.read, ops);
-      unawaited(pushQueueNow(context, ref));
+      unawaited(pushQueueNow(context, ref)); // This will sync and invalidate
 
       ref.read(pendingOrdersProvider.notifier).addQueued(
         orderNo: orderNo,
@@ -1816,6 +1868,7 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
         tenantId: tenantId,
         branchId: branchId,
         channel: info.channel,
+        targetStatus: info.targetStatus, // Pass status
         pax: info.pax,
         tableId: info.tableId,
         lines: cart.lines,

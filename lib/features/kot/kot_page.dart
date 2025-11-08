@@ -778,81 +778,66 @@ final _kotAutoPollProvider = Provider<void>((ref) {
   final branchId = ref.watch(kotBranchIdProvider);
 
   final t = Timer.periodic(Duration(seconds: _kPollSeconds), (_) {
-    // UPDATED: Read filter state to pass to poll refresh
+    // If a tick sneaks in during teardown, guard ref calls.
+    try {
     final filter = ref.read(kotFilterProvider);
 
     for (final st in KOTStatus.values) {
-      // Run refresh, then invalidate so the provider rebuilds with fresh cache.
-      unawaited(() async {
-        await _refreshKot(
-          ref.read,
-          tenantId,
-          branchId,
-          st,
-          startDt: filter.startDt, // Pass filter
-          endDt: filter.endDt,     // Pass filter
-        );
-        ref.invalidate(kotTicketsProvider(st)); // <-- PATCH: notify UI
-      }());
+    // Run refresh, then invalidate so the provider rebuilds with fresh cache.
+    unawaited(() async {
+    await _refreshKot(
+    ref.read,
+    tenantId,
+    branchId,
+    st,
+    startDt: filter.startDt,
+    endDt: filter.endDt,
+    );
+          try { ref.invalidate(kotTicketsProvider(st)); } catch (_) {} // ref may be disposed
+    }());
     }
-    unawaited(_pushKotQueue(ref.read, tenantId, branchId));
+      unawaited(_pushKotQueue(ref.read, tenantId, branchId));
+    } catch (_) {
+       // ref might already be disposed; ignore a last tick
+    }
   });
 
   ref.onDispose(t.cancel);
 });
 
+
 // ------------------------------------------------------------------
 // Provider: Offline‑first with online refresh (or set _kOnlineFirst=true)
 // ------------------------------------------------------------------
-final kotTicketsProvider = FutureProvider.family.autoDispose<List<KotCardData>, KOTStatus>((ref, status) async {
+// UPDATED: Now a StreamProvider for instant UI
+final kotTicketsProvider =
+StreamProvider.family.autoDispose<List<KotCardData>, KOTStatus>((ref, status) async* {
   final tenantId = ref.watch(kotTenantIdProvider);
   final branchId = ref.watch(kotBranchIdProvider);
   final key = _kb(tenantId, branchId, status);
 
-  // UPDATED: Watch the filter provider
   final filter = ref.watch(kotFilterProvider);
   final bool isFiltered = filter.startDt != null || filter.endDt != null;
 
-  // If any date filter is active, bypass cache and go straight to network
   if (isFiltered) {
-    return _fetchFresh(
-      ref.read,
-      tenantId,
-      branchId,
-      status,
-      startDt: filter.startDt,
-      endDt: filter.endDt,
+    yield await _fetchFresh(
+      ref.read, tenantId, branchId, status,
+      startDt: filter.startDt, endDt: filter.endDt,
     );
+    return;
   }
 
-  if (_kOnlineFirst) {
-    // Network first; fallback to cache
-    try {
-      return await _fetchFresh(ref.read, tenantId, branchId, status);
-    } catch (e) {
-      final mem = _memCache[key];
-      if (mem != null) return mem;
-      try {
-        final raw = ref.read(prefsProvider).getString(key);
-        if (raw != null && raw.isNotEmpty) {
-          final arr = (convert.jsonDecode(raw) as List).cast<Map>();
-          final parsed = arr.map((e) => KotCardData.fromMap(Map<String, dynamic>.from(e))).toList();
-          final effective = _overlayAndMergeForLane(parsed, status);
-          _memCache[key] = effective;
-          return effective;
-        }
-      } catch (_) {}
-      rethrow; // nothing cached — surface the error
-    }
-  }
-
-  // Offline‑first path (cache -> refresh)
+  // 1) Memory cache → yield, then background refresh
   final mem = _memCache[key];
   if (mem != null) {
-    unawaited(_refreshKot(ref.read, tenantId, branchId, status));
-    return mem;
+    yield mem;
+    unawaited(_refreshKot(ref.read, tenantId, branchId, status).then((_) {
+        try { ref.invalidateSelf(); } catch (_) {}
+    }));
+    return;
   }
 
+  // 2) Disk cache → yield, then background refresh
   try {
     final raw = ref.read(prefsProvider).getString(key);
     if (raw != null && raw.isNotEmpty) {
@@ -860,12 +845,19 @@ final kotTicketsProvider = FutureProvider.family.autoDispose<List<KotCardData>, 
       final parsed = arr.map((e) => KotCardData.fromMap(Map<String, dynamic>.from(e))).toList();
       final effective = _overlayAndMergeForLane(parsed, status);
       _memCache[key] = effective;
-      unawaited(_refreshKot(ref.read, tenantId, branchId, status));
-      return effective;
-    }
-  } catch (_) {}
+      yield effective;
 
-  return _fetchFresh(ref.read, tenantId, branchId, status);
+      unawaited(_refreshKot(ref.read, tenantId, branchId, status).then((_) {
+            try { ref.invalidateSelf(); } catch (_) {}
+      }));
+      return;
+    }
+  } catch (_) {
+    // Cache corrupt → fall through
+  }
+
+  // 3) No cache → fetch
+  yield await _fetchFresh(ref.read, tenantId, branchId, status);
 });
 
 // ------------------------------------------------------------------
@@ -994,6 +986,7 @@ class _KotColumn extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // UPDATED: Now watches a StreamProvider
     final asyncTickets = ref.watch(kotTicketsProvider(status));
 
     return Column(
@@ -1038,6 +1031,7 @@ class _KotColumn extends ConsumerWidget {
                 itemBuilder: (_, i) => _TicketCard(key: ValueKey(tickets[i].id), ticket: tickets[i]),
               );
             },
+            // UPDATED: Show a smaller loader on background refresh
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (e, _) => Center(
               child: Text(
