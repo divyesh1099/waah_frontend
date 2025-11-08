@@ -506,6 +506,9 @@ class _CheckoutRequest {
 class PosPage extends ConsumerWidget {
   const PosPage({super.key});
 
+  // Define a breakpoint for switching between mobile and tablet layouts
+  static const double kTabletBreakpoint = 600.0;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     ref.watch(_queueAutoSyncProvider);
@@ -533,206 +536,259 @@ class PosPage extends ConsumerWidget {
     final itemsAsync = ref.watch(posItemsProvider);
     final cart = ref.watch(posCartProvider);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('POS'),
-        actions: [
-          _BranchSwitcherAction(),
-          IconButton(
-            tooltip: 'Sync queued ops',
-            icon: const Icon(Icons.sync),
-            onPressed: () async {
-              // This 'ref' (WidgetRef) is assignable to 'Ref<dynamic>'
-              await pushQueueNow(context, ref);
-            },
+    // Check screen width
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isTablet = screenWidth > kTabletBreakpoint;
+
+    // Define AppBar actions so they can be reused
+    final appBarActions = [
+      _BranchSwitcherAction(),
+      IconButton(
+        tooltip: 'Sync queued ops',
+        icon: const Icon(Icons.sync),
+        onPressed: () async {
+          // This 'ref' (WidgetRef) is assignable to 'Ref<dynamic>'
+          await pushQueueNow(context, ref);
+        },
+      ),
+      IconButton(
+        tooltip: 'Refresh menu',
+        icon: const Icon(Icons.refresh),
+        onPressed: () {
+          ref.invalidate(posCategoriesProvider);
+          ref.invalidate(posItemsProvider);
+        },
+      ),
+      IconButton(
+        tooltip: 'Diagnostics',
+        icon: const Icon(Icons.bug_report),
+        onPressed: () {
+          showModalBottomSheet(
+            context: context,
+            isScrollControlled: true,
+            builder: (_) => const QueueDiagnosticsSheet(),
+          );
+        },
+      ),
+    ];
+
+    // Build the Menu view (for mobile tab and tablet layout)
+    final menuView = Column(
+      children: [
+        // CATEGORIES BAR
+        catsAsync.when(
+          data: (cats) => _CategoryBar(categories: cats),
+          loading: () => const SizedBox(
+            height: 56,
+            child: Center(child: CircularProgressIndicator()),
           ),
-          IconButton(
-            tooltip: 'Refresh menu',
-            icon: const Icon(Icons.refresh),
-            onPressed: () {
-              ref.invalidate(posCategoriesProvider);
-              ref.invalidate(posItemsProvider);
-            },
+          error: (e, st) => SizedBox(
+            height: 56,
+            child: Center(
+              child: Text(
+                'Categories error: $e',
+                style: const TextStyle(color: Colors.red),
+              ),
+            ),
           ),
-          IconButton(
-            tooltip: 'Diagnostics',
-            icon: const Icon(Icons.bug_report),
-            onPressed: () {
-              showModalBottomSheet(
-                context: context,
-                isScrollControlled: true,
-                builder: (_) => const QueueDiagnosticsSheet(),
+        ),
+
+        const Divider(height: 0),
+
+        // MENU LIST
+        Expanded(
+          child: itemsAsync.when(
+            data: (items) {
+              if (items.isEmpty) {
+                return const Center(
+                  child: Text('No items in this category'),
+                );
+              }
+
+              // Prefetch for the first few visible items (no await → non-blocking)
+              for (final it in items.take(24)) {
+                final id = it.id;
+                if (id != null && id.isNotEmpty) {
+                  unawaited(_prefetchGate.withPermit(() => _getVariantsCached(ref, id)));
+                  unawaited(_prefetchGate.withPermit(() => _getModsCached(ref, id)));
+                }
+              }
+
+              // Use ListView for "least scrolling"
+              return Scrollbar(
+                child: ListView.separated(
+                  primary: true,
+                  padding: const EdgeInsets.all(8),
+                  itemCount: items.length,
+                  cacheExtent: 800,
+                  addAutomaticKeepAlives: false,
+                  addRepaintBoundaries: false, // Rows are simple
+                  addSemanticIndexes: false,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (_, i) {
+                    final item = items[i];
+                    return _MenuItemRow(
+                      key: ValueKey(item.id ?? i),
+                      item: item,
+                      onTap: () async {
+                        if ((item.id ?? '').isEmpty) return;
+
+                        // fetch & cache in parallel
+                        final results = await Future.wait([
+                          _getVariantsCached(ref, item.id!),
+                          _getModsCached(ref, item.id!),
+                        ]);
+                        final variants = results[0] as List<ItemVariant>;
+                        final modifierGroups = results[1] as List<_ItemModifierGroupData>;
+
+                        // QUICK ADD if: no required groups AND <=1 variant
+                        final hasRequired = modifierGroups.any((g) => g.requiredGroup && (g.minSel > 0));
+                        if (!hasRequired && variants.length <= 1) {
+                          final chosen = variants.isEmpty ? null : variants.first;
+                          ref.read(posCartProvider.notifier).addItem(
+                            item: item,
+                            variant: chosen,
+                            modifiers: const [],
+                            qty: 1,
+                          );
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('${item.name} x1 added to cart'),
+                                duration: const Duration(milliseconds: 700),
+                              ),
+                            );
+                          }
+                          return;
+                        }
+
+                        // otherwise, open chooser
+                        if (!context.mounted) return;
+                        final res = await showModalBottomSheet<_AddResult>(
+                          context: context,
+                          isScrollControlled: true,
+                          builder: (_) => _AddToCartSheet(
+                            item: item,
+                            variants: variants,
+                            modifierGroups: modifierGroups,
+                          ),
+                        );
+                        if (res == null) return;
+                        ref.read(posCartProvider.notifier).addItem(
+                          item: item,
+                          variant: res.variant,
+                          modifiers: res.modifiers,
+                          qty: res.qty.toDouble(),
+                        );
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('${item.name} x${res.qty} added to cart'),
+                              duration: const Duration(milliseconds: 800),
+                            ),
+                          );
+                        }
+                      },
+                    );
+                  },
+                ),
               );
             },
-          ),
-        ],
-      ),
-      // NEW LAYOUT: Row
-      body: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // --- LEFT SIDE (MENU) ---
-          Expanded(
-            flex: 65, // 65% width
-            child: Column(
-              children: [
-                // CATEGORIES BAR
-                catsAsync.when(
-                  data: (cats) => _CategoryBar(categories: cats),
-                  loading: () => const SizedBox(
-                    height: 56,
-                    child: Center(child: CircularProgressIndicator()),
-                  ),
-                  error: (e, st) => SizedBox(
-                    height: 56,
-                    child: Center(
-                      child: Text(
-                        'Categories error: $e',
-                        style: const TextStyle(color: Colors.red),
-                      ),
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (e, st) => Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Failed to load items:\n$e',
+                      textAlign: TextAlign.center,
                     ),
-                  ),
+                    const SizedBox(height: 8),
+                    FilledButton(
+                      onPressed: () {
+                        ref.invalidate(posItemsProvider);
+                      },
+                      child: const Text('Retry'),
+                    ),
+                  ],
                 ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
 
-                const Divider(height: 0),
+    // Build the Cart view
+    final cartView = _VerticalCartView(cart: cart);
 
-                // MENU LIST
-                Expanded(
-                  child: itemsAsync.when(
-                    data: (items) {
-                      if (items.isEmpty) {
-                        return const Center(
-                          child: Text('No items in this category'),
-                        );
-                      }
+    if (isTablet) {
+      // --- TABLET LAYOUT ---
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('POS'),
+          actions: appBarActions,
+        ),
+        body: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // --- LEFT SIDE (MENU) ---
+            Expanded(
+              flex: 65, // 65% width
+              child: menuView, // Use the extracted menuView
+            ),
+            // --- RIGHT SIDE (CART) ---
+            Expanded(
+              flex: 35, // 35% width
+              child: cartView, // Use the extracted cartView
+            ),
+          ],
+        ),
+      );
+    } else {
+      // --- PHONE LAYOUT ---
+      // Calculate cart item count for the badge
+      final cartItemCount = cart.lines.fold<int>(0, (sum, line) => sum + line.qty.round());
 
-                      // Prefetch for the first few visible items (no await → non-blocking)
-                      for (final it in items.take(24)) {
-                        final id = it.id;
-                        if (id != null && id.isNotEmpty) {
-                          unawaited(_prefetchGate.withPermit(() => _getVariantsCached(ref, id)));
-                          unawaited(_prefetchGate.withPermit(() => _getModsCached(ref, id)));
-                        }
-                      }
-
-                      // Use ListView for "least scrolling"
-                      return Scrollbar(
-                        child: ListView.separated(
-                          primary: true,
-                          padding: const EdgeInsets.all(8),
-                          itemCount: items.length,
-                          cacheExtent: 800,
-                          addAutomaticKeepAlives: false,
-                          addRepaintBoundaries: false, // Rows are simple
-                          addSemanticIndexes: false,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
-                          itemBuilder: (_, i) {
-                            final item = items[i];
-                            return _MenuItemRow(
-                              key: ValueKey(item.id ?? i),
-                              item: item,
-                              onTap: () async {
-                                if ((item.id ?? '').isEmpty) return;
-
-                                // fetch & cache in parallel
-                                final results = await Future.wait([
-                                  _getVariantsCached(ref, item.id!),
-                                  _getModsCached(ref, item.id!),
-                                ]);
-                                final variants = results[0] as List<ItemVariant>;
-                                final modifierGroups = results[1] as List<_ItemModifierGroupData>;
-
-                                // QUICK ADD if: no required groups AND <=1 variant
-                                final hasRequired = modifierGroups.any((g) => g.requiredGroup && (g.minSel > 0));
-                                if (!hasRequired && variants.length <= 1) {
-                                  final chosen = variants.isEmpty ? null : variants.first;
-                                  ref.read(posCartProvider.notifier).addItem(
-                                    item: item,
-                                    variant: chosen,
-                                    modifiers: const [],
-                                    qty: 1,
-                                  );
-                                  if (context.mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text('${item.name} x1 added to cart'),
-                                        duration: const Duration(milliseconds: 700),
-                                      ),
-                                    );
-                                  }
-                                  return;
-                                }
-
-                                // otherwise, open chooser
-                                if (!context.mounted) return;
-                                final res = await showModalBottomSheet<_AddResult>(
-                                  context: context,
-                                  isScrollControlled: true,
-                                  builder: (_) => _AddToCartSheet(
-                                    item: item,
-                                    variants: variants,
-                                    modifierGroups: modifierGroups,
-                                  ),
-                                );
-                                if (res == null) return;
-                                ref.read(posCartProvider.notifier).addItem(
-                                  item: item,
-                                  variant: res.variant,
-                                  modifiers: res.modifiers,
-                                  qty: res.qty.toDouble(),
-                                );
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text('${item.name} x${res.qty} added to cart'),
-                                      duration: const Duration(milliseconds: 800),
-                                    ),
-                                  );
-                                }
-                              },
-                            );
-                          },
-                        ),
-                      );
-                    },
-                    loading: () => const Center(child: CircularProgressIndicator()),
-                    error: (e, st) => Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              'Failed to load items:\n$e',
-                              textAlign: TextAlign.center,
-                            ),
-                            const SizedBox(height: 8),
-                            FilledButton(
-                              onPressed: () {
-                                ref.invalidate(posItemsProvider);
-                              },
-                              child: const Text('Retry'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+      return DefaultTabController(
+        length: 2,
+        child: Scaffold(
+          appBar: AppBar(
+            title: const Text('POS'),
+            actions: appBarActions,
+            bottom: TabBar(
+              tabs: [
+                const Tab(
+                  icon: Icon(Icons.restaurant_menu),
+                  text: 'Menu',
+                ),
+                Tab(
+                  child: Badge(
+                    label: Text('$cartItemCount'),
+                    // isManagingSize: true, // This is the default
+                    isLabelVisible: cartItemCount > 0,
+                    child: const Icon(Icons.shopping_cart),
                   ),
                 ),
               ],
             ),
           ),
-
-          // --- RIGHT SIDE (CART) ---
-          Expanded(
-            flex: 35, // 35% width
-            child: _VerticalCartView(cart: cart),
+          body: TabBarView(
+            children: [
+              // Tab 1: Menu
+              menuView,
+              // Tab 2: Cart
+              cartView,
+            ],
           ),
-        ],
-      ),
-    );
+        ),
+      );
+    }
   }
 }
+
 
 /// ------------------------------------------------------------
 /// WIDGETS
@@ -975,253 +1031,263 @@ class _AddToCartSheetState extends State<_AddToCartSheet> {
     final hasImg =
         widget.item.imageUrl != null && widget.item.imageUrl!.trim().isNotEmpty;
 
+    // Make the sheet occupy a reasonable max height, e.g., 90% of the screen
+    final maxHeight = MediaQuery.of(context).size.height * 0.9;
+
     return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom,
-          left: 16,
-          right: 16,
-          top: 16,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: maxHeight,
         ),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Image + Title / desc
-              if (hasImg) ...[
-                MenuBannerImage(
-                  path: widget.item.imageUrl,
-                  borderRadius: 8,
+        child: Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom,
+            left: 16,
+            right: 16,
+            top: 16,
+          ),
+          // Use SingleChildScrollView for the content *within* the constrained box
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Image + Title / desc
+                if (hasImg) ...[
+                  MenuBannerImage(
+                    path: widget.item.imageUrl,
+                    borderRadius: 8,
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                Text(
+                  widget.item.name,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 const SizedBox(height: 8),
-              ],
-              Text(
-                widget.item.name,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 8),
-              if (widget.item.description != null &&
-                  widget.item.description!.trim().isNotEmpty)
-                Text(
-                  widget.item.description!,
-                  style: TextStyle(
-                    color: Colors.grey.shade700,
-                    fontSize: 13,
-                  ),
-                ),
-
-              const SizedBox(height: 16),
-
-              // Variant picker
-              if (widget.variants.isNotEmpty)
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Choose Variant',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    ...widget.variants.map((v) {
-                      return RadioListTile<ItemVariant>(
-                        title: Text(
-                          v.label.isEmpty ? 'Default' : v.label,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        subtitle: Text(
-                          '₹ ${v.basePrice.toStringAsFixed(2)}',
-                        ),
-                        value: v,
-                        groupValue: _selectedVariant,
-                        onChanged: (val) {
-                          setState(() {
-                            _selectedVariant = val;
-                          });
-                        },
-                      );
-                    }),
-                  ],
-                )
-              else
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(
-                    'No variants found.\nPrice will default to ₹0.00',
+                if (widget.item.description != null &&
+                    widget.item.description!.trim().isNotEmpty)
+                  Text(
+                    widget.item.description!,
                     style: TextStyle(
-                      fontSize: 13,
                       color: Colors.grey.shade700,
+                      fontSize: 13,
                     ),
                   ),
-                ),
 
-              const SizedBox(height: 16),
+                const SizedBox(height: 16),
 
-              // Modifier groups
-              if (widget.modifierGroups.isNotEmpty)
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Add-ons / Choices',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
+                // Variant picker
+                if (widget.variants.isNotEmpty)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Choose Variant',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    ...widget.modifierGroups.map((group) {
-                      final pickedSet =
-                          _selModsByGroup[group.groupId] ?? <String>{};
-
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            group.name,
+                      const SizedBox(height: 8),
+                      ...widget.variants.map((v) {
+                        return RadioListTile<ItemVariant>(
+                          title: Text(
+                            v.label.isEmpty ? 'Default' : v.label,
                             style: const TextStyle(
                               fontWeight: FontWeight.w500,
-                              fontSize: 14,
                             ),
                           ),
-                          if (group.maxSel != null)
+                          subtitle: Text(
+                            '₹ ${v.basePrice.toStringAsFixed(2)}',
+                          ),
+                          value: v,
+                          groupValue: _selectedVariant,
+                          onChanged: (val) {
+                            setState(() {
+                              _selectedVariant = val;
+                            });
+                          },
+                        );
+                      }),
+                    ],
+                  )
+                else
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      'No variants found.\nPrice will default to ₹0.00',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey.shade700,
+                      ),
+                    ),
+                  ),
+
+                const SizedBox(height: 16),
+
+                // Modifier groups
+                if (widget.modifierGroups.isNotEmpty)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Add-ons / Choices',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      ...widget.modifierGroups.map((group) {
+                        final pickedSet =
+                            _selModsByGroup[group.groupId] ?? <String>{};
+
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
                             Text(
-                              'Choose up to ${group.maxSel}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey.shade600,
+                              group.name,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w500,
+                                fontSize: 14,
                               ),
                             ),
-                          const SizedBox(height: 4),
-                          ...group.modifiers.map((m) {
-                            final key = m.id ?? m.name;
-                            final selected = pickedSet.contains(key);
-                            final priceText = m.priceDelta == 0
-                                ? ''
-                                : ' (+₹${m.priceDelta.toStringAsFixed(2)})';
-
-                            return CheckboxListTile(
-                              contentPadding: EdgeInsets.zero,
-                              dense: true,
-                              title: Text(
-                                '${m.name}$priceText',
-                                style: const TextStyle(fontSize: 14),
+                            if (group.maxSel != null)
+                              Text(
+                                'Choose up to ${group.maxSel}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade600,
+                                ),
                               ),
-                              value: selected,
-                              onChanged: (val) {
-                                if (val == null) return;
-                                _toggleModifier(group, m, val);
-                              },
-                            );
-                          }),
-                          const SizedBox(height: 8),
-                        ],
-                      );
-                    }),
+                            const SizedBox(height: 4),
+                            ...group.modifiers.map((m) {
+                              final key = m.id ?? m.name;
+                              final selected = pickedSet.contains(key);
+                              final priceText = m.priceDelta == 0
+                                  ? ''
+                                  : ' (+₹${m.priceDelta.toStringAsFixed(2)})';
+
+                              return CheckboxListTile(
+                                contentPadding: EdgeInsets.zero,
+                                dense: true,
+                                title: Text(
+                                  '${m.name}$priceText',
+                                  style: const TextStyle(fontSize: 14),
+                                ),
+                                value: selected,
+                                onChanged: (val) {
+                                  if (val == null) return;
+                                  _toggleModifier(group, m, val);
+                                },
+                              );
+                            }),
+                            const SizedBox(height: 8),
+                          ],
+                        );
+                      }),
+                    ],
+                  ),
+
+                const SizedBox(height: 8),
+
+                // Qty row + per-unit + total
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.remove_circle_outline),
+                          onPressed: () {
+                            setState(() {
+                              if (_qty > 1) _qty--;
+                            });
+                          },
+                        ),
+                        Text(
+                          '$_qty',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 16,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.add_circle_outline),
+                          onPressed: () {
+                            setState(() {
+                              _qty++;
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          'Per unit: ₹ ${perUnit.toStringAsFixed(2)}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                        ),
+                        Text(
+                          'Total: ₹ ${total.toStringAsFixed(2)}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
 
-              const SizedBox(height: 8),
+                const SizedBox(height: 16),
 
-              // Qty row + per-unit + total
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.remove_circle_outline),
+                // Cancel / Add buttons
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
                         onPressed: () {
-                          setState(() {
-                            if (_qty > 1) _qty--;
-                          });
+                          Navigator.of(context).pop();
                         },
+                        child: const Text('Cancel'),
                       ),
-                      Text(
-                        '$_qty',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 16,
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.add_circle_outline),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 2,
+                      child: FilledButton(
                         onPressed: () {
-                          setState(() {
-                            _qty++;
-                          });
+                          Navigator.of(context).pop(
+                            _AddResult(
+                              variant: _selectedVariant,
+                              qty: _qty,
+                              modifiers: _collectSelectedModifiers(),
+                            ),
+                          );
                         },
+                        child: Text('Add • ₹ ${total.toStringAsFixed(2)}'),
                       ),
-                    ],
-                  ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        'Per unit: ₹ ${perUnit.toStringAsFixed(2)}',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
-                        ),
-                      ),
-                      Text(
-                        'Total: ₹ ${total.toStringAsFixed(2)}',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 16,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 16),
-
-              // Cancel / Add buttons
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () {
-                        Navigator.of(context).pop();
-                      },
-                      child: const Text('Cancel'),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    flex: 2,
-                    child: FilledButton(
-                      onPressed: () {
-                        Navigator.of(context).pop(
-                          _AddResult(
-                            variant: _selectedVariant,
-                            qty: _qty,
-                            modifiers: _collectSelectedModifiers(),
-                          ),
-                        );
-                      },
-                      child: Text('Add • ₹ ${total.toStringAsFixed(2)}'),
-                    ),
-                  ),
-                ],
-              ),
+                  ],
+                ),
 
-              const SizedBox(height: 16),
-            ],
+                const SizedBox(height: 16), // Extra padding at the bottom
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 }
+
 
 /// ---------------- OFFLINE QUEUE (Ops Journal) ----------------
 
@@ -1460,7 +1526,7 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
           builder: (ctx, setLocalState) {
             final tablesAsync = ref.watch(diningTablesProvider);
             final tables = tablesAsync.asData?.value ?? const <DiningTable>[];
-            final tablesLoading = tablesAsync.isLoading;
+            // final tablesLoading = tablesAsync.isLoading; // Not used, but good to know
             return AlertDialog(
               title: const Text('Checkout details'),
               content: SingleChildScrollView(
@@ -1468,7 +1534,8 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     DropdownButtonFormField<OrderChannel>(
-                      initialValue: chosenChannel,
+                      // Note: initialValue is deprecated, use value instead
+                      value: chosenChannel,
                       decoration: const InputDecoration(labelText: 'Channel'),
                       items: OrderChannel.values.map((ch) {
                         return DropdownMenuItem<OrderChannel>(
@@ -1501,7 +1568,8 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
                     // Only show table picker for dine-in
                     if (chosenChannel == OrderChannel.DINE_IN)
                       DropdownButtonFormField<String?>(
-                        initialValue: chosenTableId,
+                        // Note: initialValue is deprecated, use value instead
+                        value: chosenTableId,
                         decoration: const InputDecoration(
                           labelText: 'Table',
                         ),
@@ -1523,6 +1591,7 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
                         ],
                         onChanged: (val) {
                           setLocalState(() {
+                            // val is nullable, but chosenTableId is also nullable
                             chosenTableId = val;
                           });
                         },
@@ -1827,7 +1896,7 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
       try {
         await _performCheckout(widget.cart, req);
       } finally {
-       ref.read(netBusyProvider.notifier).state = false;
+        ref.read(netBusyProvider.notifier).state = false;
       }
     } finally {
       if (mounted) {
@@ -1844,13 +1913,23 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
     final lines = widget.cart.lines;
     final total = widget.cart.subTotal;
 
+    // Use a light brown background for the cart area
+    final cardColor = Colors.brown.shade50;
+
+    // On mobile, this view is in a TabBarView and should fill the space.
+    // On tablet, it's in an Expanded flex.
+    // We'll wrap with Material to give it a consistent background and
+    // optional elevation on tablet.
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isTablet = screenWidth > PosPage.kTabletBreakpoint;
+
     return Material(
-      elevation: 4, // Side panel shadow
-      color: Colors.brown.shade50,
+      elevation: isTablet ? 4 : 0, // Side panel shadow on tablet only
+      color: cardColor,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+        padding: const EdgeInsets.all(12.0), // Consistent padding
         child: Column(
-          mainAxisSize: MainAxisSize.min, // Fill the 35% height
+          // mainAxisSize: MainAxisSize.min, // This is good for tablet
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // Header
@@ -1875,6 +1954,7 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
               )
                   : Scrollbar(
                 controller: _cartCtl,
+                thumbVisibility: true, // Make scrollbar visible
                 child: ListView.separated(
                   controller: _cartCtl,
                   primary: false,
@@ -2056,10 +2136,12 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
                 ),
               ],
             ),
+            // Add padding for the bottom navigation bar on mobile
+            if (!isTablet)
+              SizedBox(height: kBottomNavigationBarHeight > 0 ? kBottomNavigationBarHeight / 2 : 12),
           ],
         ),
       ),
     );
   }
 }
-

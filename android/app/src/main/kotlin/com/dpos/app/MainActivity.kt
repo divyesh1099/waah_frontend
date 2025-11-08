@@ -1,4 +1,4 @@
-package com.waah.waah_frontend
+package com.dpos.app
 
 import io.flutter.embedding.android.FlutterActivity
 

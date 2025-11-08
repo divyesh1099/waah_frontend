@@ -817,52 +817,106 @@ final kotTicketsProvider = FutureProvider.family.autoDispose<List<KotCardData>, 
 class KotPage extends ConsumerWidget {
   const KotPage({super.key});
 
+  // Define a breakpoint for switching between mobile and tablet layouts
+  static const double kTabletBreakpoint = 800.0;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Pump the poller
     ref.watch(_kotAutoPollProvider);
 
-    return Padding(
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        children: [
-          Row(
+    // Check screen width
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isTablet = screenWidth > kTabletBreakpoint;
+
+    // Define the header row (title + refresh button)
+    final headerRow = Row(
+      children: [
+        const Text('Kitchen Tickets', style: TextStyle(fontWeight: FontWeight.w700)),
+        const Spacer(),
+        IconButton(
+          tooltip: 'Refresh all',
+          icon: const Icon(Icons.refresh),
+          onPressed: () {
+            for (final st in KOTStatus.values) {
+              ref.invalidate(kotTicketsProvider(st));
+            }
+          },
+        ),
+      ],
+    );
+
+    if (isTablet) {
+      // --- TABLET LAYOUT (Original) ---
+      return Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          children: [
+            headerRow,
+            const SizedBox(height: 8),
+            const Expanded(
+              child: Row(
+                children: [
+                  Expanded(child: _KotColumn(title: 'New', status: KOTStatus.NEW)),
+                  VerticalDivider(width: 1),
+                  Expanded(child: _KotColumn(title: 'In Progress', status: KOTStatus.IN_PROGRESS)),
+                  VerticalDivider(width: 1),
+                  Expanded(child: _KotColumn(title: 'Ready', status: KOTStatus.READY)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    } else {
+      // --- PHONE LAYOUT (Tabbed) ---
+      return DefaultTabController(
+        length: 3, // New, In Progress, Ready
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
             children: [
-              const Text('Kitchen Tickets', style: TextStyle(fontWeight: FontWeight.w700)),
-              const Spacer(),
-              IconButton(
-                tooltip: 'Refresh all',
-                icon: const Icon(Icons.refresh),
-                onPressed: () {
-                  for (final st in KOTStatus.values) {
-                    ref.invalidate(kotTicketsProvider(st));
-                  }
-                },
+              headerRow,
+              const SizedBox(height: 8),
+              // The TabBar
+              TabBar(
+                tabs: const [
+                  Tab(text: 'New'),
+                  Tab(text: 'In Progress'),
+                  Tab(text: 'Ready'),
+                ],
+                labelColor: Theme.of(context).colorScheme.primary, // Use theme colors
+                indicatorColor: Theme.of(context).colorScheme.primary,
+                unselectedLabelColor: Theme.of(context).textTheme.bodySmall?.color,
+              ),
+              // The TabBarView
+              const Expanded(
+                child: TabBarView(
+                  children: [
+                    // Reuse the exact same _KotColumn widget, but hide its internal header
+                    _KotColumn(title: 'New', status: KOTStatus.NEW, showHeader: false),
+                    _KotColumn(title: 'In Progress', status: KOTStatus.IN_PROGRESS, showHeader: false),
+                    _KotColumn(title: 'Ready', status: KOTStatus.READY, showHeader: false),
+                  ],
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          const Expanded(
-            child: Row(
-              children: [
-                Expanded(child: _KotColumn(title: 'New', status: KOTStatus.NEW)),
-                VerticalDivider(width: 1),
-                Expanded(child: _KotColumn(title: 'In Progress', status: KOTStatus.IN_PROGRESS)),
-                VerticalDivider(width: 1),
-                Expanded(child: _KotColumn(title: 'Ready', status: KOTStatus.READY)),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
+        ),
+      );
+    }
   }
 }
 
 class _KotColumn extends ConsumerWidget {
-  const _KotColumn({required this.title, required this.status});
+  const _KotColumn({
+    required this.title,
+    required this.status,
+    this.showHeader = true, // New parameter
+  });
   final String title;
   final KOTStatus status;
+  final bool showHeader; // New parameter
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -871,29 +925,31 @@ class _KotColumn extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(width: 4),
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              tooltip: 'Refresh',
-              iconSize: 18,
-              padding: EdgeInsets.zero,
-              visualDensity: VisualDensity.compact,
-              onPressed: () async {
-                final t = ref.read(kotTenantIdProvider);
-                final b = ref.read(kotBranchIdProvider);
-                for (final st in KOTStatus.values) {
-                  await _refreshKot(ref.read, t, b, st);
-                  if (!context.mounted) return;               // <-- guard
-                  ref.invalidate(kotTicketsProvider(st));     // safe only if still mounted
-                }
-              },
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
+        if (showHeader) ...[ // Conditionally show the header
+          Row(
+            children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(width: 4),
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                tooltip: 'Refresh',
+                iconSize: 18,
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                onPressed: () async {
+                  final t = ref.read(kotTenantIdProvider);
+                  final b = ref.read(kotBranchIdProvider);
+                  for (final st in KOTStatus.values) {
+                    await _refreshKot(ref.read, t, b, st);
+                    if (!context.mounted) return;               // <-- guard
+                    ref.invalidate(kotTicketsProvider(st));     // safe only if still mounted
+                  }
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+        ],
         Expanded(
           child: asyncTickets.when(
             data: (tickets) {
