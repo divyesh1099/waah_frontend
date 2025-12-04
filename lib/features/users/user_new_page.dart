@@ -72,8 +72,11 @@ class _UserCreatePageState
     try {
       final api = ref.read(apiClientProvider);
 
+      final branchId = ref.read(activeBranchIdProvider);
+
       await api.createUser(
         tenantId: tenantId,
+        branchId: branchId,
         name: name,
         mobile: _mobileCtl.text.trim().isEmpty
             ? null

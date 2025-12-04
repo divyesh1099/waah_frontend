@@ -97,20 +97,35 @@ class SettingsRepo {
     _assertTenant(b.tenantId);
     _emitBranches([..._branches, b]);
     _persistBranches();
-    // TODO: push to server when API is available
+    
+    try {
+      await _client.createBranch(_branchToMap(b));
+    } catch (e) {
+      if (kDebugMode) print('[SettingsRepo] createBranch failed: $e');
+    }
   }
 
   Future<void> updateBranchOptimistic(BranchInfo b) async {
     _assertTenant(b.tenantId);
     _emitBranches(_branches.map((x) => x.id == b.id ? b : x).toList(growable: false));
     _persistBranches();
-    // TODO: push to server when API is available
+
+    try {
+      await _client.updateBranch(b.id, _branchToMap(b));
+    } catch (e) {
+      if (kDebugMode) print('[SettingsRepo] updateBranch failed: $e');
+    }
   }
 
   Future<void> deleteBranchOptimistic(String id) async {
     _emitBranches(_branches.where((x) => x.id != id).toList(growable: false));
     _persistBranches();
-    // TODO: push to server when API is available
+
+    try {
+      await _client.deleteBranch(id);
+    } catch (e) {
+      if (kDebugMode) print('[SettingsRepo] deleteBranch failed: $e');
+    }
   }
 
   void _emitBranches(List<BranchInfo> items) {
@@ -157,7 +172,12 @@ class SettingsRepo {
     _tablesByBranch[branchId] = List.unmodifiable(list);
     _tablesCtlByBranch[branchId]?.add(_tablesByBranch[branchId]!);
     _persistTables(branchId);
-    // TODO: push to server when API is available
+    
+    try {
+      await _client.createTable(t);
+    } catch (e) {
+      if (kDebugMode) print('[SettingsRepo] createTable failed: $e');
+    }
   }
 
   Future<void> updateTableOptimistic(String branchId, DiningTable t) async {
@@ -167,7 +187,12 @@ class SettingsRepo {
     _tablesByBranch[branchId] = List.unmodifiable(list);
     _tablesCtlByBranch[branchId]?.add(_tablesByBranch[branchId]!);
     _persistTables(branchId);
-    // TODO: push to server when API is available
+
+    try {
+      if (kDebugMode) print('[SettingsRepo] updateTable not supported by backend yet');
+    } catch (e) {
+      if (kDebugMode) print('[SettingsRepo] updateTable failed: $e');
+    }
   }
 
   Future<void> deleteTableOptimistic(String branchId, String id) async {
@@ -177,7 +202,12 @@ class SettingsRepo {
     _tablesByBranch[branchId] = List.unmodifiable(list);
     _tablesCtlByBranch[branchId]?.add(_tablesByBranch[branchId]!);
     _persistTables(branchId);
-    // TODO: push to server when API is available
+
+    try {
+      await _client.deleteTable(id);
+    } catch (e) {
+      if (kDebugMode) print('[SettingsRepo] deleteTable failed: $e');
+    }
   }
 
   void _loadCachedTables(String branchId) {
@@ -222,7 +252,20 @@ class SettingsRepo {
     final list = [...(_printersMap[key] ?? const <Printer>[]), p];
     _emitPrinters(key, list);
     _persistPrinters(key);
-    // TODO: push to server when API is available
+    
+    try {
+      await _client.createPrinter(
+        tenantId: p.tenantId,
+        branchId: p.branchId,
+        name: p.name,
+        type: p.type.name,
+        connectionUrl: p.connectionUrl ?? '',
+        cashDrawerEnabled: p.cashDrawerEnabled,
+        cashDrawerCode: p.cashDrawerCode,
+      );
+    } catch (e) {
+      if (kDebugMode) print('[SettingsRepo] createPrinter failed: $e');
+    }
   }
 
   Future<void> updatePrinterOptimistic(String tenantId, String branchId, Printer p) async {
@@ -232,7 +275,20 @@ class SettingsRepo {
         .toList(growable: false);
     _emitPrinters(key, list);
     _persistPrinters(key);
-    // TODO: push to server when API is available
+
+    try {
+      await _client.updatePrinter(
+        p.id!,
+        name: p.name,
+        type: p.type.name,
+        connectionUrl: p.connectionUrl,
+        cashDrawerEnabled: p.cashDrawerEnabled,
+        cashDrawerCode: p.cashDrawerCode,
+        isDefault: p.isDefault,
+      );
+    } catch (e) {
+      if (kDebugMode) print('[SettingsRepo] updatePrinter failed: $e');
+    }
   }
 
   Future<void> deletePrinterOptimistic(String tenantId, String branchId, String id) async {
@@ -242,7 +298,12 @@ class SettingsRepo {
         .toList(growable: false);
     _emitPrinters(key, list);
     _persistPrinters(key);
-    // TODO: push to server when API is available
+
+    try {
+      await _client.deletePrinter(id);
+    } catch (e) {
+      if (kDebugMode) print('[SettingsRepo] deletePrinter failed: $e');
+    }
   }
 
   void _emitPrinters(String key, List<Printer> items) {
@@ -285,6 +346,20 @@ class SettingsRepo {
     _rest = s;
     _restCtl.add(_rest);
     _persistRestaurantSettings();
+  }
+
+  Future<void> refreshRestaurantSettings(String tenantId, String branchId) async {
+    try {
+      final map = await _client.fetchRestaurantSettings(tenantId: tenantId, branchId: branchId);
+      if (map.isNotEmpty) {
+        // Convert map to db.RestaurantSetting
+        // Note: db.RestaurantSetting.fromJson might expect snake_case keys which API returns.
+        final s = db.RestaurantSetting.fromJson(map);
+        await setRestaurantSettingsOptimistic(s);
+      }
+    } catch (e) {
+      if (kDebugMode) print('[SettingsRepo] refreshRestaurantSettings failed: $e');
+    }
   }
 
   void _loadCachedRestaurantSettings(String tenantId) {

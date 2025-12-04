@@ -168,14 +168,15 @@ class _BranchCreateSheetState
 
     try {
       final api = ref.read(apiClientProvider);
-      final newId = await api.createBranch(
-        tenantId: tenantId,
-        name: name,
-        phone: _phoneCtl.text.trim(),
-        gstin: _gstinCtl.text.trim(),
-        stateCode: _stateCtl.text.trim(),
-        address: _addrCtl.text.trim(),
-      );
+      final resp = await api.createBranch({
+        'tenant_id': tenantId,
+        'name': name,
+        'phone': _phoneCtl.text.trim(),
+        'gstin': _gstinCtl.text.trim(),
+        'state_code': _stateCtl.text.trim(),
+        'address': _addrCtl.text.trim(),
+      });
+      final newId = resp['id'] as String;
 
       await ref.read(settingsRepoProvider).refreshBranches(tenantId);
       // make the newly created branch active right away

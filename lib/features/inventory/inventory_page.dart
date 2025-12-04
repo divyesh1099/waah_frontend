@@ -3,12 +3,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:waah_frontend/data/models.dart';
 import 'package:waah_frontend/data/repo/inventory_repo.dart';
+import 'package:waah_frontend/app/providers.dart';
 
 /// Provider to load all ingredients (with qty_on_hand + min_level).
 final ingredientsProvider =
 FutureProvider.autoDispose<List<Ingredient>>((ref) async {
   final repo = ref.watch(inventoryRepoProvider);
-  final list = await repo.loadIngredients(tenantId: '');
+  final branchId = ref.watch(activeBranchIdProvider);
+  final list = await repo.loadIngredients(tenantId: '', branchId: branchId);
   // sort: low stock first
   list.sort((a, b) {
     final aLow = (a.qtyOnHand ?? 0) < a.minLevel ? 0 : 1;
@@ -36,8 +38,10 @@ class InventoryPage extends ConsumerWidget {
             icon: const Icon(Icons.shopping_cart_checkout),
             onPressed: () async {
               final repo = ref.read(inventoryRepoProvider);
+              final branchId = ref.read(activeBranchIdProvider);
               final ingList = await repo.loadIngredients(
                 tenantId: '',
+                branchId: branchId,
               );
 
               final ok = await showDialog<bool>(
@@ -394,8 +398,10 @@ class _PurchaseDialogState
 
     try {
       final repo = ref.read(inventoryRepoProvider);
+      final branchId = ref.read(activeBranchIdProvider);
       await repo.recordPurchase(
         tenantId: '',
+        branchId: branchId,
         supplier: _suppCtl.text.trim(),
         note: _noteCtl.text.trim().isEmpty
             ? null

@@ -1,5 +1,7 @@
 // lib/features/onboarding/onboarding_page.dart
+import 'dart:io';
 import 'dart:ui'; // for BackdropFilter blur
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -56,6 +58,7 @@ class _OnboardingPageState
   int _step = 0; // 0..4
   String? _tenantId;
   String? _branchId;
+  PlatformFile? _logoFile;
 
   // for final screen
   late String _finalMobile = _mobile.text;
@@ -199,6 +202,16 @@ class _OnboardingPageState
         printFssaiOnInvoice: true,
         gstInclusiveDefault: true,
       );
+
+      // Upload logo if selected
+      if (_logoFile != null) {
+        await client.onboardLogo(
+          appSecret: _appSecret.text.trim(),
+          tenantId: _tenantId!,
+          branchId: _branchId!,
+          file: _logoFile!,
+        );
+      }
 
       // Seed printers + stations with sane defaults
       await client.onboardPrinters(
@@ -563,6 +576,8 @@ class _OnboardingPageState
           restName: _restName,
           restPhone: _restPhone,
           restAddr: _restAddr,
+          selectedFile: _logoFile,
+          onFileSelected: (f) => setState(() => _logoFile = f),
         );
       case 4:
       default:
@@ -982,6 +997,8 @@ class _BrandStep extends StatelessWidget {
   final TextEditingController restName;
   final TextEditingController restPhone;
   final TextEditingController restAddr;
+  final PlatformFile? selectedFile;
+  final ValueChanged<PlatformFile?> onFileSelected;
 
   const _BrandStep({
     required this.formKey,
@@ -989,6 +1006,8 @@ class _BrandStep extends StatelessWidget {
     required this.restName,
     required this.restPhone,
     required this.restAddr,
+    required this.selectedFile,
+    required this.onFileSelected,
   });
 
   @override
@@ -1051,6 +1070,44 @@ class _BrandStep extends StatelessWidget {
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: 12),
+
+            // Logo Picker
+            GestureDetector(
+              onTap: () async {
+                final res = await FilePicker.platform.pickFiles(
+                  type: FileType.image,
+                  withData: true, // important for web/bytes
+                );
+                if (res != null) {
+                  onFileSelected(res.files.first);
+                }
+              },
+              child: Container(
+                height: 100,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white.withOpacity(0.2)),
+                ),
+                child: selectedFile != null
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: selectedFile!.bytes != null
+                            ? Image.memory(selectedFile!.bytes!, fit: BoxFit.cover)
+                            : Image.file(File(selectedFile!.path!), fit: BoxFit.cover),
+                      )
+                    : Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.add_photo_alternate_outlined, color: Colors.white.withOpacity(0.5)),
+                          const SizedBox(height: 8),
+                          Text("Upload Logo", style: TextStyle(color: Colors.white.withOpacity(0.5))),
+                        ],
+                      ),
+              ),
             ),
 
             const SizedBox(height: 24),

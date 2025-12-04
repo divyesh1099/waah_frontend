@@ -153,6 +153,7 @@ class AppShell extends ConsumerWidget {
                       style: TextStyle(fontSize: 12),
                     ),
                     onPressed: () {
+                      Navigator.pop(context); // close drawer
                       context.push('/branch/select');
                     },
                   ),
@@ -161,54 +162,88 @@ class AppShell extends ConsumerWidget {
             ),
             ListTile(
               title: const Text('Menu'),
-              onTap: () => context.go('/menu'),
+              onTap: () {
+                Navigator.pop(context);
+                context.go('/menu');
+              },
             ),
             ListTile(
               title: const Text('POS'),
-              onTap: () => context.go('/pos'),
+              onTap: () {
+                Navigator.pop(context);
+                context.go('/pos');
+              },
             ),
             ListTile(
               title: const Text('Orders'),
-              onTap: () => context.go('/orders'),
+              onTap: () {
+                Navigator.pop(context);
+                context.go('/orders');
+              },
             ),
             ListTile(
               title: const Text('Shift & Cash'),
-              onTap: () => context.go('/shift'),
+              onTap: () {
+                Navigator.pop(context);
+                context.go('/shift');
+              },
             ),
             ListTile(
               title: const Text('KOT'),
-              onTap: () => context.go('/kot'),
+              onTap: () {
+                Navigator.pop(context);
+                context.go('/kot');
+              },
             ),
             ListTile(
               title: const Text('Online Orders'),
-              onTap: () => context.go('/online'),
+              onTap: () {
+                Navigator.pop(context);
+                context.go('/online');
+              },
             ),
             ListTile(
               title: const Text('Inventory'),
-              onTap: () => context.go('/inventory'),
+              onTap: () {
+                Navigator.pop(context);
+                context.go('/inventory');
+              },
             ),
             ListTile(
               title: const Text('Reports'),
-              onTap: () => context.go('/reports'),
+              onTap: () {
+                Navigator.pop(context);
+                context.go('/reports');
+              },
             ),
             const Divider(),
             ListTile(
               title: const Text('Users'),
-              onTap: () => context.go('/users'),
+              onTap: () {
+                Navigator.pop(context);
+                context.go('/users');
+              },
             ),
             ListTile(
               title: const Text('Roles / Permissions'),
-              onTap: () => context.go('/roles'),
+              onTap: () {
+                Navigator.pop(context);
+                context.go('/roles');
+              },
             ),
             ListTile(
               title: const Text('Settings'),
               subtitle: const Text('Branch, printers, backup'),
-              onTap: () => context.go('/settings'),
+              onTap: () {
+                Navigator.pop(context);
+                context.go('/settings');
+              },
             ),
             const Divider(),
             ListTile(
               title: const Text('Logout'),
               onTap: () {
+                Navigator.pop(context);
                 ref.read(authControllerProvider.notifier).logout();
                 context.go('/login');
               },

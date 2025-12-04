@@ -94,6 +94,29 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    // Logo if available
+                    Consumer(builder: (context, ref, _) {
+                      final rs = ref.watch(restaurantSettingsProvider).valueOrNull;
+                      final buildUri = ref.read(mediaResolverProvider);
+                      final logoUrl = (rs?.logoUrl != null && rs!.logoUrl!.isNotEmpty)
+                          ? buildUri(rs.logoUrl).toString()
+                          : null;
+                      if (logoUrl == null) return const SizedBox.shrink();
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 16),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.network(
+                            logoUrl,
+                            height: 80,
+                            width: 80,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                          ),
+                        ),
+                      );
+                    }),
+
                     TextFormField(
                       controller: _mobile,
                       decoration: const InputDecoration(labelText: 'Mobile'),

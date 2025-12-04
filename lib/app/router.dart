@@ -39,6 +39,7 @@ import 'package:waah_frontend/features/settings/branch_settings_page.dart';
 import 'package:waah_frontend/features/settings/printer_settings_page.dart';
 import 'package:waah_frontend/features/settings/branch_select_page.dart';
 import 'package:waah_frontend/features/settings/table_settings_page.dart';
+import 'package:waah_frontend/features/settings/restaurant_settings_page.dart';
 
 /// Small gate that redirects after the first frame based on auth state.
 /// Ensures /auth/me is fetched and adopts me.branchId into activeBranchId.
@@ -204,6 +205,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 path: 'printers',
                 name: 'settings-printers',
                 builder: (context, state) => const PrinterSettingsPage(),
+              ),
+              GoRoute(
+                path: 'restaurant',
+                name: 'settings-restaurant',
+                builder: (context, state) => const RestaurantSettingsPage(),
               ),
             ],
           ),

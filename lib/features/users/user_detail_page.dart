@@ -10,9 +10,10 @@ FutureProvider.family.autoDispose<UserSummary?, String>((ref, userId) async {
   final api = ref.watch(apiClientProvider);
   final auth = ref.watch(authControllerProvider);
   final tenantId = auth.me?.tenantId ?? '';
+  final branchId = ref.watch(activeBranchIdProvider);
   if (tenantId.isEmpty) return null;
 
-  final all = await api.listUsers(tenantId: tenantId);
+  final all = await api.listUsers(tenantId: tenantId, branchId: branchId);
   try {
     return all.firstWhere((u) => u.id == userId);
   } catch (_) {

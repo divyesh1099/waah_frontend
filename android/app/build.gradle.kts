@@ -16,42 +16,39 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    // ⚠️ rename your app/package here
-    // old: "com.waah.waah_frontend"
+    // ✅ final package / Play app id
     namespace = "com.dpos.app"
 
+    // Keep these sourced from Flutter toolchain
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
+    // ✅ Modern toolchains (Flutter 3.22+ prefers Java 17 / AGP 8+)
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
-
     kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_11.toString()
+        jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
     defaultConfig {
-        // ⚠️ this must match namespace for release builds on Play Store
-        // old: "com.waah.waah_frontend"
+        // ✅ immutable on Play after first upload
         applicationId = "com.dpos.app"
 
-        // you already had these from Flutter
+        // from Flutter (pubspec.yaml → version: x.y.z+code)
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
-        versionCode = flutter.versionCode    // bump this when you publish a new build
-        versionName = flutter.versionName    // e.g. "1.0.0"
+        versionCode = flutter.versionCode.toInt()
+        versionName = flutter.versionName
     }
 
     // --- signing for debug + release ---
     signingConfigs {
-        // debug stays the same (auto debug keystore)
-        getByName("debug") {
-            // leave default debug signing
-        }
+        // default debug keystore
+        getByName("debug")
 
-        // new release signing, uses android/key.properties
+        // release uses android/key.properties
         create("release") {
             val keyAliasProp = keystoreProperties["keyAlias"] as String?
             val keyPasswordProp = keystoreProperties["keyPassword"] as String?
@@ -69,34 +66,31 @@ android {
                 storeFile = file(storeFileProp)
                 storePassword = storePasswordProp
             } else {
-                // Fallback: if key.properties isn't present, you'll still be able
-                // to build debug, but release build will complain if you try.
-                println("⚠️ WARNING: key.properties not fully configured, release signingConfig is incomplete.")
+                println("⚠️ key.properties missing/incomplete → release signing not configured.")
             }
         }
     }
 
     buildTypes {
         getByName("debug") {
-            // debug build, nothing special
             signingConfig = signingConfigs.getByName("debug")
         }
-
         getByName("release") {
-            // turn on shrinking to make APK smaller/slicker
+            // ✅ shrink + optimize for Play
             isMinifyEnabled = true
             isShrinkResources = true
-
-            // IMPORTANT: sign with our real keystore, not debug
             signingConfig = signingConfigs.getByName("release")
 
-            // You can also supply proguard rules if Flutter didn't add them already:
+            // Use default Flutter proguard unless you have custom rules:
             // proguardFiles(
-            //     getDefaultProguardFile("proguard-android.txt"),
+            //     getDefaultProguardFile("proguard-android-optimize.txt"),
             //     "proguard-rules.pro"
             // )
         }
     }
+
+    // (Optional) If you ever ship native libs, this helps Play prelaunch symbols
+    // ndkVersion = flutter.ndkVersion
 }
 
 flutter {

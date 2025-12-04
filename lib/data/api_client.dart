@@ -388,6 +388,83 @@ class ApiClient {
     _decodeOrThrow(r);
   }
 
+  Future<String> onboardLogo({
+    required String appSecret,
+    required String tenantId,
+    required String branchId,
+    required PlatformFile file,
+  }) async {
+    final uri = Uri.parse('$baseUrl/onboard/logo');
+    final req = http.MultipartRequest('POST', uri);
+
+    req.headers.addAll(_headers({'X-App-Secret': appSecret}));
+    req.fields['tenant_id'] = tenantId;
+    req.fields['branch_id'] = branchId;
+
+    if (file.bytes != null) {
+      // Web or bytes available
+      req.files.add(http.MultipartFile.fromBytes(
+        'file',
+        file.bytes!,
+        filename: file.name,
+        contentType: MediaType('image', file.extension == 'png' ? 'png' : 'jpeg'),
+      ));
+    } else if (file.path != null) {
+      // Mobile/Desktop with path
+      req.files.add(await http.MultipartFile.fromPath(
+        'file',
+        file.path!,
+        contentType: MediaType('image', file.extension == 'png' ? 'png' : 'jpeg'),
+      ));
+    } else {
+      throw Exception('No file data available');
+    }
+
+    final streamed = await req.send();
+    final r = await http.Response.fromStream(streamed);
+    final data = _decodeOrThrow(r);
+    return data['logo_url'] as String;
+  }
+
+  // Authenticated logo upload (Settings)
+  Future<String> uploadRestaurantLogo({
+    required String tenantId,
+    required String branchId,
+    required PlatformFile file,
+  }) async {
+    final uri = Uri.parse('$baseUrl/settings/restaurant/logo');
+    final req = http.MultipartRequest('POST', uri);
+
+    req.headers.addAll(_headers());
+    req.fields['tenant_id'] = tenantId;
+    req.fields['branch_id'] = branchId;
+
+    if (file.bytes != null) {
+      req.files.add(http.MultipartFile.fromBytes(
+        'file',
+        file.bytes!,
+        filename: file.name,
+        contentType: MediaType('image', file.extension == 'png' ? 'png' : 'jpeg'),
+      ));
+    } else if (file.path != null) {
+      req.files.add(await http.MultipartFile.fromPath(
+        'file',
+        file.path!,
+        contentType: MediaType('image', file.extension == 'png' ? 'png' : 'jpeg'),
+      ));
+    } else {
+      throw Exception('No file data available');
+    }
+
+    final streamed = await req.send();
+    final r = await http.Response.fromStream(streamed);
+    final data = _decodeOrThrow(r);
+    return data['logo_url'] as String;
+  }
+
+  // ---- Printers ----
+
+
   // ---------- Settings / Printers / Stations ----------
 
   Future<KitchenStation> createStation(
@@ -876,12 +953,14 @@ class ApiClient {
 
   Future<void> createPurchase({
     required String tenantId,
+    String? branchId,
     required String supplier,
     String? note,
     required List<Map<String, dynamic>> lines,
   }) async {
     await _post('/inventory/purchase', body: {
       'tenant_id': tenantId,
+      if (branchId != null) 'branch_id': branchId,
       'supplier': supplier,
       'note': note,
       'lines': lines,
@@ -896,8 +975,10 @@ class ApiClient {
         body: {'item_id': itemId, 'lines': lines});
   }
 
-  Future<List<Map<String, dynamic>>> lowStock() async {
-    final r = await _get('/inventory/low_stock');
+  Future<List<Map<String, dynamic>>> lowStock({String? branchId}) async {
+    final r = await _get('/inventory/low_stock', params: {
+      if (branchId != null) 'branch_id': branchId,
+    });
     if (r is List) {
       return List<Map<String, dynamic>>.from(
         r.map(
@@ -986,12 +1067,14 @@ class ApiClient {
   // ---------- Users / Roles / Permissions ----------
 
   /// List all users in this tenant (id, name, mobile, active, roles[])
-  Future<List<UserSummary>> listUsers({String? tenantId}) async {
+  Future<List<UserSummary>> listUsers({String? tenantId, String? branchId}) async {
     final r = await _get(
       '/users/',
       params: {
         if (tenantId != null && tenantId.isNotEmpty)
           'tenant_id': tenantId,
+        if (branchId != null && branchId.isNotEmpty)
+          'branch_id': branchId,
       },
     );
 
@@ -1012,6 +1095,7 @@ class ApiClient {
   /// Returns new user id.
   Future<String> createUser({
     required String tenantId,
+    String? branchId,
     required String name,
     String? mobile,
     String? email,
@@ -1021,6 +1105,7 @@ class ApiClient {
   }) async {
     final body = <String, dynamic>{
       'tenant_id': tenantId,
+      if (branchId != null) 'branch_id': branchId,
       'name': name,
       if (mobile != null && mobile.isNotEmpty) 'mobile': mobile,
       if (email != null && email.isNotEmpty) 'email': email,
@@ -1168,6 +1253,19 @@ class ApiClient {
   // POST /settings/restaurant  (upsert)
   Future<void> saveRestaurantSettings(Map<String, dynamic> body) async {
     await _post('/settings/restaurant', body: body);
+  }
+
+  Future<void> deleteRestaurantSettings({
+    required String tenantId,
+    required String branchId,
+  }) async {
+    await _delete(
+      '/settings/restaurant',
+      params: {
+        'tenant_id': tenantId,
+        'branch_id': branchId,
+      },
+    );
   }
 
   // POST /settings/printers
@@ -1418,11 +1516,13 @@ class ApiClient {
 
   Future<List<Ingredient>> fetchIngredients({
     String? tenantId,
+    String? branchId,
   }) {
     return listAll<Ingredient>(
       path: '/inventory/ingredients',
       params: {
         'tenant_id': tenantId,
+        'branch_id': branchId,
       }..removeWhere((k, v) => v == null),
       fromJson: Ingredient.fromJson,
     );
@@ -1466,33 +1566,15 @@ class ApiClient {
     return <BranchInfo>[];
   }
 
-  Future<String> createBranch({
-    required String tenantId,
-    required String name,
-    String? phone,
-    String? gstin,
-    String? stateCode,
-    String? address,
-  }) async {
-    final resp = await _post(
-      '/identity/branches',
-      body: {
-        'tenant_id': tenantId,
-        'name': name,
-        if (phone != null && phone.isNotEmpty) 'phone': phone,
-        if (gstin != null && gstin.isNotEmpty) 'gstin': gstin,
-        if (stateCode != null && stateCode.isNotEmpty)
-          'state_code': stateCode,
-        if (address != null && address.isNotEmpty) 'address': address,
-      },
-    );
-
-    final map = Map<String, dynamic>.from(resp as Map);
-    return map['id']?.toString() ?? '';
+  Future<Map<String, dynamic>> createBranch(Map<String, dynamic> data) async {
+    final r = await _dio.post('/identity/branches', data: data);
+    return r.data as Map<String, dynamic>;
   }
 
-  // ---------- Shift ----------
-
+  Future<Map<String, dynamic>> updateBranch(String id, Map<String, dynamic> data) async {
+    final r = await _dio.patch('/identity/branches/$id', data: data);
+    return r.data as Map<String, dynamic>;
+  }
   // GET /shift/status?branch_id=...
   Future<ShiftStatus?> fetchCurrentShift({
     required String branchId,
@@ -1710,49 +1792,7 @@ class ApiClient {
   /// `filename`: something like "logo.png" or "logo.jpg"
   /// `contentType`: mime string like "image/png" or "image/jpeg"
   ///
-  Future<String> uploadRestaurantLogo({
-    required String tenantId,
-    required String branchId,
-    required List<int> bytes,
-    required String filename,
-    required String contentType, // make this required so backend validation passes
-  }) async {
-    // Build a MediaType ("image", "png") from "image/png"
-    final mediaType = MediaType.parse(contentType);
 
-    final formData = FormData.fromMap({
-      'tenant_id': tenantId,
-      'branch_id': branchId,
-      'file': MultipartFile.fromBytes(
-        bytes,
-        filename: filename,
-        contentType: mediaType,
-      ),
-    });
-
-    final resp = await _dio.post(
-      '/settings/restaurant/logo',
-      data: formData,
-      options: Options(
-        headers: {
-          // Dio will add the proper multipart boundary.
-          'Content-Type': 'multipart/form-data',
-          if (_token != null && _token!.isNotEmpty)
-            'Authorization': 'Bearer $_token',
-        },
-      ),
-    );
-
-    final data = resp.data;
-    if (data is Map && data['logo_url'] is String) {
-      return data['logo_url'] as String;
-    }
-
-    throw ApiException(
-      'uploadRestaurantLogo: unexpected response',
-      resp.statusCode,
-    );
-  }
 
   // ===== Menu Item image =====
   Future<String> uploadItemImage({
@@ -1901,26 +1941,20 @@ class ApiClient {
     }
     throw Exception('Upload did not return a "path" field');
   }
-  // --- Branch update/delete ---
-  Future<void> updateBranch(String id, Map<String, dynamic> body) async {
-    await _patch('/identity/branches/$id', body: body);
-  }
+
+  // --- Restored Delete Methods ---
   Future<void> deleteBranch(String id) async {
     await _delete('/identity/branches/$id');
   }
 
-// --- DiningTable update/delete ---
-  Future<void> updateTable(String id, Map<String, dynamic> body) async {
-    await _patch('/dining/tables/$id', body: body);
-  }
   Future<void> deleteTable(String id) async {
     await _delete('/dining/tables/$id');
   }
 
-// --- Printer delete ---
   Future<void> deletePrinter(String id) async {
     await _delete('/settings/printers/$id');
   }
+
 
 
   Future<void> printKot({required String orderId, String? stationId, String? printerId}) async {

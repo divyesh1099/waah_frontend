@@ -13,8 +13,8 @@ class InventoryRepo {
   InventoryRepo(this.api);
   final ApiClient api;
 
-  Future<List<Ingredient>> loadIngredients({String tenantId = ''}) {
-    return api.fetchIngredients(tenantId: tenantId);
+  Future<List<Ingredient>> loadIngredients({String tenantId = '', String? branchId}) {
+    return api.fetchIngredients(tenantId: tenantId, branchId: branchId);
   }
 
   Future<Ingredient> addIngredient({
@@ -46,6 +46,7 @@ class InventoryRepo {
 
   Future<void> recordPurchase({
     required String tenantId,
+    String? branchId,
     required String supplier,
     String? note,
     required List<PurchaseLineDraft> lines,
@@ -60,6 +61,7 @@ class InventoryRepo {
 
     return api.createPurchase(
       tenantId: tenantId,
+      branchId: branchId,
       supplier: supplier,
       note: note ?? '',
       lines: bodyLines,
@@ -81,8 +83,8 @@ class InventoryRepo {
   }
 
   // optional low stock call
-  Future<List<Map<String, dynamic>>> lowStock() {
-    return api.lowStock();
+  Future<List<Map<String, dynamic>>> lowStock({String? branchId}) {
+    return api.lowStock(branchId: branchId);
   }
 }
 

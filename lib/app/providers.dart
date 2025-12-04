@@ -86,8 +86,8 @@ final apiClientProvider = Provider<ApiClient>((ref) {
 // ==============================
 // Canonical Active Tenant/Branch (NON‑NULLABLE String state)
 // ==============================
-class _IdNotifier extends StateNotifier<String> {
-  _IdNotifier(this._prefs, this._key, String initial) : super(initial);
+class IdNotifier extends StateNotifier<String> {
+  IdNotifier(this._prefs, this._key, String initial) : super(initial);
   final SharedPreferences _prefs;
   final String _key;
   void set(String v) {
@@ -102,10 +102,10 @@ class _IdNotifier extends StateNotifier<String> {
 }
 
 final activeTenantIdProvider =
-StateNotifierProvider<_IdNotifier, String>((ref) {
+StateNotifierProvider<IdNotifier, String>((ref) {
   final prefs = ref.watch(prefsProvider);
   final stored = prefs.getString('active_tenant_id') ?? '';
-  final n = _IdNotifier(prefs, 'active_tenant_id', stored);
+  final n = IdNotifier(prefs, 'active_tenant_id', stored);
 
   // Clear on logout; adopt tenant from /auth/me on login if empty
   ref.listen<AuthState>(authControllerProvider, (prev, next) {
@@ -124,10 +124,10 @@ StateNotifierProvider<_IdNotifier, String>((ref) {
 });
 
 final activeBranchIdProvider =
-StateNotifierProvider<_IdNotifier, String>((ref) {
+StateNotifierProvider<IdNotifier, String>((ref) {
   final prefs = ref.watch(prefsProvider);
   final stored = prefs.getString('active_branch_id') ?? '';
-  final n = _IdNotifier(prefs, 'active_branch_id', stored);
+  final n = IdNotifier(prefs, 'active_branch_id', stored);
 
   // Clear on logout; adopt branch from /auth/me on login if empty
   ref.listen<AuthState>(authControllerProvider, (prev, next) {

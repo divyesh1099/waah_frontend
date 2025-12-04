@@ -71,6 +71,12 @@ class SettingsPage extends ConsumerWidget {
             runSpacing: 16,
             children: [
               _Card(
+                title: 'Restaurant',
+                subtitleStream: repo.watchRestaurantSettings().map((s) => s?.name ?? '—'),
+                icon: Icons.restaurant,
+                onTap: () => context.push('/settings/restaurant'),
+              ),
+              _Card(
                 title: 'Branches',
                 // FIX: remove backslash before $
                 subtitleStream: repo.watchBranches().map((l) => '${l.length} branches'),

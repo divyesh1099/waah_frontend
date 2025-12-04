@@ -16,10 +16,12 @@ FutureProvider.autoDispose<List<UserSummary>>((ref) async {
   final me = authState.me;
   final tenantId = me?.tenantId ?? '';
 
+  final branchId = ref.watch(activeBranchIdProvider);
+
   if (tenantId.isEmpty) return <UserSummary>[];
 
   try {
-    return api.listUsers(tenantId: tenantId);
+    return api.listUsers(tenantId: tenantId, branchId: branchId);
   } on ApiException catch (e) {
     throw ApiException(
       e.message.isNotEmpty ? e.message : 'Not allowed',

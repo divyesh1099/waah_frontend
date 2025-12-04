@@ -10,16 +10,17 @@ import '../../data/models.dart';
 import 'package:go_router/go_router.dart';
 import 'package:dio/dio.dart'; // for DioException type checks
 
+import 'printer_scanner.dart';
+
 class PrinterSettingsPage extends ConsumerWidget {
   const PrinterSettingsPage({super.key});
 
+  // ... (keep _errMsg) ...
   String _errMsg(Object e) {
-    // Prefer ApiException (your ApiClient throws this via _decodeOrThrow)
     if (e is ApiException) {
       final status = e.status != null ? ' [${e.status}]' : '';
       return (e.message.isNotEmpty ? e.message : 'Failed') + status;
     }
-    // Common Dio path
     if (e is DioException) {
       final status = e.response?.statusCode;
       final data = e.response?.data;
@@ -31,7 +32,6 @@ class PrinterSettingsPage extends ConsumerWidget {
       }
       return 'Network error${status != null ? ' [$status]' : ''}';
     }
-    // Fallback
     return e.toString();
   }
 
@@ -45,6 +45,11 @@ class PrinterSettingsPage extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Printers'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.radar),
+            tooltip: 'Scan Network',
+            onPressed: () => _showScanner(context),
+          ),
           OutlinedButton.icon(
             icon: const Icon(Icons.store),
             label: const Text('Change branch'),
@@ -86,25 +91,19 @@ class PrinterSettingsPage extends ConsumerWidget {
                       icon: Icon(p.isDefault ? Icons.check_circle : Icons.radio_button_unchecked),
                       tooltip: 'Make Default Billing',
                       onPressed: () async {
-                        // 1) Toggle in your local repo (optimistic)
                         final updated = p.toJson()..['is_default'] = true;
                         await ref.read(settingsRepoProvider).updatePrinterOptimistic(
                           tenantId,
                           branchId,
                           Printer.fromJson(updated),
                         );
-
-                        // 2) Persist branch default in RestaurantSettings
                         try {
                           await ref.read(apiClientProvider).saveRestaurantSettings({
                             'tenant_id': tenantId,
                             'branch_id': branchId,
                             'billing_printer_id': p.id,
                           });
-                        } catch (_) {
-                          // non-blocking
-                        }
-
+                        } catch (_) {}
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(content: Text('Default billing printer set to ${p.name}')),
@@ -151,15 +150,23 @@ class PrinterSettingsPage extends ConsumerWidget {
     );
   }
 
+  Future<void> _showScanner(BuildContext context) async {
+    await showDialog(
+      context: context,
+      builder: (ctx) => const _ScannerDialog(),
+    );
+  }
+
   Future<void> _openEditor(
       BuildContext context,
       WidgetRef ref,
       String tenantId,
       String branchId, {
         Printer? initial,
+        String? prefillUrl, // NEW
       }) async {
     final nameCtl = TextEditingController(text: initial?.name ?? '');
-    final urlCtl = TextEditingController(text: initial?.connectionUrl ?? '');
+    final urlCtl = TextEditingController(text: initial?.connectionUrl ?? prefillUrl ?? '');
     final drawerCtl = TextEditingController(text: initial?.cashDrawerCode ?? '');
     var type = initial?.type ?? PrinterType.BILLING;
     var isDefault = initial?.isDefault ?? (type == PrinterType.BILLING);
@@ -169,14 +176,6 @@ class PrinterSettingsPage extends ConsumerWidget {
       context: context,
       barrierDismissible: true,
       builder: (dialogCtx) {
-        var closing = false;
-        void safePop(bool v) {
-          if (!closing) {
-            closing = true;
-            Navigator.of(dialogCtx).pop(v);
-          }
-        }
-
         return StatefulBuilder(builder: (c, setState) {
           return AlertDialog(
             title: Text(initial == null ? 'Add Printer' : 'Edit Printer'),
@@ -189,7 +188,7 @@ class PrinterSettingsPage extends ConsumerWidget {
                 ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<PrinterType>(
-                  value: type, // <-- FIX: must be `value`, not `initialValue`
+                  value: type,
                   decoration: const InputDecoration(labelText: 'Type'),
                   items: PrinterType.values
                       .map((t) => DropdownMenuItem(value: t, child: Text(t.name)))
@@ -200,10 +199,33 @@ class PrinterSettingsPage extends ConsumerWidget {
                   }),
                 ),
                 const SizedBox(height: 8),
-                TextField(
-                  controller: urlCtl,
-                  decoration:
-                  const InputDecoration(labelText: 'Connection URL (e.g. http://ip:9100/print)'),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: urlCtl,
+                        decoration: const InputDecoration(
+                            labelText: 'Connection URL',
+                            hintText: 'http://192.168.1.x:9100'
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.radar),
+                      tooltip: 'Scan',
+                      onPressed: () async {
+                        // Close this dialog and open scanner, then re-open this?
+                        // Or just open scanner and wait for result?
+                        final ip = await showDialog<String>(
+                          context: context,
+                          builder: (_) => const _ScannerDialog(),
+                        );
+                        if (ip != null) {
+                          urlCtl.text = 'http://$ip:9100';
+                        }
+                      },
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 8),
                 if (type == PrinterType.BILLING)
@@ -226,8 +248,8 @@ class PrinterSettingsPage extends ConsumerWidget {
               ]),
             ),
             actions: [
-              TextButton(onPressed: () => safePop(false), child: const Text('Cancel')),
-              FilledButton(onPressed: () => safePop(true), child: const Text('Save')),
+              TextButton(onPressed: () => Navigator.pop(dialogCtx, false), child: const Text('Cancel')),
+              FilledButton(onPressed: () => Navigator.pop(dialogCtx, true), child: const Text('Save')),
             ],
           );
         });
@@ -237,7 +259,6 @@ class PrinterSettingsPage extends ConsumerWidget {
 
     final repo = ref.read(settingsRepoProvider);
     final printer = Printer(
-      // FIX: proper interpolation; no backslash
       id: initial?.id ?? 'tmp-${DateTime.now().millisecondsSinceEpoch}',
       tenantId: tenantId,
       branchId: branchId,
@@ -255,7 +276,6 @@ class PrinterSettingsPage extends ConsumerWidget {
       await repo.updatePrinterOptimistic(tenantId, branchId, printer);
     }
 
-    // If made default while adding/editing, stamp settings immediately
     if (printer.type == PrinterType.BILLING && printer.isDefault) {
       try {
         await ref.read(apiClientProvider).saveRestaurantSettings({
@@ -263,7 +283,7 @@ class PrinterSettingsPage extends ConsumerWidget {
           'branch_id': branchId,
           'billing_printer_id': printer.id,
         });
-      } catch (_) {/* non-blocking */}
+      } catch (_) {}
     }
   }
 
@@ -292,5 +312,108 @@ class PrinterSettingsPage extends ConsumerWidget {
             .showSnackBar(const SnackBar(content: Text('Printer deleted')));
       }
     }
+  }
+}
+
+class _ScannerDialog extends StatefulWidget {
+  const _ScannerDialog();
+
+  @override
+  State<_ScannerDialog> createState() => _ScannerDialogState();
+}
+
+class _ScannerDialogState extends State<_ScannerDialog> {
+  final _scanner = PrinterScanner();
+  bool _scanning = true;
+  double _progress = 0.0;
+  List<String> _found = [];
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _startScan();
+  }
+
+  Future<void> _startScan() async {
+    try {
+      final results = await _scanner.scanForPrinters(
+        onProgress: (p) => setState(() => _progress = p),
+      );
+      if (mounted) {
+        setState(() {
+          _found = results;
+          _scanning = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _scanning = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Scanning Network...'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_scanning) ...[
+              LinearProgressIndicator(value: _progress),
+              const SizedBox(height: 16),
+              Text('Scanning subnet (Port 9100)... ${( _progress * 100).toInt()}%'),
+            ] else if (_error != null) ...[
+              const Icon(Icons.error_outline, color: Colors.red, size: 48),
+              const SizedBox(height: 8),
+              Text(_error!, style: const TextStyle(color: Colors.red)),
+              const SizedBox(height: 8),
+              OutlinedButton(onPressed: () {
+                setState(() {
+                  _scanning = true;
+                  _error = null;
+                  _progress = 0;
+                });
+                _startScan();
+              }, child: const Text('Retry'))
+            ] else if (_found.isEmpty) ...[
+              const Icon(Icons.search_off, size: 48, color: Colors.grey),
+              const SizedBox(height: 8),
+              const Text('No printers found on Port 9100.'),
+            ] else ...[
+              const Text('Found Printers:'),
+              const SizedBox(height: 8),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: _found.length,
+                  itemBuilder: (ctx, i) {
+                    final ip = _found[i];
+                    return ListTile(
+                      leading: const Icon(Icons.print),
+                      title: Text(ip),
+                      subtitle: const Text('Port 9100 Open'),
+                      onTap: () => Navigator.pop(context, ip),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+      ],
+    );
   }
 }
