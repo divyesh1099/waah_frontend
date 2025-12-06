@@ -1,6 +1,4 @@
 import 'dart:convert';
-import 'dart:convert' as convert;
-import 'dart:developer' as dev;
 import 'package:http/http.dart' as http;
 import 'package:dio/dio.dart';
 import 'package:http_parser/http_parser.dart';
@@ -741,7 +739,12 @@ class ApiClient {
       due: 0,
     );
 
-    return OrderDetail(order: ord, totals: totals);
+    final itemsList = (map['items'] as List?)
+        ?.map((e) => OrderItem.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList() ??
+        const [];
+
+    return OrderDetail(order: ord, totals: totals, items: itemsList);
   }
 
   Future<Order> getOrder(String id) async {
@@ -1356,6 +1359,7 @@ class ApiClient {
     String? branchId,
     DateTime? startDt, // NEW
     DateTime? endDt,   // NEW
+    String? orderId,   // NEW
   }) {
     final params = <String, dynamic>{
       'status': status?.name,
@@ -1369,7 +1373,6 @@ class ApiClient {
       params['branch_id'] = branchId.trim();
     }
 
-    // --- FIX starts here ---
     if (startDt != null) {
       params['start_dt'] = startDt.toUtc().toIso8601String();
     }
@@ -1377,6 +1380,11 @@ class ApiClient {
       params['end_dt'] = endDt.toUtc().toIso8601String();
     }
     // --- FIX ends here ---
+    
+    // NEW: orderId param
+    if (orderId != null && orderId.trim().isNotEmpty) {
+      params['order_id'] = orderId.trim();
+    }
 
     return listAll<KitchenTicket>(
       path: '/kot/tickets',

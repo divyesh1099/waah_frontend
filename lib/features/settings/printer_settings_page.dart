@@ -188,7 +188,7 @@ class PrinterSettingsPage extends ConsumerWidget {
                 ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<PrinterType>(
-                  value: type,
+                  initialValue: type,
                   decoration: const InputDecoration(labelText: 'Type'),
                   items: PrinterType.values
                       .map((t) => DropdownMenuItem(value: t, child: Text(t.name)))

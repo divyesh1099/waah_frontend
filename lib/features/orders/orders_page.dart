@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart'; // NEW: For navigation
@@ -8,7 +7,7 @@ import '../debug/queue_diag.dart';
 import '../../app/providers.dart';
 import '../orders/pending_orders.dart';
 import '../../data/models.dart';
-import '../kot/kot_page.dart'; // For invalidating kotTicketsProvider
+// For invalidating kotTicketsProvider
 
 // Note: All local queue helpers and local providers have been removed,
 // as they are now handled by global providers from app/providers.dart
@@ -272,9 +271,9 @@ class _OrderFilterSheet extends ConsumerWidget {
     final now = DateTime.now();
 
     // Helper to get a "clean" date (no time component)
-    DateTime _dateOnly(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+    DateTime dateOnly(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
 
-    void _pickRange() async {
+    void pickRange() async {
       final range = await showDateRangePicker(
         context: context,
         firstDate: DateTime(2023, 1, 1),
@@ -286,29 +285,29 @@ class _OrderFilterSheet extends ConsumerWidget {
       if (range != null) {
         // Set range from start of first day to end of second day
         notifier.setDateRange(
-          _dateOnly(range.start),
-          _dateOnly(range.end).add(const Duration(days: 1, milliseconds: -1)),
+          dateOnly(range.start),
+          dateOnly(range.end).add(const Duration(days: 1, milliseconds: -1)),
         );
       }
     }
 
-    void _setToday() {
-      final start = _dateOnly(now);
+    void setToday() {
+      final start = dateOnly(now);
       final end = start.add(const Duration(days: 1, milliseconds: -1));
       notifier.setDateRange(start, end);
     }
 
-    void _setYesterday() {
-      final start = _dateOnly(now.subtract(const Duration(days: 1)));
+    void setYesterday() {
+      final start = dateOnly(now.subtract(const Duration(days: 1)));
       final end = start.add(const Duration(days: 1, milliseconds: -1));
       notifier.setDateRange(start, end);
     }
 
-    void _clearDates() {
+    void clearDates() {
       notifier.setDateRange(null, null);
     }
 
-    String _formatRange() {
+    String formatRange() {
       if (filter.startDt == null || filter.endDt == null) return 'Any Date';
       final fmt = DateFormat('MMM d, yyyy');
       // Check for single-day range
@@ -332,7 +331,7 @@ class _OrderFilterSheet extends ConsumerWidget {
 
             // Status Dropdown
             DropdownButtonFormField<OrderStatus?>(
-              value: filter.status,
+              initialValue: filter.status,
               decoration: const InputDecoration(
                 labelText: 'Status',
                 border: OutlineInputBorder(),
@@ -352,14 +351,14 @@ class _OrderFilterSheet extends ConsumerWidget {
               children: [
                 Expanded(
                   child: Text(
-                    'Date: ${_formatRange()}',
+                    'Date: ${formatRange()}',
                     style: Theme.of(context).textTheme.titleSmall,
                   ),
                 ),
                 if (filter.startDt != null)
                   IconButton(
                     icon: const Icon(Icons.clear),
-                    onPressed: _clearDates,
+                    onPressed: clearDates,
                     tooltip: 'Clear Date Filter',
                   )
               ],
@@ -370,15 +369,15 @@ class _OrderFilterSheet extends ConsumerWidget {
               runSpacing: 8,
               children: [
                 FilledButton.tonal(
-                  onPressed: _setToday,
+                  onPressed: setToday,
                   child: const Text('Today'),
                 ),
                 FilledButton.tonal(
-                  onPressed: _setYesterday,
+                  onPressed: setYesterday,
                   child: const Text('Yesterday'),
                 ),
                 FilledButton(
-                  onPressed: _pickRange,
+                  onPressed: pickRange,
                   child: const Text('Custom...'),
                 ),
               ],
@@ -414,16 +413,85 @@ class _OrderTile extends StatelessWidget {
         : '${opened.year}-${_two(opened.month)}-${_two(opened.day)} '
         '${_two(opened.hour)}:${_two(opened.minute)}';
 
+    // Build the rich subtitle items
+    final details = <Widget>[];
+
+    // 1. Time & Table
+    final timeAndTable =
+        '$openedStr${order.tableId != null ? ' • Table ${order.tableId}' : ''}';
+    details.add(Text(timeAndTable));
+
+    // 2. PAX
+    if (order.pax != null) {
+      details.add(const SizedBox(height: 4));
+      details.add(Row(
+        children: [
+          const Icon(Icons.people, size: 14, color: Colors.grey),
+          const SizedBox(width: 4),
+          Text('${order.pax} Guests', style: Theme.of(context).textTheme.bodySmall),
+        ],
+      ));
+    }
+
+    // 3. Note
+    if (order.note != null && order.note!.isNotEmpty) {
+      details.add(const SizedBox(height: 4));
+      details.add(Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.sticky_note_2, size: 14, color: Colors.amber),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              order.note!,
+              style:
+                  Theme.of(context).textTheme.bodySmall?.copyWith(fontStyle: FontStyle.italic),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ));
+    }
+
+    // 4. Provider / Customer
+    if (order.provider != null || order.customerId != null) {
+       final info = [
+         if (order.provider != null) order.provider!.name,
+         if (order.customerId != null) 'Cust: ${order.customerId}'
+       ].join(' • ');
+       
+       if (info.isNotEmpty) {
+         details.add(const SizedBox(height: 4));
+         details.add(Row(
+          children: [
+             const Icon(Icons.info_outline, size: 14, color: Colors.blueGrey),
+             const SizedBox(width: 4),
+             Text(info, style: Theme.of(context).textTheme.bodySmall),
+          ],
+         ));
+       }
+    }
+
     return ListTile(
+      isThreeLine: true, // Allow subtitle to be taller
       title: Text(
         '#${order.orderNo} • ${order.channel.name}',
         style: const TextStyle(fontWeight: FontWeight.w600),
       ),
-      subtitle: Text(
-        'Opened: $openedStr'
-            '${order.tableId != null ? '  |  Table: ${order.tableId}' : ''}',
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: details,
       ),
-      trailing: _StatusChip(status: order.status),
+      trailing: InkWell(
+        onTap: () {
+          showDialog(
+            context: context,
+            builder: (_) => _ChangeOrderStatusDialog(order: order),
+          );
+        },
+        child: _StatusChip(status: order.status),
+      ),
       onTap: onTap,
     );
   }
@@ -595,11 +663,9 @@ class _Error extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: Padding(
-        padding:
-        const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(24),
         child: Column(
-          mainAxisSize:
-          MainAxisSize.min,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Text(
               'Failed to load orders:\n$e',
@@ -613,6 +679,98 @@ class _Error extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Dialog to change the main Order's status
+class _ChangeOrderStatusDialog extends ConsumerStatefulWidget {
+  const _ChangeOrderStatusDialog({required this.order});
+  final Order order;
+
+  @override
+  ConsumerState<_ChangeOrderStatusDialog> createState() =>
+      _ChangeOrderStatusDialogState();
+}
+
+class _ChangeOrderStatusDialogState
+    extends ConsumerState<_ChangeOrderStatusDialog> {
+  bool _isLoading = false;
+
+  // List of statuses a user can manually set
+  final _allowedStatuses = [
+    OrderStatus.OPEN,
+    OrderStatus.KITCHEN,
+    OrderStatus.READY,
+    OrderStatus.SERVED,
+    OrderStatus.CLOSED,
+    OrderStatus.VOID,
+  ];
+
+  Future<void> _updateStatus(OrderStatus newStatus) async {
+    setState(() => _isLoading = true);
+
+    try {
+      final api = ref.read(apiClientProvider);
+      final update = OrderStatusUpdate(
+        status: newStatus,
+        reason: 'Updated from Orders List Page',
+      );
+      await api.updateOrderStatus(widget.order.id!, update);
+
+      // Invalidate providers
+      ref.invalidate(ordersFutureProvider); 
+      // Also invalidate detail if it was open (though we are on list page)
+      // ref.invalidate(orderDetailFutureProvider(widget.order.id!)); 
+      // we can't easily invalidate specific dynamic provider family members without the id handy everywhere
+      // but invalidating ordersFutureProvider is the main thing for this page.
+
+      // If we want to be thorough:
+      // for (final status in KOTStatus.values) {
+      //   ref.invalidate(kotTicketsProvider(status));
+      // }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Order status updated to ${newStatus.name}')),
+        );
+        Navigator.pop(context); // Close the dialog
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update status: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SimpleDialog(
+      title: const Text('Set Order Status'),
+      children: _isLoading
+          ? [const Center(child: Padding(
+        padding: EdgeInsets.all(24.0),
+        child: CircularProgressIndicator(),
+      ))]
+          : [
+        for (final status in _allowedStatuses)
+          SimpleDialogOption(
+            onPressed: () => _updateStatus(status),
+            child: Row(
+              children: [
+                Expanded(child: Text(status.name)),
+                if (status == widget.order.status)
+                  const Icon(Icons.check, size: 16),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }

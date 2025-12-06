@@ -249,7 +249,7 @@ class _PhaseTimer {
     final now = DateTime.now();
     final inc = now.difference(_last).inMilliseconds;
     final total = now.difference(_t0).inMilliseconds;
-    dev.log('+$inc ms (total ${total} ms)', name: 'pos.timer.$name');
+    dev.log('+$inc ms (total $total ms)', name: 'pos.timer.$name');
     _last = now;
   }
 }
@@ -854,7 +854,7 @@ class _CategoryBar extends ConsumerWidget {
 
 /// NEW: One menu item row (replaces _ItemCard)
 class _MenuItemRow extends StatelessWidget {
-  const _MenuItemRow({Key? key, required this.item, required this.onTap}) : super(key: key);
+  const _MenuItemRow({super.key, required this.item, required this.onTap});
   final MenuItem item;
   final VoidCallback onTap;
 
@@ -1593,7 +1593,7 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
                   children: [
                     DropdownButtonFormField<OrderChannel>(
                       // Note: initialValue is deprecated, use value instead
-                      value: chosenChannel,
+                      initialValue: chosenChannel,
                       decoration: const InputDecoration(labelText: 'Channel'),
                       items: OrderChannel.values.map((ch) {
                         return DropdownMenuItem<OrderChannel>(
@@ -1627,7 +1627,7 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
                     if (chosenChannel == OrderChannel.DINE_IN)
                       DropdownButtonFormField<String?>(
                         // Note: initialValue is deprecated, use value instead
-                        value: chosenTableId,
+                        initialValue: chosenTableId,
                         decoration: const InputDecoration(
                           labelText: 'Table',
                         ),
@@ -1658,7 +1658,7 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
                     const SizedBox(height: 12),
                     // NEW: Add Order Status dropdown
                     DropdownButtonFormField<OrderStatus>(
-                      value: chosenStatus,
+                      initialValue: chosenStatus,
                       decoration: const InputDecoration(labelText: 'Set Order Status'),
                       // Only allow setting to "KITCHEN" or "OPEN"
                       items: [
@@ -1785,8 +1785,6 @@ class _VerticalCartViewState extends ConsumerState<_VerticalCartView> {
       PosCartState cart,
       _CheckoutRequest info, {
         bool preferFastPath = _kPreferFastPath,
-        bool autoPrintKot = _kAutoPrintKOT,
-        bool autoPrintInvoice = _kAutoPrintInvoice,
       }) async {
     final t = _PhaseTimer();
     final client = ref.read(apiClientProvider);

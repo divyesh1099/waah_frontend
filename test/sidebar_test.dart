@@ -78,7 +78,7 @@ void main() {
 }
 
 class AuthControllerMock extends AuthController {
-  AuthControllerMock(Ref ref, SharedPreferences prefs) : super(ref, prefs) {
+  AuthControllerMock(super.ref, super.prefs) {
     state = AuthState(
       token: 'token',
       me: MeInfo(

@@ -770,7 +770,9 @@ class OrderItem {
   final String? id;
   final String orderId;
   final String itemId;
+  final String? name; // NEW
   final String? variantId;
+  final String? variantLabel; // NEW
   final String? parentLineId;
   final double qty;
   final double unitPrice;
@@ -785,7 +787,9 @@ class OrderItem {
     this.id,
     required this.orderId,
     required this.itemId,
+    this.name, // NEW
     this.variantId,
+    this.variantLabel, // NEW
     this.parentLineId,
     required this.qty,
     required this.unitPrice,
@@ -801,7 +805,9 @@ class OrderItem {
     id: _str(j['id']),
     orderId: _str(j['order_id']) ?? '',
     itemId: _str(j['item_id']) ?? '',
+    name: _str(j['name']), // NEW
     variantId: _str(j['variant_id']),
+    variantLabel: _str(j['variant_label']), // NEW
     parentLineId: _str(j['parent_line_id']),
     qty: _numToDouble(j['qty']) ?? 0,
     unitPrice: _numToDouble(j['unit_price']) ?? 0,
@@ -1165,7 +1171,13 @@ class OrderTotals {
 class OrderDetail {
   final Order order;
   final OrderTotals totals;
-  OrderDetail({required this.order, required this.totals});
+  final List<OrderItem> items; // NEW
+
+  OrderDetail({
+    required this.order,
+    required this.totals,
+    this.items = const [], // NEW
+  });
 }
 
 class OrderStatusUpdate {

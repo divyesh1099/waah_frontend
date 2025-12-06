@@ -6,15 +6,13 @@
 // - showModalBottomSheet typed as <void>
 
 import 'dart:async';
-import 'dart:ui' show FontFeature;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';           // activeTenantIdProvider, activeBranchIdProvider
 import '../../data/models.dart';             // Order model
 import '../orders/pending_orders.dart';      // pendingOrdersProvider, notifier methods
-import '../../orders/orders_page.dart' hide ordersFutureProvider;      // ordersFutureProvider
+// ordersFutureProvider
 
 // -----------------------------
 // Public API
@@ -320,7 +318,7 @@ class _MRPState extends ConsumerState<_ManualResolvePicker> {
       children: [
         Expanded(
           child: DropdownButtonFormField<String>(
-            value: _selected,
+            initialValue: _selected,
             hint: const Text('Attach pending → order_no'),
             items: items,
             onChanged: (v) => setState(() => _selected = v),

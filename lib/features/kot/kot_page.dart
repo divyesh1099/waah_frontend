@@ -344,7 +344,7 @@ class KotCardData {
   }
 
   static int _deriveTicketNoFromMaps(dynamic t) {
-    int _asPositiveInt(dynamic v) {
+    int asPositiveInt(dynamic v) {
       if (v is int && v > 0) return v;
       if (v is String) {
         final m = RegExp(r'\d+').firstMatch(v);
@@ -364,7 +364,7 @@ class KotCardData {
         if (m is Map) {
           for (final k in const ['kotNo','kotNumber','kot_no','number','ticket','ticket_no','ticketNumber']) {
             final got = m[k];
-            final n = _asPositiveInt(got);
+            final n = asPositiveInt(got);
             if (n > 0) return n;
           }
         }
@@ -372,7 +372,7 @@ class KotCardData {
     } catch (_) {}
 
     // 2) Direct fields (check a small set explicitly; no dynamic string field eval)
-    dynamic _try(dynamic Function() f) {
+    dynamic tryGet(dynamic Function() f) {
       try { return f(); } catch (_) { return null; }
     }
 
@@ -386,8 +386,8 @@ class KotCardData {
           () => (t as dynamic).ticketNumber,
           () => (t as dynamic).no,
     ]) {
-      final v = _try(getter);
-      final n = _asPositiveInt(v);
+      final v = tryGet(getter);
+      final n = asPositiveInt(v);
       if (n > 0) return n;
     }
 
@@ -433,7 +433,7 @@ class KotCardData {
     } catch (_) {}
 
     // Extra info
-    String? _s(dynamic x) => (x == null) ? null : (x.toString().trim().isEmpty ? null : x.toString());
+    String? s0(dynamic x) => (x == null) ? null : (x.toString().trim().isEmpty ? null : x.toString());
 
     String? customerName;
     String? customerPhone;
@@ -443,12 +443,12 @@ class KotCardData {
     String? riderStatus;
 
     // Try multiple likely fields to be robust across backends
-    try { customerName = _s((t as dynamic).customerName ?? (t as dynamic).customer?.name); } catch (_) {}
-    try { customerPhone = _s((t as dynamic).customerPhone ?? (t as dynamic).customer?.phone); } catch (_) {}
-    try { deliveryAddress = _s((t as dynamic).deliveryAddress ?? (t as dynamic).address); } catch (_) {}
-    try { providerOrderId = _s((t as dynamic).providerOrderId ?? (t as dynamic).externalOrderId); } catch (_) {}
-    try { riderName = _s((t as dynamic).riderName ?? (t as dynamic).agentName); } catch (_) {}
-    try { riderStatus = _s((t as dynamic).riderStatus ?? (t as dynamic).agentStatus); } catch (_) {}
+    try { customerName = s0((t as dynamic).customerName ?? (t as dynamic).customer?.name); } catch (_) {}
+    try { customerPhone = s0((t as dynamic).customerPhone ?? (t as dynamic).customer?.phone); } catch (_) {}
+    try { deliveryAddress = s0((t as dynamic).deliveryAddress ?? (t as dynamic).address); } catch (_) {}
+    try { providerOrderId = s0((t as dynamic).providerOrderId ?? (t as dynamic).externalOrderId); } catch (_) {}
+    try { riderName = s0((t as dynamic).riderName ?? (t as dynamic).agentName); } catch (_) {}
+    try { riderStatus = s0((t as dynamic).riderStatus ?? (t as dynamic).agentStatus); } catch (_) {}
 
     // createdAt
     final created = _extractCreatedAt(t);
@@ -1694,9 +1694,9 @@ class _FilterSheet extends ConsumerWidget {
     final now = DateTime.now();
 
     // Helper to get a "clean" date (no time component)
-    DateTime _dateOnly(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+    DateTime dateOnly(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
 
-    void _pickRange() async {
+    void pickRange() async {
       final range = await showDateRangePicker(
         context: context,
         firstDate: DateTime(2023, 1, 1),
@@ -1708,33 +1708,33 @@ class _FilterSheet extends ConsumerWidget {
       if (range != null) {
         // Set range from start of first day to end of second day
         notifier.setDateRange(
-          _dateOnly(range.start),
-          _dateOnly(range.end).add(const Duration(days: 1, milliseconds: -1)),
+          dateOnly(range.start),
+          dateOnly(range.end).add(const Duration(days: 1, milliseconds: -1)),
         );
         if (context.mounted) Navigator.pop(context);
       }
     }
 
-    void _setToday() {
-      final start = _dateOnly(now);
+    void setToday() {
+      final start = dateOnly(now);
       final end = start.add(const Duration(days: 1, milliseconds: -1));
       notifier.setDateRange(start, end);
       Navigator.pop(context);
     }
 
-    void _setYesterday() {
-      final start = _dateOnly(now.subtract(const Duration(days: 1)));
+    void setYesterday() {
+      final start = dateOnly(now.subtract(const Duration(days: 1)));
       final end = start.add(const Duration(days: 1, milliseconds: -1));
       notifier.setDateRange(start, end);
       Navigator.pop(context);
     }
 
-    void _clear() {
+    void clear() {
       notifier.clear();
       Navigator.pop(context);
     }
 
-    String _formatRange() {
+    String formatRange() {
       if (filter.startDt == null || filter.endDt == null) return 'None';
       final fmt = DateFormat('MMM d, yyyy');
       // Check for single-day range
@@ -1762,27 +1762,27 @@ class _FilterSheet extends ConsumerWidget {
               if (filter.startDt != null)
                 IconButton(
                   icon: const Icon(Icons.clear),
-                  onPressed: _clear,
+                  onPressed: clear,
                 )
             ],
           ),
           const SizedBox(height: 8),
-          Text('Current: ${_formatRange()}'),
+          Text('Current: ${formatRange()}'),
           const SizedBox(height: 16),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
               FilledButton.tonal(
-                onPressed: _setToday,
+                onPressed: setToday,
                 child: const Text('Today'),
               ),
               FilledButton.tonal(
-                onPressed: _setYesterday,
+                onPressed: setYesterday,
                 child: const Text('Yesterday'),
               ),
               FilledButton(
-                onPressed: _pickRange,
+                onPressed: pickRange,
                 child: const Text('Custom Range...'),
               ),
             ],

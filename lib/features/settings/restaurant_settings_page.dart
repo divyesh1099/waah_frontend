@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:waah_frontend/app/providers.dart';
-import 'package:waah_frontend/data/api_client.dart';
 import 'package:waah_frontend/data/local/app_db.dart';
 
 class RestaurantSettingsPage extends ConsumerStatefulWidget {
@@ -160,10 +159,7 @@ class _RestaurantSettingsPageState extends ConsumerState<RestaurantSettingsPage>
                   Center(
                     child: Column(
                       children: [
-                        if (logoUrl != null)
-                          Image.network(logoUrl.toString(), height: 100, fit: BoxFit.contain)
-                        else
-                          const Icon(Icons.store, size: 80, color: Colors.grey),
+                        Image.network(logoUrl.toString(), height: 100, fit: BoxFit.contain),
                         const SizedBox(height: 8),
                         OutlinedButton.icon(
                           onPressed: _loading ? null : _uploadLogo,

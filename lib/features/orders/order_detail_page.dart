@@ -2,12 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
 import 'package:waah_frontend/app/providers.dart' hide ordersFutureProvider;
 import 'package:waah_frontend/data/models.dart';
-import 'package:waah_frontend/features/kot/kot_page.dart'
-    show kotTicketsProvider;
+
 
 import '../../orders/orders_page.dart'; // For invalidation
 
@@ -25,20 +22,13 @@ class OrderDetailPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final orderDetailAsync = ref.watch(orderDetailFutureProvider(orderId));
 
-    // This provider will fetch ALL KOTs, and we'll filter them below
-    final allKotsAsync = ref.watch(filteredKotTicketsProvider);
-
     // Helper to manually refresh all data
     Future<void> refresh() async {
       // Invalidate all providers this page depends on
       ref.invalidate(orderDetailFutureProvider(orderId));
-      ref.invalidate(filteredKotTicketsProvider);
 
       // Also invalidate the providers for the other main pages
       ref.invalidate(ordersFutureProvider);
-      for (final status in KOTStatus.values) {
-        ref.invalidate(kotTicketsProvider(status));
-      }
     }
 
     return Scaffold(
@@ -60,11 +50,8 @@ class OrderDetailPage extends ConsumerWidget {
                 // Card 1: Order Status
                 _OrderStatusCard(order: order),
 
-                // Card 2: KOT Statuses
-                _KotStatusCard(
-                  orderId: order.id!,
-                  allKotsAsync: allKotsAsync,
-                ),
+                // Card 2: Items
+                _OrderItemsCard(items: detail.items),
 
                 // Card 3: Order Totals
                 _OrderTotalsCard(totals: totals),
@@ -177,9 +164,6 @@ class _ChangeOrderStatusDialogState
       // Invalidate everything to refresh all pages
       ref.invalidate(orderDetailFutureProvider(widget.order.id!));
       ref.invalidate(ordersFutureProvider); // For the main orders list
-      for (final status in KOTStatus.values) {
-        ref.invalidate(kotTicketsProvider(status)); // For the KOT page
-      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -226,14 +210,13 @@ class _ChangeOrderStatusDialogState
   }
 }
 
-/// Card to manage KOT statuses for this order
-class _KotStatusCard extends ConsumerWidget {
-  const _KotStatusCard({required this.orderId, required this.allKotsAsync});
-  final String orderId;
-  final AsyncValue<List<KitchenTicket>> allKotsAsync;
+/// Card to show the list of ordered items
+class _OrderItemsCard extends StatelessWidget {
+  const _OrderItemsCard({required this.items});
+  final List<OrderItem> items;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -242,153 +225,43 @@ class _KotStatusCard extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Kitchen Tickets',
+              'Items',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 8),
-            allKotsAsync.when(
-              data: (allKots) {
-                // Filter KOTs just for this order
-                final orderKots =
-                allKots.where((kot) => kot.orderId == orderId).toList();
-
-                if (orderKots.isEmpty) {
-                  return const ListTile(
-                    dense: true,
-                    title: Text('No KOTs found for this order.'),
-                  );
-                }
-
-                return Column(
-                  children:
-                  orderKots.map((kot) => _KotTile(kot: kot)).toList(),
-                );
-              },
-              loading: () => const Center(child: LinearProgressIndicator()),
-              error: (e, st) => ListTile(
-                title: const Text('Error loading KOTs'),
-                subtitle: Text('$e'),
-              ),
-            ),
+            if (items.isEmpty)
+              const Text('No items in this order.', style: TextStyle(color: Colors.grey)),
+            ...items.map((item) {
+              final sub = <String>[];
+              if (item.variantLabel != null) sub.add(item.variantLabel!);
+              // if (item.modifiers.isNotEmpty) sub.add ... (if we had modifiers logic ready)
+              
+              return ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: Text(item.name ?? 'Unknown Item'),
+                subtitle: sub.isNotEmpty ? Text(sub.join(', ')) : null,
+                leading: CircleAvatar(
+                  radius: 16,
+                  backgroundColor: Colors.grey.shade100,
+                  foregroundColor: Colors.black87,
+                  child: Text(
+                    _fmtQty(item.qty), 
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)
+                  ),
+                ),
+                trailing: Text('₹ ${(item.unitPrice * item.qty).toStringAsFixed(2)}'),
+              );
+            }),
           ],
         ),
       ),
     );
   }
-}
-
-/// A single KOT tile with a status-change button
-class _KotTile extends StatelessWidget {
-  const _KotTile({required this.kot});
-  final KitchenTicket kot;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      dense: true,
-      contentPadding: EdgeInsets.zero,
-      title: Text('KOT #${kot.ticketNo} (${kot.stationName ?? "Main"})'),
-      subtitle: Text(kot.lines.map((e) => '${e.qty}x ${e.name}').join(', ')),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _KotStatusChip(status: kot.status),
-          const SizedBox(width: 8),
-          IconButton.outlined(
-            icon: const Icon(Icons.edit, size: 16),
-            onPressed: () {
-              showDialog(
-                context: context,
-                builder: (_) => _ChangeKotStatusDialog(kot: kot),
-              );
-            },
-          )
-        ],
-      ),
-    );
-  }
-}
-
-/// Dialog to change a single KOT's status
-class _ChangeKotStatusDialog extends ConsumerStatefulWidget {
-  const _ChangeKotStatusDialog({required this.kot});
-  final KitchenTicket kot;
-
-  @override
-  ConsumerState<_ChangeKotStatusDialog> createState() =>
-      _ChangeKotStatusDialogState();
-}
-
-class _ChangeKotStatusDialogState extends ConsumerState<_ChangeKotStatusDialog> {
-  bool _isLoading = false;
-
-  // List of statuses a user can manually set
-  final _allowedStatuses = [
-    KOTStatus.NEW,
-    KOTStatus.IN_PROGRESS,
-    KOTStatus.READY,
-    KOTStatus.DONE,
-  ];
-
-  Future<void> _updateStatus(KOTStatus newStatus) async {
-    if (widget.kot.id == null) return;
-    setState(() => _isLoading = true);
-
-    try {
-      final api = ref.read(apiClientProvider);
-      await api.patchKitchenTicketStatus(widget.kot.id!, newStatus);
-
-      // Invalidate everything
-      ref.invalidate(filteredKotTicketsProvider); // For this page
-      for (final status in KOTStatus.values) {
-        ref.invalidate(kotTicketsProvider(status)); // For the KOT page
-      }
-      ref.invalidate(orderDetailFutureProvider(widget.kot.orderId)); // Refresh order
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text(
-                  'KOT #${widget.kot.ticketNo} status updated to ${newStatus.name}')),
-        );
-        Navigator.pop(context); // Close the dialog
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update KOT status: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SimpleDialog(
-      title: Text('Set KOT #${widget.kot.ticketNo} Status'),
-      children: _isLoading
-          ? [const Center(child: Padding(
-        padding: EdgeInsets.all(24.0),
-        child: CircularProgressIndicator(),
-      ))]
-          : [
-        for (final status in _allowedStatuses)
-          SimpleDialogOption(
-            onPressed: () => _updateStatus(status),
-            child: Row(
-              children: [
-                Expanded(child: Text(status.name)),
-                if (status == widget.kot.status)
-                  const Icon(Icons.check, size: 16),
-              ],
-            ),
-          ),
-      ],
-    );
+    
+  String _fmtQty(double q) {
+      if (q == q.toInt().toDouble()) return q.toInt().toString();
+      return q.toString();
   }
 }
 
@@ -592,44 +465,7 @@ class _StatusChip extends StatelessWidget {
   }
 }
 
-/// Colored chip for KOT status
-class _KotStatusChip extends StatelessWidget {
-  const _KotStatusChip({required this.status});
-  final KOTStatus status;
 
-  @override
-  Widget build(BuildContext context) {
-    final Color bg;
-    switch (status) {
-      case KOTStatus.NEW:
-        bg = Colors.orange.shade100;
-        break;
-      case KOTStatus.IN_PROGRESS:
-        bg = Colors.yellow.shade100;
-        break;
-      case KOTStatus.READY:
-        bg = Colors.lightGreen.shade100;
-        break;
-      case KOTStatus.DONE:
-        bg = Colors.green.shade100;
-        break;
-      case KOTStatus.CANCELLED:
-        bg = Colors.red.shade100;
-        break;
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        status.name,
-        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 10),
-      ),
-    );
-  }
-}
 
 /// row like  "Subtotal .... 123.45"
 class _TotalRow extends StatelessWidget {

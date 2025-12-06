@@ -417,6 +417,21 @@ FutureProvider.autoDispose<List<KitchenTicket>>((ref) {
   );
 });
 
+// NEW: Optimized specific order KOT fetcher
+final orderKotTicketsProvider =
+FutureProvider.autoDispose.family<List<KitchenTicket>, String>((ref, orderId) {
+  final api = ref.watch(apiClientProvider);
+  final tenantId = ref.watch(activeTenantIdProvider);
+  final branchId = ref.watch(activeBranchIdProvider);
+
+  // Still pass tenant/branch for scoping, plus orderId
+  return api.fetchKitchenTickets(
+    tenantId: tenantId,
+    branchId: branchId,
+    orderId: orderId,
+  );
+});
+
 // Persisted “device id” for syncPush
 final deviceIdProvider = Provider<String>((ref) {
   final prefs = ref.watch(prefsProvider);
