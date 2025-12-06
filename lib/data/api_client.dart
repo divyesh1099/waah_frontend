@@ -2046,6 +2046,12 @@ class ApiClient {
     await _delete('/settings/printers/$id');
   }
 
+  // POST /settings/printers/{id}/test
+  Future<Map<String, dynamic>> testPrinter(String id) async {
+    final r = await _post('/settings/printers/$id/test');
+    return Map<String, dynamic>.from(r as Map);
+  }
+
 
 
   Future<void> printKot({required String orderId, String? stationId, String? printerId}) async {
