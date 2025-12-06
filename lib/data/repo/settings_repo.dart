@@ -249,12 +249,15 @@ class SettingsRepo {
 
   Future<void> createPrinterOptimistic(String tenantId, String branchId, Printer p) async {
     final key = _pkPrinters(tenantId, branchId);
+    
+    // Add to local list immediately for UI
     final list = [...(_printersMap[key] ?? const <Printer>[]), p];
     _emitPrinters(key, list);
     _persistPrinters(key);
     
+    // CRITICAL: Wait for backend to get real ID so test button works
     try {
-      await _client.createPrinter(
+      final realId = await _client.createPrinter(
         tenantId: p.tenantId,
         branchId: p.branchId,
         name: p.name,
@@ -263,8 +266,32 @@ class SettingsRepo {
         cashDrawerEnabled: p.cashDrawerEnabled,
         cashDrawerCode: p.cashDrawerCode,
       );
+      
+      // Replace temp ID with real ID from backend
+      if (realId.isNotEmpty && realId != p.id) {
+        final updatedList = list.map((printer) {
+          if (printer.id == p.id) {
+            // Create new printer with real ID
+            return Printer(
+              id: realId,
+              tenantId: printer.tenantId,
+              branchId: printer.branchId,
+              name: printer.name,
+              type: printer.type,
+              connectionUrl: printer.connectionUrl,
+              isDefault: printer.isDefault,
+              cashDrawerEnabled: printer.cashDrawerEnabled,
+              cashDrawerCode: printer.cashDrawerCode,
+            );
+          }
+          return printer;
+        }).toList();
+        _emitPrinters(key, updatedList);
+        _persistPrinters(key);
+      }
     } catch (e) {
       if (kDebugMode) print('[SettingsRepo] createPrinter failed: $e');
+      // Keep the optimistic version even if sync fails
     }
   }
 
