@@ -91,6 +91,11 @@ android {
 
     // (Optional) If you ever ship native libs, this helps Play prelaunch symbols
     // ndkVersion = flutter.ndkVersion
+
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
 }
 
 flutter {

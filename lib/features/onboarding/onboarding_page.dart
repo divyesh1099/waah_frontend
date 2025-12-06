@@ -34,6 +34,7 @@ class _OnboardingPageState
   final _tenantName =
   TextEditingController(text: 'Restaurant Demo'); // brand / tenant
   final _adminName = TextEditingController(text: 'Owner');
+  final _username = TextEditingController();
   final _mobile = TextEditingController(text: '98XXXXXXXX');
   final _email = TextEditingController();
   final _password = TextEditingController(text: 'admin');
@@ -70,6 +71,7 @@ class _OnboardingPageState
       _appSecret,
       _tenantName,
       _adminName,
+      _username,
       _mobile,
       _email,
       _password,
@@ -107,6 +109,7 @@ class _OnboardingPageState
         appSecret: _appSecret.text.trim(),
         tenantName: _tenantName.text.trim(),
         adminName: _adminName.text.trim(),
+        username: _username.text.trim().isEmpty ? null : _username.text.trim(),
         mobile: _mobile.text.trim(),
         email:
         _email.text.trim().isEmpty ? null : _email.text.trim(),
@@ -553,6 +556,7 @@ class _OnboardingPageState
           formKey: _formAdmin,
           tenantName: _tenantName,
           adminName: _adminName,
+          username: _username,
           mobile: _mobile,
           email: _email,
           password: _password,
@@ -736,6 +740,7 @@ class _AdminStep extends StatelessWidget {
   final TextEditingController appSecret;
   final TextEditingController tenantName;
   final TextEditingController adminName;
+  final TextEditingController username;
   final TextEditingController mobile;
   final TextEditingController email;
   final TextEditingController password;
@@ -746,6 +751,7 @@ class _AdminStep extends StatelessWidget {
     required this.appSecret,
     required this.tenantName,
     required this.adminName,
+    required this.username,
     required this.mobile,
     required this.email,
     required this.password,
@@ -800,25 +806,32 @@ class _AdminStep extends StatelessWidget {
                     decoration: const InputDecoration(
                       labelText: 'Owner Name',
                     ),
-                    validator: (v) => (v == null || v.isEmpty)
-                        ? 'Required'
-                        : null,
+                    validator: (v) =>
+                    (v == null || v.isEmpty) ? 'Required' : null,
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: TextFormField(
-                    controller: mobile,
-                    keyboardType: TextInputType.phone,
+                    controller: username,
                     decoration: const InputDecoration(
-                      labelText: 'Mobile',
+                      labelText: 'Username (Optional)',
                     ),
-                    validator: (v) => (v == null || v.isEmpty)
-                        ? 'Required'
-                        : null,
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: 12),
+
+            TextFormField(
+              controller: mobile,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(
+                labelText: 'Mobile',
+              ),
+              validator: (v) => (v == null || v.isEmpty)
+                  ? 'Required'
+                  : null,
             ),
             const SizedBox(height: 12),
 

@@ -58,7 +58,7 @@ class AuthController extends StateNotifier<AuthState> {
 
   static const _kTokenKey   = 'auth_token';
   static const _kMeJsonKey  = 'auth_me_json';
-  static const _kMobileKey  = 'last_mobile';
+  static const _kIdentifierKey  = 'last_identifier'; // Changed from last_mobile
   static const _kTenantKey  = 'active_tenant_id';
   static const _kBranchKey  = 'active_branch_id';
   static const _kPinSaltKey = 'pin_salt';
@@ -88,7 +88,7 @@ class AuthController extends StateNotifier<AuthState> {
   void beginLoading() => state = state.copyWith(loading: true, error: null);
   void fail(String message) => state = state.copyWith(loading: false, error: message);
 
-  Future<void> login(String mobile, String password, {String? pin}) async {
+  Future<void> login(String identifier, String password, {String? pin}) async {
     state = state.copyWith(loading: true, error: null);
 
     final apiBase = _ref.read(apiBaseClientProvider);
@@ -101,8 +101,8 @@ class AuthController extends StateNotifier<AuthState> {
       // Load /auth/me now that apiClientProvider will rebuild with token
       await refreshMe();
 
-      // Cache mobile
-      _prefs.setString(_kMobileKey, mobile);
+      // Cache identifier
+      _prefs.setString(_kIdentifierKey, identifier);
 
       // If we have me, persist tenant/branch and pin hash
       final me = state.me;
@@ -126,23 +126,32 @@ class AuthController extends StateNotifier<AuthState> {
       if (usedPin != null && usedPin.isNotEmpty) {
         final salt = _prefs.getString(_kPinSaltKey) ?? _newSalt();
         _prefs.setString(_kPinSaltKey, salt);
-        final h = hashPin(mobile: mobile, pin: usedPin, salt: salt);
+        final h = hashPin(identifier: identifier, pin: usedPin, salt: salt);
         _prefs.setString(_kPinHashKey, h);
       }
     }
 
     try {
+      // Determine if identifier is mobile or username
+      // Simple heuristic: if it contains only digits, it's a mobile.
+      final isMobile = RegExp(r'^\d+$').hasMatch(identifier);
+      
       // Prefer PIN if provided (your backend already supports &pin=)
-      final token = await apiBase.login(mobile: mobile, password: password, pin: pin);
+      final token = await apiBase.login(
+        mobile: isMobile ? identifier : null,
+        username: !isMobile ? identifier : null,
+        password: password, 
+        pin: pin
+      );
       await afterOnlineLogin(token, usedPin: pin);
     } on ApiException catch (e) {
       // If network/host unreachable OR offline and user gave a PIN: try offline unlock
-      final offlineOk = await _tryOfflineUnlock(mobile: mobile, pin: pin);
+      final offlineOk = await _tryOfflineUnlock(identifier: identifier, pin: pin);
       if (offlineOk) return;
       state = state.copyWith(loading: false, error: e.message);
     } catch (_) {
       // Non-HTTP failure (likely offline): attempt offline unlock if PIN present
-      final offlineOk = await _tryOfflineUnlock(mobile: mobile, pin: pin);
+      final offlineOk = await _tryOfflineUnlock(identifier: identifier, pin: pin);
       if (!offlineOk) {
         state = state.copyWith(loading: false, error: 'Login failed');
       }
@@ -174,7 +183,7 @@ class AuthController extends StateNotifier<AuthState> {
 
   String _newSalt() => DateTime.now().microsecondsSinceEpoch.toString();
 
-  Future<bool> _tryOfflineUnlock({required String mobile, String? pin}) async {
+  Future<bool> _tryOfflineUnlock({required String identifier, String? pin}) async {
     // Only if a PIN is provided AND we have a stored hash
     if (pin == null || pin.isEmpty) return false;
 
@@ -191,7 +200,7 @@ class AuthController extends StateNotifier<AuthState> {
     final canVerify = salt != null && hash != null && hash.isNotEmpty && meJson != null && cachedToken != null;
     if (!canVerify) return false;
 
-    final ok = verifyPin(mobile: mobile, pin: pin, salt: salt, storedHash: hash);
+    final ok = verifyPin(identifier: identifier, pin: pin, salt: salt, storedHash: hash);
     if (!ok) return false;
 
     // Accept offline unlock using cached token + me

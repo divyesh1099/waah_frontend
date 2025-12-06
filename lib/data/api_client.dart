@@ -243,11 +243,14 @@ class ApiClient {
   // ---------- Auth ----------
 
   Future<String> login({
-    required String mobile,
-    String? password,   // <- make optional
+    String? mobile,
+    String? username,
+    String? password,
     String? pin,
   }) async {
-    final qp = <String, String>{'mobile': mobile};
+    final qp = <String, String>{};
+    if (mobile != null && mobile.isNotEmpty) qp['mobile'] = mobile;
+    if (username != null && username.isNotEmpty) qp['username'] = username;
     if (password != null && password.isNotEmpty) qp['password'] = password;
     if (pin != null && pin.isNotEmpty) qp['pin'] = pin;
 
@@ -271,7 +274,8 @@ class ApiClient {
     required String appSecret,
     required String tenantName,
     required String adminName,
-    required String mobile,
+    String? mobile,
+    String? username,
     String? email,
     required String password,
     required String pin,
@@ -283,7 +287,8 @@ class ApiClient {
       body: jsonEncode({
         'tenant_name': tenantName,
         'admin_name': adminName,
-        'mobile': mobile,
+        if (mobile != null) 'mobile': mobile,
+        if (username != null) 'username': username,
         'email': email,
         'password': password,
         'pin': pin,

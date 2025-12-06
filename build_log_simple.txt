@@ -1,0 +1,19 @@
+Running Gradle task 'assembleRelease'...                        
+Font asset "CupertinoIcons.ttf" was tree-shaken, reducing it from 257628 to 848 bytes (99.7% reduction). Tree-shaking can be disabled by providing the --no-tree-shake-icons flag when building your app.
+Font asset "MaterialIcons-Regular.otf" was tree-shaken, reducing it from 1645184 to 9052 bytes (99.4% reduction). Tree-shaking can be disabled by providing the --no-tree-shake-icons flag when building your app.
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:lintVitalAnalyzeRelease'.
+> java.nio.file.FileSystemException: C:\Users\Admin\Desktop\Divyesh\Waah\waah_frontend\build\app\intermediates\lint-cache\lintVitalAnalyzeRelease\migrated-jars\androidx.lifecycle.lint.LiveDataCoreIssueRegistry-32b654e6cacc2c23..jar: The process cannot access the file because it is being used by another process
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 4s
+Running Gradle task 'assembleRelease'...                            5.2s
+Gradle task assembleRelease failed with exit code 1

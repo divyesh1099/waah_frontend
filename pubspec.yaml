@@ -3,7 +3,7 @@ description: POS frontend
 publish_to: "none"
 
 # 🔁 bump both parts on each Play update
-version: 1.0.0+2
+version: 1.0.0+4
 
 environment:
     sdk: ">=3.4.0 <4.0.0"

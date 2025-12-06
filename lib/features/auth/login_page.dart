@@ -15,7 +15,7 @@ class LoginPage extends ConsumerStatefulWidget {
 }
 
 class _LoginPageState extends ConsumerState<LoginPage> {
-  final _mobile = TextEditingController(); // no prefill
+  final _identifier = TextEditingController(); // no prefill
   final _pass   = TextEditingController(); // no prefill
   final _pin    = TextEditingController(); // no prefill
   final _form   = GlobalKey<FormState>();
@@ -31,16 +31,16 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     final hasSavedPin = (prefs.getString('pin_hash') ?? '').isNotEmpty;
     _usePin = hasSavedPin;
 
-    // Optionally pre-fill only the mobile after first successful login
-    final lastMobile = prefs.getString('last_mobile');
-    if (lastMobile != null && lastMobile.isNotEmpty) {
-      _mobile.text = lastMobile;
+    // Optionally pre-fill only the identifier after first successful login
+    final lastId = prefs.getString('last_identifier');
+    if (lastId != null && lastId.isNotEmpty) {
+      _identifier.text = lastId;
     }
   }
 
   @override
   void dispose() {
-    _mobile.dispose();
+    _identifier.dispose();
     _pass.dispose();
     _pin.dispose();
     super.dispose();
@@ -50,7 +50,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     if (!_form.currentState!.validate()) return;
 
     await ref.read(authControllerProvider.notifier).login(
-      _mobile.text.trim(),
+      _identifier.text.trim(),
       _usePin ? '' : _pass.text,
       pin: _usePin ? _pin.text.trim() : null,
     );
@@ -60,10 +60,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     }
   }
 
-  String? _mobileValidator(String? v) {
+  String? _identifierValidator(String? v) {
     if (v == null || v.trim().isEmpty) return 'Required';
-    final t = v.trim();
-    if (t.length < 8) return 'Enter valid mobile';
     return null;
   }
 
@@ -118,11 +116,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     }),
 
                     TextFormField(
-                      controller: _mobile,
-                      decoration: const InputDecoration(labelText: 'Mobile'),
-                      keyboardType: TextInputType.phone,
-                      validator: _mobileValidator,
-                      autofillHints: const [AutofillHints.telephoneNumber],
+                      controller: _identifier,
+                      decoration: const InputDecoration(labelText: 'Username or Mobile'),
+                      keyboardType: TextInputType.text,
+                      validator: _identifierValidator,
+                      autofillHints: const [AutofillHints.username],
                     ),
                     const SizedBox(height: 12),
 
