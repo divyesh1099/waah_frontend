@@ -1021,6 +1021,78 @@ class ApiClient {
     );
   }
 
+  // --- NEW: Reports ---
+
+  Future<List<Map<String, dynamic>>> getSalesReport({
+    required DateTime startDt,
+    required DateTime endDt,
+    String? tenantId,
+    String? branchId,
+    String groupBy = 'date',
+  }) async {
+    final r = await _get(
+      '/reports/sales',
+      params: {
+        'start_dt': startDt.toUtc().toIso8601String(),
+        'end_dt': endDt.toUtc().toIso8601String(),
+        if (tenantId != null) 'tenant_id': tenantId,
+        if (branchId != null) 'branch_id': branchId,
+        'group_by': groupBy,
+      },
+    );
+    if (r is List) {
+      return List<Map<String, dynamic>>.from(
+          r.map((e) => Map<String, dynamic>.from(e as Map)));
+    }
+    return [];
+  }
+
+  Future<List<Map<String, dynamic>>> getItemSalesReport({
+    required DateTime startDt,
+    required DateTime endDt,
+    String? tenantId,
+    String? branchId,
+    int limit = 20,
+  }) async {
+    final r = await _get(
+      '/reports/items',
+      params: {
+        'start_dt': startDt.toUtc().toIso8601String(),
+        'end_dt': endDt.toUtc().toIso8601String(),
+        if (tenantId != null) 'tenant_id': tenantId,
+        if (branchId != null) 'branch_id': branchId,
+        'limit': limit,
+      },
+    );
+    if (r is List) {
+      return List<Map<String, dynamic>>.from(
+          r.map((e) => Map<String, dynamic>.from(e as Map)));
+    }
+    return [];
+  }
+
+  Future<List<Map<String, dynamic>>> getCategorySalesReport({
+    required DateTime startDt,
+    required DateTime endDt,
+    String? tenantId,
+    String? branchId,
+  }) async {
+    final r = await _get(
+      '/reports/categories',
+      params: {
+        'start_dt': startDt.toUtc().toIso8601String(),
+        'end_dt': endDt.toUtc().toIso8601String(),
+        if (tenantId != null) 'tenant_id': tenantId,
+        if (branchId != null) 'branch_id': branchId,
+      },
+    );
+    if (r is List) {
+      return List<Map<String, dynamic>>.from(
+          r.map((e) => Map<String, dynamic>.from(e as Map)));
+    }
+    return [];
+  }
+
   Future<BackupConfig> createBackupConfig(
       BackupConfig cfg) =>
       createOne<BackupConfig>(
@@ -1240,6 +1312,12 @@ class ApiClient {
     );
 
     return out;
+  }
+
+  // POST /orders/{id}/kot
+  Future<Map<String, dynamic>> fireKot(String orderId) async {
+    final result = await _post('/orders/$orderId/kot');
+    return result as Map<String, dynamic>;
   }
 
   // GET /settings/restaurant?tenant_id=...&branch_id=...

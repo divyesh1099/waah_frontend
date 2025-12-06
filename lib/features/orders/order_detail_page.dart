@@ -339,6 +339,34 @@ class _OrderActionsCard extends ConsumerWidget {
           children: [
             Expanded(
               child: FilledButton.icon(
+                icon: const Icon(Icons.soup_kitchen),
+                label: const Text('Fire KOT'),
+                style: FilledButton.styleFrom(backgroundColor: Colors.deepOrange),
+                onPressed: () async {
+                  final api = ref.read(apiClientProvider);
+                  try {
+                    final res = await api.fireKot(order.id!);
+                    final msg = res['message'] ?? 'KOT Fired';
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(msg)),
+                      );
+                    }
+                    ref.invalidate(ordersFutureProvider);
+                    ref.invalidate(orderDetailFutureProvider(order.id!));
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Failed to fire KOT: $e')),
+                      );
+                    }
+                  }
+                },
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: FilledButton.icon(
                 icon: const Icon(Icons.receipt_long),
                 label: const Text('Invoice'),
                 onPressed: () async {

@@ -1420,6 +1420,8 @@ Future<void> _changeStatus(
   if (context.mounted) {
     invalidate(kotTicketsProvider(sourceStatus));
     invalidate(kotTicketsProvider(target));
+    // CRITICAL: Invalidate orders list so Orders screen updates when KOT status changes
+    invalidate(ordersFutureProvider);
   }
 
   try {
