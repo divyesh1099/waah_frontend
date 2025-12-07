@@ -86,6 +86,23 @@ class InventoryRepo {
   Future<List<Map<String, dynamic>>> lowStock({String? branchId}) {
     return api.lowStock(branchId: branchId);
   }
+
+  // CSV helpers
+  Future<Map<String, dynamic>> importIngredientsCsv(String csvText, {String? branchId}) {
+    return api.importIngredientsCsv(csvText, branchId: branchId);
+  }
+
+  Future<String> exportIngredientsCsv({String? branchId}) {
+    return api.exportIngredientsCsv(branchId: branchId);
+  }
+
+  Future<Map<String, dynamic>> importCashCsv(String csvText) {
+    return api.importCashCsv(csvText);
+  }
+
+  Future<String> exportCashCsv({String? shiftId, String? branchId}) {
+    return api.exportCashCsv(shiftId: shiftId, branchId: branchId);
+  }
 }
 
 /// simple helper structs

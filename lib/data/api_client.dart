@@ -1002,6 +1002,43 @@ class ApiClient {
     return <Map<String, dynamic>>[];
   }
 
+  // CSV helpers for Inventory + Cash
+  Future<Map<String, dynamic>> importIngredientsCsv(String csvText, {String? branchId}) async {
+    final r = await _post(
+      '/inventory/ingredients/import_csv',
+      body: {
+        'csv_text': csvText,
+        if (branchId != null) 'branch_id': branchId,
+      }..removeWhere((k, v) => v == null),
+    );
+    return Map<String, dynamic>.from(r as Map);
+  }
+
+  Future<String> exportIngredientsCsv({String? branchId}) async {
+    final r = await _get('/inventory/ingredients/export_csv', params: {
+      if (branchId != null) 'branch_id': branchId,
+    });
+    return r is String ? r : r.toString();
+  }
+
+  Future<Map<String, dynamic>> importCashCsv(String csvText) async {
+    final r = await _post(
+      '/inventory/cash/import_csv',
+      body: {
+        'csv_text': csvText,
+      },
+    );
+    return Map<String, dynamic>.from(r as Map);
+  }
+
+  Future<String> exportCashCsv({String? shiftId, String? branchId}) async {
+    final r = await _get('/inventory/cash/export_csv', params: {
+      if (shiftId != null) 'shift_id': shiftId,
+      if (branchId != null) 'branch_id': branchId,
+    });
+    return r is String ? r : r.toString();
+  }
+
   // ---------- Reports / Backup ----------
 
   Future<void> refreshDailySales({

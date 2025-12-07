@@ -1,5 +1,9 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:file_picker/file_picker.dart';
 
 import 'package:waah_frontend/data/models.dart';
 import 'package:waah_frontend/data/repo/inventory_repo.dart';
@@ -25,6 +29,118 @@ FutureProvider.autoDispose<List<Ingredient>>((ref) async {
 class InventoryPage extends ConsumerWidget {
   const InventoryPage({super.key});
 
+  Future<String?> _pickCsvText() async {
+    final res = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['csv'],
+      withData: true,
+    );
+    if (res == null || res.files.isEmpty) return null;
+    final f = res.files.first;
+    if (f.bytes != null) {
+      return utf8.decode(f.bytes!);
+    }
+    if (f.path != null) {
+      return File(f.path!).readAsString();
+    }
+    return null;
+  }
+
+  Future<void> _importIngredientsCsv(BuildContext context, WidgetRef ref) async {
+    final csvText = await _pickCsvText();
+    if (csvText == null) return;
+    final repo = ref.read(inventoryRepoProvider);
+    final branchId = ref.read(activeBranchIdProvider);
+    try {
+      final res = await repo.importIngredientsCsv(csvText, branchId: branchId);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Imported: ${res['created']} new, ${res['updated']} updated')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Import failed: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _exportIngredientsCsv(BuildContext context, WidgetRef ref) async {
+    final repo = ref.read(inventoryRepoProvider);
+    final branchId = ref.read(activeBranchIdProvider);
+    try {
+      final csvText = await repo.exportIngredientsCsv(branchId: branchId);
+      final savePath = await FilePicker.platform.saveFile(
+        fileName: 'ingredients.csv',
+        type: FileType.custom,
+        allowedExtensions: ['csv'],
+      );
+      if (savePath != null) {
+        await File(savePath).writeAsString(csvText);
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Ingredients CSV saved')),
+          );
+        }
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Export failed: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _importCashCsv(BuildContext context, WidgetRef ref) async {
+    final csvText = await _pickCsvText();
+    if (csvText == null) return;
+    final repo = ref.read(inventoryRepoProvider);
+    try {
+      final res = await repo.importCashCsv(csvText);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Imported cash rows: ${res['created']}')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Cash import failed: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _exportCashCsv(BuildContext context, WidgetRef ref) async {
+    final repo = ref.read(inventoryRepoProvider);
+    final branchId = ref.read(activeBranchIdProvider);
+    try {
+      final csvText = await repo.exportCashCsv(branchId: branchId);
+      final savePath = await FilePicker.platform.saveFile(
+        fileName: 'cash.csv',
+        type: FileType.custom,
+        allowedExtensions: ['csv'],
+      );
+      if (savePath != null) {
+        await File(savePath).writeAsString(csvText);
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Cash CSV saved')),
+          );
+        }
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Cash export failed: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final asyncIngs = ref.watch(ingredientsProvider);
@@ -33,6 +149,44 @@ class InventoryPage extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Inventory'),
         actions: [
+          PopupMenuButton<_InventoryAction>(
+            onSelected: (act) async {
+              switch (act) {
+                case _InventoryAction.importIngredients:
+                  await _importIngredientsCsv(context, ref);
+                  ref.invalidate(ingredientsProvider);
+                  break;
+                case _InventoryAction.exportIngredients:
+                  await _exportIngredientsCsv(context, ref);
+                  break;
+                case _InventoryAction.importCash:
+                  await _importCashCsv(context, ref);
+                  break;
+                case _InventoryAction.exportCash:
+                  await _exportCashCsv(context, ref);
+                  break;
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: _InventoryAction.importIngredients,
+                child: Text('Import Ingredients CSV'),
+              ),
+              PopupMenuItem(
+                value: _InventoryAction.exportIngredients,
+                child: Text('Export Ingredients CSV'),
+              ),
+              PopupMenuDivider(),
+              PopupMenuItem(
+                value: _InventoryAction.importCash,
+                child: Text('Import Cash CSV'),
+              ),
+              PopupMenuItem(
+                value: _InventoryAction.exportCash,
+                child: Text('Export Cash CSV'),
+              ),
+            ],
+          ),
           IconButton(
             tooltip: 'Record Purchase',
             icon: const Icon(Icons.shopping_cart_checkout),
@@ -256,6 +410,13 @@ class _AddIngredientDialogState
       ],
     );
   }
+}
+
+enum _InventoryAction {
+  importIngredients,
+  exportIngredients,
+  importCash,
+  exportCash,
 }
 
 /// Edit minimum level dialog
