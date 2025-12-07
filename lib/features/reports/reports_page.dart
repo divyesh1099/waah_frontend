@@ -16,8 +16,8 @@ class ReportsPage extends ConsumerStatefulWidget {
 class _ReportsPageState extends ConsumerState<ReportsPage>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  DateTime _startDt = DateTime.now().subtract(const Duration(days: 7));
-  DateTime _endDt = DateTime.now();
+  DateTime _startDt = DateTime.now();  // Today's start
+  DateTime _endDt = DateTime.now();    // Today's end
 
   @override
   void initState() {

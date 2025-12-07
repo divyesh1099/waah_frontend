@@ -28,7 +28,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 // ------------------------------------------------------------------
 // Config
 // ------------------------------------------------------------------
-const int _kPollSeconds = 8; // quick refresh
+const int _kPollSeconds = 3; // faster refresh for quicker sync
 const bool _kOnlineFirst = false; // OFFLINE‑FIRST by default
 
 // ------------------------------------------------------------------
@@ -643,6 +643,15 @@ Future<void> _enqueueKotOp(Read read, String tenantId, String branchId, _KotOp o
 // Apply overlay + merge in pending items destined for this lane (from registry)
 List<KotCardData> _overlayAndMergeForLane(List<KotCardData> server, KOTStatus lane) {
   final map = <String, KotCardData>{for (final t in server) t.id: t};
+  
+  // CRITICAL FIX: Remove cards that have pending status changes to OTHER lanes
+  // This prevents duplicate display during transition
+  map.removeWhere((id, card) {
+    final pendingTarget = _pendingStatus[id];
+    // If this card has a pending status change to a DIFFERENT lane, remove it from here
+    return pendingTarget != null && pendingTarget != lane;
+  });
+  
   // add missing items that are pending into this lane
   _pendingStatus.forEach((id, st) {
     if (st == lane) {
@@ -650,6 +659,7 @@ List<KotCardData> _overlayAndMergeForLane(List<KotCardData> server, KOTStatus la
       if (t != null) map[id] = t.copyWith(status: st);
     }
   });
+  
   // drop cancels and ensure effective status matches lane
   map.removeWhere((id, _) => _pendingCancel.contains(id));
   final out = <KotCardData>[];
@@ -1064,17 +1074,28 @@ class _TicketCardState extends ConsumerState<_TicketCard> {
     final bgColor = _statusColor(t.status);
     final next = _nextStatus(t.status);
     final prev = _prevStatus(t.status);
+    
+    // Check if this card has a pending status change
+    final isPending = _pendingStatus.containsKey(t.id);
 
-    return Card(
-      color: bgColor,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: DefaultTextStyle(
-          style: const TextStyle(fontSize: 13, color: Colors.black),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+    return Opacity(
+      opacity: isPending ? 0.7 : 1.0, // Slightly fade during transition
+      child: Card(
+        color: bgColor,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          // Add pulsing border when pending
+          side: isPending 
+            ? const BorderSide(color: Colors.orange, width: 2)
+            : BorderSide.none,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: DefaultTextStyle(
+            style: const TextStyle(fontSize: 13, color: Colors.black),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
               // Header: KOT, station, channel, age
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1113,8 +1134,10 @@ class _TicketCardState extends ConsumerState<_TicketCard> {
                           final text = (t.orderNo?.isNotEmpty ?? false) ? t.orderNo! : (t.orderId ?? '');
                           if (text.isNotEmpty) {
                             await Clipboard.setData(ClipboardData(text: text));
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied')));
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Copied Order #'))
+                              );
                             }
                           }
                           break;

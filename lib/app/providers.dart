@@ -312,7 +312,22 @@ class OrderFilterState {
 }
 
 class OrderFilterNotifier extends StateNotifier<OrderFilterState> {
-  OrderFilterNotifier() : super(OrderFilterState());
+  OrderFilterNotifier() : super(OrderFilterState(
+    startDt: _todayStart(),
+    endDt: _todayEnd(),
+  ));
+
+  // Helper to get today's start (00:00:00)
+  static DateTime _todayStart() {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day, 0, 0, 0);
+  }
+
+  // Helper to get today's end (23:59:59)
+  static DateTime _todayEnd() {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day, 23, 59, 59);
+  }
 
   void setStatus(OrderStatus? status) {
     state = state.copyWith(status: status);
@@ -323,7 +338,10 @@ class OrderFilterNotifier extends StateNotifier<OrderFilterState> {
   }
 
   void clear() {
-    state = OrderFilterState();
+    state = OrderFilterState(
+      startDt: _todayStart(),
+      endDt: _todayEnd(),
+    );
   }
 }
 
@@ -380,7 +398,22 @@ class KotFilterState {
 }
 
 class KotFilterNotifier extends StateNotifier<KotFilterState> {
-  KotFilterNotifier() : super(KotFilterState());
+  KotFilterNotifier() : super(KotFilterState(
+    startDt: _todayStart(),
+    endDt: _todayEnd(),
+  ));
+
+  // Helper to get today's start (00:00:00)
+  static DateTime _todayStart() {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day, 0, 0, 0);
+  }
+
+  // Helper to get today's end (23:59:59)
+  static DateTime _todayEnd() {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day, 23, 59, 59);
+  }
 
   void setStatus(KOTStatus? status) {
     state = state.copyWith(status: status);
@@ -391,7 +424,10 @@ class KotFilterNotifier extends StateNotifier<KotFilterState> {
   }
 
   void clear() {
-    state = KotFilterState();
+    state = KotFilterState(
+      startDt: _todayStart(),
+      endDt: _todayEnd(),
+    );
   }
 }
 

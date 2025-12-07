@@ -196,13 +196,6 @@ class AppShell extends ConsumerWidget {
               },
             ),
             ListTile(
-              title: const Text('Online Orders'),
-              onTap: () {
-                Navigator.pop(context);
-                context.go('/online');
-              },
-            ),
-            ListTile(
               title: const Text('Inventory'),
               onTap: () {
                 Navigator.pop(context);

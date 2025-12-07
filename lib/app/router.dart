@@ -78,7 +78,13 @@ class HomeGate extends ConsumerWidget {
         // 🚀 ensure local DB is populated, then go to menu
         final tenantId = ref.read(activeTenantIdProvider);
         final branchId = ref.read(activeBranchIdProvider);
-        unawaited(ref.read(catalogRepoProvider).syncDownMenu(tenantId, branchId));
+        // Wrap in try-catch to handle expired token gracefully
+        // If token expired, onUnauthorized callback will handle logout
+        unawaited(
+          ref.read(catalogRepoProvider).syncDownMenu(tenantId, branchId).catchError((_) {
+            // Silently ignore sync errors; user will be redirected to login if token expired
+          }),
+        );
       }
     });
 
@@ -119,10 +125,6 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: '/kot',
             builder: (c, s) => const KotPage(),
-          ),
-          GoRoute(
-            path: '/online',
-            builder: (c, s) => const OnlinePage(),
           ),
           GoRoute(
             path: '/shift',

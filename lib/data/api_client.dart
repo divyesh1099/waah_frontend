@@ -246,17 +246,22 @@ class ApiClient {
     String? password,
     String? pin,
   }) async {
-    final qp = <String, String>{};
-    if (mobile != null && mobile.isNotEmpty) qp['mobile'] = mobile;
-    if (username != null && username.isNotEmpty) qp['username'] = username;
-    if (password != null && password.isNotEmpty) qp['password'] = password;
-    if (pin != null && pin.isNotEmpty) qp['pin'] = pin;
+    // Build JSON body instead of query parameters to match backend expectation
+    final body = <String, dynamic>{};
+    if (mobile != null && mobile.isNotEmpty) body['mobile'] = mobile;
+    if (username != null && username.isNotEmpty) body['username'] = username;
+    if (password != null && password.isNotEmpty) body['password'] = password;
+    if (pin != null && pin.isNotEmpty) body['pin'] = pin;
 
-    final uri = Uri.parse('$baseUrl/auth/login').replace(queryParameters: qp);
-    final r = await http.post(uri, headers: _headers());
+    final uri = Uri.parse('$baseUrl/auth/login');
+    final r = await http.post(
+      uri,
+      headers: _headers(),
+      body: json.encode(body),
+    );
     final data = _decodeOrThrow(r);
     if (data is Map) {
-      for (final k in ['access_token','token','jwt','id_token']) {
+      for (final k in ['access_token', 'token', 'jwt', 'id_token']) {
         final v = data[k];
         if (v is String && v.isNotEmpty) return v;
       }
