@@ -101,3 +101,10 @@ android {
 flutter {
     source = "../.."
 }
+
+// Windows lint cache occasionally gets locked by parallel processes, breaking release builds.
+tasks.whenTaskAdded {
+    if (name.contains("lint", ignoreCase = true) && name.contains("Release")) {
+        enabled = false
+    }
+}

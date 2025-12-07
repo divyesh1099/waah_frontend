@@ -1,15 +1,13 @@
 // features/kot/kot_page.dart
-// Fast + Offline‑first KOT board (DROP‑IN v3.3)
+// Fast + Offline‑first KOT board (DROP‑IN v3.3 - FIXED)
 //
 // What’s new in v3.3 (fixes + speed):
 // • Offline‑first by default (instant cache render, then quiet refresh).
-// • Robust ticket number derivation — no more "KOT #0" (uses kotNo/number/orderNo/id hash).
-// • Safer createdAt extraction (Map/toJson/direct fields; epoch seconds/ms supported).
-// • Stable sorting: createdAt desc → ticketNo desc → id, so newest stays on top even if ticketNo is 0.
-// • UI shows a smart KOT label (falls back to short order/provider/id when ticketNo is 0).
-// • All v3.2 details preserved (customer, provider refs, rider, notes, inline expand, details sheet).
-//
-// Paste this WHOLE file to replace your current features/kot/kot_page.dart.
+// • Robust ticket number derivation — no more "KOT #0".
+// • Safer createdAt extraction.
+// • Stable sorting.
+// • UI smart KOT label.
+// • FIXED: Added missing kotFilterProvider definitions.
 
 import 'dart:async';
 import 'dart:convert' as convert;
@@ -18,12 +16,12 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart'; // NEW: For date formatting
+import 'package:intl/intl.dart'; 
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../app/providers.dart';
 import '../../data/api_client.dart';
 import '../../data/models.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 // ------------------------------------------------------------------
 // Config
@@ -173,6 +171,31 @@ DateTime? _extractCreatedAt(dynamic t) {
       return (icon: Icons.local_mall, label: ch.name.replaceAll('_', ' '));
   }
 }
+
+// ------------------------------------------------------------------
+// FILTER STATE (ADDED FIX)
+// ------------------------------------------------------------------
+class KotFilterState {
+  final DateTime? startDt;
+  final DateTime? endDt;
+  const KotFilterState({this.startDt, this.endDt});
+}
+
+class KotFilterNotifier extends StateNotifier<KotFilterState> {
+  KotFilterNotifier() : super(const KotFilterState());
+
+  void setDateRange(DateTime start, DateTime end) {
+    state = KotFilterState(startDt: start, endDt: end);
+  }
+
+  void clear() {
+    state = const KotFilterState();
+  }
+}
+
+final kotFilterProvider = StateNotifierProvider<KotFilterNotifier, KotFilterState>((ref) {
+  return KotFilterNotifier();
+});
 
 // ------------------------------------------------------------------
 // Lite models for fast cache (only what the card displays)
@@ -1296,7 +1319,8 @@ class _TicketCardState extends ConsumerState<_TicketCard> {
           ),
         ),
       ),
-    );
+    ),
+  );
   }
 
   Future<void> _showDetailsSheet(BuildContext context, KotCardData t) async {

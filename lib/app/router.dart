@@ -20,7 +20,6 @@ import 'package:waah_frontend/features/onboarding/onboarding_page.dart';
 import 'package:waah_frontend/features/home/home_page.dart';
 import 'package:waah_frontend/features/pos/pos_page.dart';
 import 'package:waah_frontend/features/kot/kot_page.dart';
-import 'package:waah_frontend/features/online/online_page.dart';
 import 'package:waah_frontend/features/shift/shift_page.dart';
 import 'package:waah_frontend/features/menu/menu_page.dart';
 import 'package:waah_frontend/features/inventory/inventory_page.dart';
