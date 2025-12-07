@@ -25,18 +25,19 @@ jobs:
           mkdir -p android/key
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/key/upload-keystore.jks
 
-      - name: Create key.properties
+      - name: Create key.properties (android/key/android/key.properties)
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_ALIAS_PASSWORD: ${{ secrets.ANDROID_KEY_ALIAS_PASSWORD }}
         run: |
-          cat <<'EOF' > android/key.properties
-          storeFile=key/upload-keystore.jks
-          storePassword=${ANDROID_KEYSTORE_PASSWORD}
-          keyAlias=${ANDROID_KEY_ALIAS}
-          keyPassword=${ANDROID_KEY_ALIAS_PASSWORD}
-          EOF
+          mkdir -p android/key/android
+          cat <<EOF > android/key/android/key.properties
+storeFile=../key/upload-keystore.jks
+storePassword=$ANDROID_KEYSTORE_PASSWORD
+keyAlias=$ANDROID_KEY_ALIAS
+keyPassword=$ANDROID_KEY_ALIAS_PASSWORD
+EOF
 
       - run: flutter pub get
       - run: flutter build apk --release
