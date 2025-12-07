@@ -1,5 +1,8 @@
 name: Release Tag Build
 
+permissions:
+  contents: write
+
 on:
   push:
     tags:
@@ -122,5 +125,4 @@ jobs:
         with:
           files: artifacts/**
           generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
