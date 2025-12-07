@@ -33,11 +33,11 @@ jobs:
         run: |
           mkdir -p android/key/android
           cat <<EOF > android/key/android/key.properties
-storeFile=../key/upload-keystore.jks
-storePassword=$ANDROID_KEYSTORE_PASSWORD
-keyAlias=$ANDROID_KEY_ALIAS
-keyPassword=$ANDROID_KEY_ALIAS_PASSWORD
-EOF
+          storeFile=../key/upload-keystore.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_ALIAS_PASSWORD
+          EOF
 
       - run: flutter pub get
       - run: flutter build apk --release
