@@ -1,22 +1,22 @@
-name: Android Build
+name: Build & Release
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
+    tags:
+      - 'v*'  # build + release on version tags
 
 jobs:
   android:
     name: Build Android (APK & AAB)
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable   # Uses latest stable Flutter
+          channel: stable
 
       - name: Decode Android keystore
         env:
@@ -31,23 +31,16 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_ALIAS_PASSWORD: ${{ secrets.ANDROID_KEY_ALIAS_PASSWORD }}
         run: |
-          mkdir -p android/key/android
-          cat <<EOF > android/key/android/key.properties
-          storeFile=../key/upload-keystore.jks
-          storePassword=$ANDROID_KEYSTORE_PASSWORD
-          keyAlias=$ANDROID_KEY_ALIAS
-          keyPassword=$ANDROID_KEY_ALIAS_PASSWORD
+          cat <<'EOF' > android/key.properties
+          storeFile=key/upload-keystore.jks
+          storePassword=${ANDROID_KEYSTORE_PASSWORD}
+          keyAlias=${ANDROID_KEY_ALIAS}
+          keyPassword=${ANDROID_KEY_ALIAS_PASSWORD}
           EOF
-                
 
-      - name: Flutter pub get
-        run: flutter pub get
-
-      - name: Build APK
-        run: flutter build apk --release
-
-      - name: Build AAB
-        run: flutter build appbundle --release
+      - run: flutter pub get
+      - run: flutter build apk --release
+      - run: flutter build appbundle --release
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -60,3 +53,63 @@ jobs:
         with:
           name: android-aab
           path: build/app/outputs/bundle/release/app-release.aab
+
+  windows:
+    name: Build Windows (.exe zip)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - run: flutter pub get
+      - run: flutter build windows --release
+
+      - name: Zip Windows build
+        run: |
+          New-Item -ItemType Directory -Force -Path build\windows
+          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath build\windows\dpos-windows-release.zip
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: build/windows/dpos-windows-release.zip
+
+  github-release:
+    name: GitHub Release (on tag)
+    needs: [android, windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+          path: artifacts
+
+      - name: Download AAB artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: android-aab
+          path: artifacts
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
