@@ -45,6 +45,30 @@ jobs:
           keyPassword=$ANDROID_KEY_ALIAS_PASSWORD
           EOF
 
+      - name: Bump pubspec.yaml version from tag
+        shell: bash
+        run: |
+          set -e
+
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+          if [ -z "$MAJOR" ] || [ -z "$MINOR" ] || [ -z "$PATCH" ]; then
+            echo "Tag '$TAG' is not in MAJOR.MINOR.PATCH format (e.g. v1.2.3)" >&2
+            exit 1
+          fi
+
+          CODE=$((MAJOR*10000 + MINOR*100 + PATCH))
+
+          echo "Using Flutter version: ${VERSION}+${CODE}"
+
+          sed -i -E "s/^version: .*/version: ${VERSION}+${CODE}/" pubspec.yaml
+
+          echo "pubspec.yaml version line now:"
+          grep '^version:' pubspec.yaml
+
       - name: Flutter pub get
         run: flutter pub get
 
@@ -88,6 +112,28 @@ jobs:
         with:
           flutter-version: '3.38.4'
           cache: true
+
+      - name: Bump pubspec.yaml version from tag
+        shell: bash
+        run: |
+          set -e
+
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+          if [ -z "$MAJOR" ] || [ -z "$MINOR" ] || [ -z "$PATCH" ]; then
+            echo "Tag '$TAG' is not in MAJOR.MINOR.PATCH format (e.g. v1.2.3)" >&2
+            exit 1
+          fi
+
+          CODE=$((MAJOR*10000 + MINOR*100 + PATCH))
+
+          echo "Using Flutter version: ${VERSION}+${CODE}"
+
+          sed -i -E "s/^version: .*/version: ${VERSION}+${CODE}/" pubspec.yaml
+          grep '^version:' pubspec.yaml
 
       - name: Enable Windows desktop
         run: flutter config --enable-windows-desktop
