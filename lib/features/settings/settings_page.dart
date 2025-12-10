@@ -97,6 +97,18 @@ class SettingsPage extends ConsumerWidget {
                 onTap: () => context.push('/settings/printers'),
                 disabled: branchId.isEmpty,
               ),
+              _Card(
+                title: 'Change password',
+                subtitleStream: Stream.value('Update your login password'),
+                icon: Icons.lock_reset,
+                onTap: () => context.push('/settings/password'),
+              ),
+              _Card(
+                title: 'Change PIN',
+                subtitleStream: Stream.value('Update your POS PIN'),
+                icon: Icons.pin,
+                onTap: () => context.push('/settings/pin'),
+              ),
             ],
           ),
           const SizedBox(height: 24),

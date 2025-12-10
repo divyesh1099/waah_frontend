@@ -23,7 +23,7 @@ class AppShell extends ConsumerWidget {
 
     // fallback brand while loading or if not configured yet
     final brandName =
-    (rs != null && rs.name.isNotEmpty) ? rs.name : 'dPOS';
+    (rs != null && rs.name.isNotEmpty) ? rs.name : 'Restaurant';
 
     // build absolute logo URL if we have a /media/... path
     final buildUri = ref.read(mediaResolverProvider);
@@ -230,6 +230,20 @@ class AppShell extends ConsumerWidget {
               onTap: () {
                 Navigator.pop(context);
                 context.go('/settings');
+              },
+            ),
+            ListTile(
+              title: const Text('Change password'),
+              onTap: () {
+                Navigator.pop(context);
+                context.go('/settings/password');
+              },
+            ),
+            ListTile(
+              title: const Text('Change PIN'),
+              onTap: () {
+                Navigator.pop(context);
+                context.go('/settings/pin');
               },
             ),
             const Divider(),

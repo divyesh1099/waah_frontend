@@ -99,18 +99,40 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       final logoUrl = (rs?.logoUrl != null && rs!.logoUrl!.isNotEmpty)
                           ? buildUri(rs.logoUrl).toString()
                           : null;
-                      if (logoUrl == null) return const SizedBox.shrink();
+                      if (logoUrl == null) {
+                        if (rs?.name.isNotEmpty ?? false) {
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Text(
+                              rs!.name,
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                          );
+                        }
+                        return const SizedBox.shrink();
+                      }
                       return Padding(
-                        padding: const EdgeInsets.only(bottom: 16),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: Image.network(
-                            logoUrl,
-                            height: 80,
-                            width: 80,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                          ),
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Column(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.network(
+                                logoUrl,
+                                height: 80,
+                                width: 80,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                              ),
+                            ),
+                            if (rs?.name.isNotEmpty ?? false) ...[
+                              const SizedBox(height: 8),
+                              Text(
+                                rs!.name,
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                            ]
+                          ],
                         ),
                       );
                     }),

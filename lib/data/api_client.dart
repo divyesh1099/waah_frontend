@@ -271,6 +271,46 @@ class ApiClient {
 
   Future<dynamic> healthz() => _get('/healthz');
 
+  /// Change password for current user. Returns new token if server issues one.
+  Future<String?> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final uri = _u('/auth/change-password');
+    final r = await http.post(
+      uri,
+      headers: _headers(),
+      body: jsonEncode({
+        'current_password': currentPassword,
+        'new_password': newPassword,
+      }),
+    );
+    final data = _decodeOrThrow(r);
+    if (data is Map) {
+      for (final k in ['access_token', 'token', 'jwt', 'id_token']) {
+        final v = data[k];
+        if (v is String && v.isNotEmpty) return v;
+      }
+    }
+    return null;
+  }
+
+  Future<void> changePin({
+    required String currentPin,
+    required String newPin,
+  }) async {
+    final uri = _u('/auth/change-pin');
+    final r = await http.post(
+      uri,
+      headers: _headers(),
+      body: jsonEncode({
+        'current_pin': currentPin,
+        'new_pin': newPin,
+      }),
+    );
+    _decodeOrThrow(r);
+  }
+
   // ---------- Onboarding ----------
 
   Future<Map<String, dynamic>> onboardAdmin({
