@@ -161,6 +161,8 @@ class _BranchSwitcherAction extends ConsumerWidget {
 
 /// Which category is currently selected in POS? null means "All".
 final selectedCategoryIdProvider = StateProvider<String?>((ref) => null);
+final posSearchQueryProvider = StateProvider<String>((ref) => '');
+final posFastViewProvider = StateProvider<bool>((ref) => false);
 
 /// Load menu categories for the ACTIVE tenant/branch.
 final posCategoriesProvider =
@@ -180,6 +182,7 @@ final posItemsProvider = FutureProvider<List<MenuItem>>((ref) async {
   final tenantId = ref.watch(activeTenantIdProvider);
   final branchId = ref.watch(activeBranchIdProvider); // NEW
   final catId    = ref.watch(selectedCategoryIdProvider);
+  final search   = ref.watch(posSearchQueryProvider).toLowerCase().trim();
 
   if (tenantId.isEmpty) return <MenuItem>[];
 
@@ -193,7 +196,13 @@ final posItemsProvider = FutureProvider<List<MenuItem>>((ref) async {
       .where((i) => i.isActive && !i.stockOut)
       .toList()
     ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-  return filtered;
+
+  if (search.isEmpty) return filtered;
+  return filtered.where((i) {
+    final n = i.name.toLowerCase();
+    final d = (i.description ?? '').toLowerCase();
+    return n.contains(search) || d.contains(search);
+  }).toList();
 });
 
 /// Load dining tables for ACTIVE branch.
@@ -526,6 +535,7 @@ class PosPage extends ConsumerWidget {
     ref.watch(_queueAutoSyncProvider);
     final tenantId = ref.watch(activeTenantIdProvider);
     final branchId = ref.watch(activeBranchIdProvider);
+    final isFastView = ref.watch(posFastViewProvider);
 
     // Guard: require active tenant/branch
     if (tenantId.isEmpty || branchId.isEmpty) {
@@ -587,6 +597,45 @@ class PosPage extends ConsumerWidget {
     // Build the Menu view (for mobile tab and tablet layout)
     final menuView = Column(
       children: [
+        // SEARCH + VIEW TOGGLE
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  decoration: InputDecoration(
+                    prefixIcon: const Icon(Icons.search),
+                    hintText: 'Search items or descriptions',
+                    isDense: true,
+                    border: const OutlineInputBorder(),
+                  ),
+                  onChanged: (v) => ref.read(posSearchQueryProvider.notifier).state = v,
+                ),
+              ),
+              const SizedBox(width: 8),
+              ToggleButtons(
+                borderRadius: BorderRadius.circular(8),
+                constraints: const BoxConstraints(minHeight: 40, minWidth: 64),
+                isSelected: [!isFastView, isFastView],
+                onPressed: (idx) {
+                  ref.read(posFastViewProvider.notifier).state = idx == 1;
+                },
+                children: const [
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8),
+                    child: Text('List'),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8),
+                    child: Text('Fast'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+
         // CATEGORIES BAR
         catsAsync.when(
           data: (cats) => _CategoryBar(categories: cats),
@@ -626,6 +675,135 @@ class PosPage extends ConsumerWidget {
                 }
               }
 
+              Future<void> handleTap(MenuItem item) async {
+                if ((item.id ?? '').isEmpty) return;
+
+                final results = await Future.wait([
+                  _getVariantsCached(ref, item.id!),
+                  _getModsCached(ref, item.id!),
+                ]);
+                final variants = results[0] as List<ItemVariant>;
+                final modifierGroups = results[1] as List<_ItemModifierGroupData>;
+
+                final hasRequired = modifierGroups.any((g) => g.requiredGroup && (g.minSel > 0));
+                if (!hasRequired && variants.length <= 1) {
+                  final chosen = variants.isEmpty ? null : variants.first;
+                  ref.read(posCartProvider.notifier).addItem(
+                    item: item,
+                    variant: chosen,
+                    modifiers: const [],
+                    qty: 1,
+                  );
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('${item.name} x1 added to cart'),
+                        duration: const Duration(milliseconds: 700),
+                      ),
+                    );
+                  }
+                  return;
+                }
+
+                if (!context.mounted) return;
+                final res = await showModalBottomSheet<_AddResult>(
+                  context: context,
+                  isScrollControlled: true,
+                  builder: (_) => _AddToCartSheet(
+                    item: item,
+                    variants: variants,
+                    modifierGroups: modifierGroups,
+                  ),
+                );
+                if (res == null) return;
+                ref.read(posCartProvider.notifier).addItem(
+                  item: item,
+                  variant: res.variant,
+                  modifiers: res.modifiers,
+                  qty: res.qty.toDouble(),
+                );
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('${item.name} x${res.qty} added to cart'),
+                      duration: const Duration(milliseconds: 800),
+                    ),
+                  );
+                }
+              }
+
+              if (isFastView) {
+                final crossAxisCount = isTablet ? 4 : 2;
+                return GridView.builder(
+                  padding: const EdgeInsets.all(8),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: crossAxisCount,
+                    mainAxisSpacing: 10,
+                    crossAxisSpacing: 10,
+                    // Give cards more height so text + button fit comfortably
+                    childAspectRatio: isTablet ? 1.25 : 0.9,
+                  ),
+                  itemCount: items.length,
+                  itemBuilder: (_, i) {
+                    final item = items[i];
+                    return Card(
+                      elevation: 1,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(10),
+                        onTap: () {
+                          unawaited(handleTap(item));
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.all(10),
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              return Column(
+                                mainAxisSize: MainAxisSize.max,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    item.name,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                                  ),
+                                  if ((item.description ?? '').isNotEmpty)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 4),
+                                      child: Text(
+                                        item.description!,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                                      ),
+                                    ),
+                                  const Spacer(),
+                                  Align(
+                                    alignment: Alignment.bottomRight,
+                                    child: FilledButton.tonal(
+                                      style: FilledButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                        minimumSize: Size(constraints.maxWidth * 0.3, 32),
+                                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                      ),
+                                      onPressed: () {
+                                        unawaited(handleTap(item));
+                                      },
+                                      child: const Text('Tap to add'),
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                );
+              }
+
               // Use ListView for "least scrolling"
               return Scrollbar(
                 child: ListView.separated(
@@ -642,64 +820,8 @@ class PosPage extends ConsumerWidget {
                     return _MenuItemRow(
                       key: ValueKey(item.id ?? i),
                       item: item,
-                      onTap: () async {
-                        if ((item.id ?? '').isEmpty) return;
-
-                        // fetch & cache in parallel
-                        final results = await Future.wait([
-                          _getVariantsCached(ref, item.id!),
-                          _getModsCached(ref, item.id!),
-                        ]);
-                        final variants = results[0] as List<ItemVariant>;
-                        final modifierGroups = results[1] as List<_ItemModifierGroupData>;
-
-                        // QUICK ADD if: no required groups AND <=1 variant
-                        final hasRequired = modifierGroups.any((g) => g.requiredGroup && (g.minSel > 0));
-                        if (!hasRequired && variants.length <= 1) {
-                          final chosen = variants.isEmpty ? null : variants.first;
-                          ref.read(posCartProvider.notifier).addItem(
-                            item: item,
-                            variant: chosen,
-                            modifiers: const [],
-                            qty: 1,
-                          );
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('${item.name} x1 added to cart'),
-                                duration: const Duration(milliseconds: 700),
-                              ),
-                            );
-                          }
-                          return;
-                        }
-
-                        // otherwise, open chooser
-                        if (!context.mounted) return;
-                        final res = await showModalBottomSheet<_AddResult>(
-                          context: context,
-                          isScrollControlled: true,
-                          builder: (_) => _AddToCartSheet(
-                            item: item,
-                            variants: variants,
-                            modifierGroups: modifierGroups,
-                          ),
-                        );
-                        if (res == null) return;
-                        ref.read(posCartProvider.notifier).addItem(
-                          item: item,
-                          variant: res.variant,
-                          modifiers: res.modifiers,
-                          qty: res.qty.toDouble(),
-                        );
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('${item.name} x${res.qty} added to cart'),
-                              duration: const Duration(milliseconds: 800),
-                            ),
-                          );
-                        }
+                      onTap: () {
+                        unawaited(handleTap(item));
                       },
                     );
                   },
@@ -816,37 +938,32 @@ class _CategoryBar extends ConsumerWidget {
     final sel = ref.watch(selectedCategoryIdProvider);
 
     return SizedBox(
-      height: 56,
-      child: ListView.separated(
-        primary: false,
+      height: 140, // keeps menu area from overflowing; scroll inside
+      child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        scrollDirection: Axis.horizontal,
-        itemCount: categories.length + 1, // + All chip
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
-        itemBuilder: (context, i) {
-          if (i == 0) {
-            final bool active = (sel == null);
-            return ChoiceChip(
+        child: Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            ChoiceChip(
               label: const Text('All'),
-              selected: active,
+              selected: sel == null,
               onSelected: (_) {
                 ref.read(selectedCategoryIdProvider.notifier).state = null;
                 ref.invalidate(posItemsProvider);
               },
-            );
-          }
-
-          final c = categories[i - 1];
-          final bool active = (sel == c.id);
-          return ChoiceChip(
-            label: Text(c.name),
-            selected: active,
-            onSelected: (_) {
-              ref.read(selectedCategoryIdProvider.notifier).state = c.id;
-              ref.invalidate(posItemsProvider);
-            },
-          );
-        },
+            ),
+            for (final c in categories)
+              ChoiceChip(
+                label: Text(c.name),
+                selected: sel == c.id,
+                onSelected: (_) {
+                  ref.read(selectedCategoryIdProvider.notifier).state = c.id;
+                  ref.invalidate(posItemsProvider);
+                },
+              ),
+          ],
+        ),
       ),
     );
   }

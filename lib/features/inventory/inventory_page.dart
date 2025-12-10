@@ -94,52 +94,7 @@ class InventoryPage extends ConsumerWidget {
     }
   }
 
-  Future<void> _importCashCsv(BuildContext context, WidgetRef ref) async {
-    final csvText = await _pickCsvText();
-    if (csvText == null) return;
-    final repo = ref.read(inventoryRepoProvider);
-    try {
-      final res = await repo.importCashCsv(csvText);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Imported cash rows: ${res['created']}')),
-        );
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Cash import failed: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _exportCashCsv(BuildContext context, WidgetRef ref) async {
-    final repo = ref.read(inventoryRepoProvider);
-    final branchId = ref.read(activeBranchIdProvider);
-    try {
-      final csvText = await repo.exportCashCsv(branchId: branchId);
-      final savePath = await FilePicker.platform.saveFile(
-        fileName: 'cash.csv',
-        type: FileType.custom,
-        allowedExtensions: ['csv'],
-      );
-      if (savePath != null) {
-        await File(savePath).writeAsString(csvText);
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Cash CSV saved')),
-          );
-        }
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Cash export failed: $e')),
-        );
-      }
-    }
-  }
+  // Cash import/export removed from Inventory; see Shift & Cash page.
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -159,12 +114,6 @@ class InventoryPage extends ConsumerWidget {
                 case _InventoryAction.exportIngredients:
                   await _exportIngredientsCsv(context, ref);
                   break;
-                case _InventoryAction.importCash:
-                  await _importCashCsv(context, ref);
-                  break;
-                case _InventoryAction.exportCash:
-                  await _exportCashCsv(context, ref);
-                  break;
               }
             },
             itemBuilder: (_) => const [
@@ -175,15 +124,6 @@ class InventoryPage extends ConsumerWidget {
               PopupMenuItem(
                 value: _InventoryAction.exportIngredients,
                 child: Text('Export Ingredients CSV'),
-              ),
-              PopupMenuDivider(),
-              PopupMenuItem(
-                value: _InventoryAction.importCash,
-                child: Text('Import Cash CSV'),
-              ),
-              PopupMenuItem(
-                value: _InventoryAction.exportCash,
-                child: Text('Export Cash CSV'),
               ),
             ],
           ),
@@ -245,7 +185,7 @@ class InventoryPage extends ConsumerWidget {
           if (ings.isEmpty) {
             return const Center(
               child: Text(
-                'No ingredients yet.\nTap "Ingredient" to add.',
+                'No ingredients yet.\nTap "Ingredient" to add.\n\nImport CSV format:\nname, unit, opening_qty, min_level, cost_price, hsn (optional), tax_rate (optional), sku (optional)',
                 textAlign: TextAlign.center,
               ),
             );
@@ -415,8 +355,6 @@ class _AddIngredientDialogState
 enum _InventoryAction {
   importIngredients,
   exportIngredients,
-  importCash,
-  exportCash,
 }
 
 /// Edit minimum level dialog

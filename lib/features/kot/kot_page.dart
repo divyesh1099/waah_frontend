@@ -26,7 +26,8 @@ import '../../data/models.dart';
 // ------------------------------------------------------------------
 // Config
 // ------------------------------------------------------------------
-const int _kPollSeconds = 3; // faster refresh for quicker sync
+// Softer poll to reduce churn; local actions still refresh immediately.
+const int _kPollSeconds = 10;
 const bool _kOnlineFirst = false; // OFFLINE‑FIRST by default
 
 // ------------------------------------------------------------------
@@ -858,6 +859,12 @@ StreamProvider.family.autoDispose<List<KotCardData>, KOTStatus>((ref, status) as
   final filter = ref.watch(kotFilterProvider);
   final bool isFiltered = filter.startDt != null || filter.endDt != null;
 
+   // If no tenant/branch, avoid infinite load: yield empty immediately
+  if (tenantId.isEmpty || branchId.isEmpty) {
+    yield const <KotCardData>[];
+    return;
+  }
+
   if (isFiltered) {
     yield await _fetchFresh(
       ref.read, tenantId, branchId, status,
@@ -1632,16 +1639,14 @@ Future<String?> _askReason(BuildContext ctx, String prompt) async {
 
 // Optimistic cache mutations -------------------------------------------------
 void _optimisticMove(Read read, String tenantId, String branchId, KotCardData t, KOTStatus next) {
-  // remove from all lists; add to next
+  // remove from all lists; add to next (ensure mem cache always updated, even if null before)
   for (final st in KOTStatus.values) {
     final key = _kb(tenantId, branchId, st);
-    final cur = _memCache[key];
-    if (cur != null) {
-      _memCache[key] = cur.where((e) => e.id != t.id).toList();
-    }
+    final cur = _memCache[key] ?? const <KotCardData>[];
+    _memCache[key] = cur.where((e) => e.id != t.id).toList();
   }
   final dstKey = _kb(tenantId, branchId, next);
-  final dst = _memCache[dstKey] ?? <KotCardData>[];
+  final dst = _memCache[dstKey] ?? const <KotCardData>[];
   _memCache[dstKey] = [t.copyWith(status: next), ...dst];
 }
 
