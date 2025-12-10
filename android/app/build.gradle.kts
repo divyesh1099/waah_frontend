@@ -1,5 +1,5 @@
-import java.util.Properties
 import java.io.FileInputStream
+import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -10,7 +10,7 @@ plugins {
 
 // --- load keystore props from android/key.properties ---
 val keystoreProperties = Properties()
-val keystorePropertiesFile = rootProject.file("key/android/key.properties")
+val keystorePropertiesFile = rootProject.file("key.properties")
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
@@ -65,6 +65,7 @@ android {
                 keyPassword = keyPasswordProp
                 storeFile = file(storeFileProp)
                 storePassword = storePasswordProp
+                storeType = "jks"
             } else {
                 println("⚠️ key.properties missing/incomplete → release signing not configured.")
             }
