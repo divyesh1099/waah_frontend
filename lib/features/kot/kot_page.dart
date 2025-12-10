@@ -182,7 +182,13 @@ class KotFilterState {
 }
 
 class KotFilterNotifier extends StateNotifier<KotFilterState> {
-  KotFilterNotifier() : super(const KotFilterState());
+  KotFilterNotifier() : super(const KotFilterState()) {
+    // default to "today" filter (00:00 to 23:59:59.999) like orders
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month, now.day);
+    final end = start.add(const Duration(days: 1, milliseconds: -1));
+    state = KotFilterState(startDt: start, endDt: end);
+  }
 
   void setDateRange(DateTime start, DateTime end) {
     state = KotFilterState(startDt: start, endDt: end);
