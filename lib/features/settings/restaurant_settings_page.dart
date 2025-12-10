@@ -19,6 +19,7 @@ class _RestaurantSettingsPageState extends ConsumerState<RestaurantSettingsPage>
   late TextEditingController _gstinCtl;
   
   bool _loading = false;
+  bool _refreshedOnce = false;
 
   @override
   void initState() {
@@ -48,6 +49,16 @@ class _RestaurantSettingsPageState extends ConsumerState<RestaurantSettingsPage>
     _initDone = true;
   }
 
+  void _ensureRemoteFetched() {
+    if (_refreshedOnce) return;
+    final tenantId = ref.read(activeTenantIdProvider);
+    final branchId = ref.read(activeBranchIdProvider);
+    if (tenantId.isEmpty || branchId.isEmpty) return;
+    _refreshedOnce = true;
+    // fire-and-forget fetch to prefill form with onboarding data
+    ref.read(settingsRepoProvider).refreshRestaurantSettings(tenantId, branchId);
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _loading = true);
@@ -67,15 +78,8 @@ class _RestaurantSettingsPageState extends ConsumerState<RestaurantSettingsPage>
         'gstin': _gstinCtl.text.trim(),
       };
 
-      // 2. Call API via Repo (we need to add this method to Repo first, 
-      // or call client directly. Let's call client directly for now as Repo 
-      // doesn't have updateRestaurant yet).
-      // Actually, let's add it to Repo properly in next step. 
-      // For now, I'll assume Repo has it or I'll use client.
-      await ref.read(apiClientProvider).saveRestaurantSettings(update);
-      
-      // 3. Refresh repo
-      await repo.refreshRestaurantSettings(tenantId, branchId); // We need to add this too
+      await repo.saveRestaurantSettings(update);
+      await repo.refreshRestaurantSettings(tenantId, branchId);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -106,7 +110,7 @@ class _RestaurantSettingsPageState extends ConsumerState<RestaurantSettingsPage>
       final tenantId = ref.read(activeTenantIdProvider);
       final branchId = ref.read(activeBranchIdProvider);
       
-      final url = await ref.read(apiClientProvider).uploadRestaurantLogo(
+      await ref.read(settingsRepoProvider).uploadRestaurantLogo(
         tenantId: tenantId,
         branchId: branchId,
         file: res.files.first,
@@ -137,6 +141,7 @@ class _RestaurantSettingsPageState extends ConsumerState<RestaurantSettingsPage>
   Widget build(BuildContext context) {
     final settingsAsync = ref.watch(restaurantSettingsProvider);
     final mediaResolver = ref.watch(mediaResolverProvider);
+    _ensureRemoteFetched();
 
     return Scaffold(
       appBar: AppBar(title: const Text('Restaurant Settings')),
@@ -145,9 +150,7 @@ class _RestaurantSettingsPageState extends ConsumerState<RestaurantSettingsPage>
         error: (e, s) => Center(child: Text('Error: $e')),
         data: (settings) {
           _initData(settings);
-          if (settings == null) return const Center(child: Text('No settings found'));
-
-          final logoUrl = mediaResolver(settings.logoUrl);
+          final logoUrl = mediaResolver(settings?.logoUrl);
 
           return SingleChildScrollView(
             padding: const EdgeInsets.all(16),
@@ -159,7 +162,14 @@ class _RestaurantSettingsPageState extends ConsumerState<RestaurantSettingsPage>
                   Center(
                     child: Column(
                       children: [
-                        Image.network(logoUrl.toString(), height: 100, fit: BoxFit.contain),
+                        if ((settings?.logoUrl ?? '').isNotEmpty)
+                          Image.network(
+                            logoUrl.toString(),
+                            height: 100,
+                            fit: BoxFit.contain,
+                          )
+                        else
+                          const Icon(Icons.restaurant, size: 64),
                         const SizedBox(height: 8),
                         OutlinedButton.icon(
                           onPressed: _loading ? null : _uploadLogo,
@@ -242,14 +252,10 @@ class _RestaurantSettingsPageState extends ConsumerState<RestaurantSettingsPage>
     try {
       final tenantId = ref.read(activeTenantIdProvider);
       final branchId = ref.read(activeBranchIdProvider);
-      
-      await ref.read(apiClientProvider).deleteRestaurantSettings(
-        tenantId: tenantId,
-        branchId: branchId,
-      );
+      final repo = ref.read(settingsRepoProvider);
 
-      // Refresh repo to clear cache
-      await ref.read(settingsRepoProvider).refreshRestaurantSettings(tenantId, branchId);
+      await repo.deleteRestaurantSettings(tenantId: tenantId, branchId: branchId);
+      await repo.refreshRestaurantSettings(tenantId, branchId);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

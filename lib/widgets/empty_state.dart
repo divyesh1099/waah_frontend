@@ -30,15 +30,12 @@ class EmptyState extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (logoUrl != null)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.network(
-                  logoUrl,
-                  width: 96,
-                  height: 96,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => _fallbackLogo(),
-                ),
+              Image.network(
+                logoUrl,
+                width: 96,
+                height: 96,
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => _fallbackLogo(),
               )
             else
               _fallbackLogo(),

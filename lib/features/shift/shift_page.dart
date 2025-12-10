@@ -741,8 +741,7 @@ class _BranchPickerDialog extends ConsumerWidget {
                       ? const Icon(Icons.check, color: Colors.green)
                       : null,
                   onTap: () {
-                    ref.read(activeBranchIdProvider.notifier).state =
-                        b.id;
+                    ref.read(activeBranchIdProvider.notifier).set(b.id);
                     Navigator.pop(context, true);
                   },
                 );

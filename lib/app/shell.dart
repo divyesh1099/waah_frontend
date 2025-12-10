@@ -74,18 +74,15 @@ class AppShell extends ConsumerWidget {
             if (logoFullUrl != null)
               Padding(
                 padding: const EdgeInsets.only(right: 8),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
                   child: Image.network(
                     logoFullUrl,
                     height: 32,
                     width: 32,
-                    fit: BoxFit.cover,
+                    fit: BoxFit.contain,
                     errorBuilder: (_, __, ___) =>
                     const Icon(Icons.restaurant, size: 32),
                   ),
                 ),
-              ),
             Flexible(
               child: Text(
                 brandName,
@@ -108,17 +105,14 @@ class AppShell extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       if (logoFullUrl != null)
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: Image.network(
-                            logoFullUrl,
-                            height: 40,
-                            width: 40,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) =>
-                            const Icon(Icons.restaurant, size: 40),
-                          ),
-                        ),
+                    Image.network(
+                      logoFullUrl,
+                      height: 40,
+                      width: 40,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) =>
+                      const Icon(Icons.restaurant, size: 40),
+                    ),
                       const SizedBox(width: 8),
                       Flexible(
                         child: Text(

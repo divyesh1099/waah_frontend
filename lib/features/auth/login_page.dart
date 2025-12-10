@@ -115,15 +115,12 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                         padding: const EdgeInsets.only(bottom: 12),
                         child: Column(
                           children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: Image.network(
-                                logoUrl,
-                                height: 80,
-                                width: 80,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                              ),
+                            Image.network(
+                              logoUrl,
+                              height: 80,
+                              width: 80,
+                              fit: BoxFit.contain,
+                              errorBuilder: (_, __, ___) => const SizedBox.shrink(),
                             ),
                             if (rs?.name.isNotEmpty ?? false) ...[
                               const SizedBox(height: 8),

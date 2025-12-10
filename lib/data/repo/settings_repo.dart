@@ -9,8 +9,10 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:waah_frontend/data/api_client.dart';
 import 'package:waah_frontend/data/models.dart';
 import 'package:waah_frontend/data/local/app_db.dart' as db;
@@ -24,7 +26,7 @@ class SettingsRepo {
     _loadCachedBranches();
     _loadCachedTables(_branchId);
     _loadCachedPrinters(_tenantId, _branchId);
-    _loadCachedRestaurantSettings(_tenantId);
+    _loadCachedRestaurantSettings(_tenantId, _branchId);
   }
 
   final ApiClient _client; // kept for future wiring
@@ -48,23 +50,25 @@ class SettingsRepo {
   // Restaurant settings (per-tenant)
   final _restCtl = StreamController<db.RestaurantSetting?>.broadcast();
   db.RestaurantSetting? _rest;
+  String _restBranchId = '';
 
   String _pkPrinters(String tenantId, String branchId) => 'printers:$tenantId:$branchId';
   String _pkTables(String branchId) => 'tables:$branchId';
   String _pkBranches(String tenantId) => 'branches:$tenantId';
-  String _pkRestaurant(String tenantId) => 'restaurant_settings:$tenantId';
+  String _pkRestaurant(String tenantId, String branchId) => 'restaurant_settings:$tenantId:$branchId';
 
   // Active IDs
   void setActiveTenant(String id) {
     _tenantId = id;
     _loadCachedBranches();
-    _loadCachedRestaurantSettings(id);
+    _loadCachedRestaurantSettings(_tenantId, _branchId);
     if (_tenantId.isNotEmpty) {
       // fire-and-forget server pull to hydrate cache
       refreshBranches(_tenantId);
     }
     if (_branchId.isNotEmpty) {
       _loadCachedPrinters(_tenantId, _branchId);
+      refreshRestaurantSettings(_tenantId, _branchId);
     }
   }
 
@@ -72,6 +76,10 @@ class SettingsRepo {
     _branchId = id;
     _loadCachedTables(id);
     _loadCachedPrinters(_tenantId, id);
+    _loadCachedRestaurantSettings(_tenantId, id);
+    if (_tenantId.isNotEmpty && _branchId.isNotEmpty) {
+      refreshRestaurantSettings(_tenantId, _branchId);
+    }
   }
 
   // -------- Branches --------
@@ -369,7 +377,8 @@ class SettingsRepo {
     return _restCtl.stream;
   }
 
-  Future<void> setRestaurantSettingsOptimistic(db.RestaurantSetting? s) async {
+  Future<void> setRestaurantSettingsOptimistic(db.RestaurantSetting? s, {String? branchId}) async {
+    _restBranchId = branchId ?? _branchId;
     _rest = s;
     _restCtl.add(_rest);
     _persistRestaurantSettings();
@@ -379,23 +388,22 @@ class SettingsRepo {
     try {
       final map = await _client.fetchRestaurantSettings(tenantId: tenantId, branchId: branchId);
       if (map.isNotEmpty) {
-        // Convert map to db.RestaurantSetting
-        // Note: db.RestaurantSetting.fromJson might expect snake_case keys which API returns.
-        final s = db.RestaurantSetting.fromJson(map);
-        await setRestaurantSettingsOptimistic(s);
+        final s = _restaurantFromMap(map);
+        await setRestaurantSettingsOptimistic(s, branchId: branchId);
       }
     } catch (e) {
       if (kDebugMode) print('[SettingsRepo] refreshRestaurantSettings failed: $e');
     }
   }
 
-  void _loadCachedRestaurantSettings(String tenantId) {
-    if (tenantId.isEmpty) { _rest = null; _restCtl.add(_rest); return; }
-    final raw = _prefs.getString(_pkRestaurant(tenantId));
+  void _loadCachedRestaurantSettings(String tenantId, String branchId) {
+    _restBranchId = branchId;
+    if (tenantId.isEmpty || branchId.isEmpty) { _rest = null; _restCtl.add(_rest); return; }
+    final raw = _prefs.getString(_pkRestaurant(tenantId, branchId));
     if (raw == null || raw.isEmpty) { _rest = null; _restCtl.add(_rest); return; }
     try {
       final map = Map<String, dynamic>.from(jsonDecode(raw));
-      _rest = db.RestaurantSetting.fromJson(map); // if available
+      _rest = _restaurantFromMap(map);
     } catch (_) {
       _rest = null;
     }
@@ -403,17 +411,104 @@ class SettingsRepo {
   }
 
   void _persistRestaurantSettings() {
-    if (_tenantId.isEmpty) return;
-    if (_rest == null) { _prefs.remove(_pkRestaurant(_tenantId)); return; }
+    if (_tenantId.isEmpty || _restBranchId.isEmpty) return;
+    if (_rest == null) { _prefs.remove(_pkRestaurant(_tenantId, _restBranchId)); return; }
     try {
-      final jsonMap = (_rest as dynamic).toJson?.call();
-      if (jsonMap is Map<String, dynamic>) {
-        _prefs.setString(_pkRestaurant(_tenantId), jsonEncode(jsonMap));
-      }
+      final jsonMap = _restToMap(_rest!);
+      _prefs.setString(_pkRestaurant(_tenantId, _restBranchId), jsonEncode(jsonMap));
     } catch (_) {
       // If your model lacks toJson, store a subset here as Map manually.
     }
   }
+
+  Future<void> saveRestaurantSettings(Map<String, dynamic> body) async {
+    await _client.saveRestaurantSettings(body);
+    final tid = body['tenant_id'] as String? ?? _tenantId;
+    final bid = body['branch_id'] as String? ?? _branchId;
+    if (tid.isNotEmpty && bid.isNotEmpty) {
+      await refreshRestaurantSettings(tid, bid);
+    }
+  }
+
+  Future<void> deleteRestaurantSettings({required String tenantId, required String branchId}) async {
+    await _client.deleteRestaurantSettings(tenantId: tenantId, branchId: branchId);
+    if (tenantId == _tenantId && branchId == _branchId) {
+      await setRestaurantSettingsOptimistic(null, branchId: branchId);
+    }
+  }
+
+  Future<String> uploadRestaurantLogo({
+    required String tenantId,
+    required String branchId,
+    required PlatformFile file,
+  }) async {
+    final url = await _client.uploadRestaurantLogo(
+      tenantId: tenantId,
+      branchId: branchId,
+      file: file,
+    );
+    if (_rest != null && tenantId == _tenantId && branchId == _branchId) {
+      final updated = _rest!.copyWith(logoUrl: Value(url));
+      await setRestaurantSettingsOptimistic(updated, branchId: branchId);
+    }
+    return url;
+  }
+
+  db.RestaurantSetting _restaurantFromMap(Map<String, dynamic> m) {
+    String _s(dynamic v, {String def = ''}) => v == null ? def : v.toString();
+    bool _b(dynamic v, {bool def = false}) {
+      if (v is bool) return v;
+      if (v is num) return v != 0;
+      if (v is String) return v.toLowerCase() == 'true';
+      return def;
+    }
+    double _d(dynamic v, {double def = 0.0}) {
+      if (v is num) return v.toDouble();
+      if (v is String) return double.tryParse(v) ?? def;
+      return def;
+    }
+
+    return db.RestaurantSetting(
+      id: 1, // single row locally
+      remoteId: m['id'] as String?,
+      tenantId: m['tenant_id'] as String?,
+      branchId: m['branch_id'] as String?,
+      name: _s(m['name']),
+      logoUrl: m['logo_url'] as String?,
+      address: m['address'] as String?,
+      phone: m['phone'] as String?,
+      gstin: m['gstin'] as String?,
+      fssai: m['fssai'] as String?,
+      printFssaiOnInvoice: _b(m['print_fssai_on_invoice']),
+      gstInclusiveDefault: _b(m['gst_inclusive_default'], def: true),
+      serviceChargeMode: _s(m['service_charge_mode'], def: 'NONE'),
+      serviceChargeValue: _d(m['service_charge_value']),
+      packingChargeMode: _s(m['packing_charge_mode'], def: 'NONE'),
+      packingChargeValue: _d(m['packing_charge_value']),
+      billingPrinterId: m['billing_printer_id'] as String?,
+      invoiceFooter: m['invoice_footer'] as String?,
+    );
+  }
+
+  Map<String, dynamic> _restToMap(db.RestaurantSetting s) => {
+    'id': s.remoteId,
+    'tenant_id': s.tenantId,
+    'branch_id': s.branchId,
+    'name': s.name,
+    'logo_url': s.logoUrl,
+    'address': s.address,
+    'phone': s.phone,
+    'gstin': s.gstin,
+    'fssai': s.fssai,
+    'print_fssai_on_invoice': s.printFssaiOnInvoice,
+    'gst_inclusive_default': s.gstInclusiveDefault,
+    'service_charge_mode': s.serviceChargeMode,
+    'service_charge_value': s.serviceChargeValue,
+    'packing_charge_mode': s.packingChargeMode,
+    'packing_charge_value': s.packingChargeValue,
+    'billing_printer_id': s.billingPrinterId,
+    'invoice_footer': s.invoiceFooter,
+  };
 
   // -------- Offline queue (stub) --------
   final List<Map<String, dynamic>> _opQueue = [];
