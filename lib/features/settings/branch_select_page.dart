@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:waah_frontend/app/providers.dart';
+import 'package:waah_frontend/data/repo/catalog_repo.dart';
 
 class BranchSelectPage extends ConsumerWidget {
   const BranchSelectPage({super.key});
@@ -93,16 +94,36 @@ class BranchSelectPage extends ConsumerWidget {
                 trailing: isActive
                     ? const Icon(Icons.check_circle, color: Colors.green)
                     : null,
-                onTap: () {
+                onTap: () async {
                   // Switch active branch (fires all side-effects wired in the notifier)
-                ref.read(activeBranchIdProvider.notifier).set(b.id);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Branch switched')),
-                );
+                  ref.read(activeBranchIdProvider.notifier).set(b.id);
 
-                // Close the picker; caller decides where to land next
-                context.pop();
-              },
+                  final messenger = ScaffoldMessenger.of(context);
+                  messenger.showSnackBar(
+                    const SnackBar(content: Text('Branch switched. Syncing menu...')),
+                  );
+
+                  final tenantId = ref.read(activeTenantIdProvider);
+                  try {
+                    if (tenantId.isNotEmpty && b.id.isNotEmpty) {
+                      await ref.read(catalogRepoProvider).syncDownMenu(tenantId, b.id);
+                    }
+                    if (context.mounted) {
+                      messenger.hideCurrentSnackBar();
+                      messenger.showSnackBar(
+                        const SnackBar(content: Text('Menu synced')),
+                      );
+                      context.go('/menu');
+                    }
+                  } catch (e) {
+                    if (context.mounted) {
+                      messenger.showSnackBar(
+                        SnackBar(content: Text('Branch switched, but menu sync failed: $e')),
+                      );
+                      context.go('/menu');
+                    }
+                  }
+                },
               );
             },
             separatorBuilder: (_, __) => const SizedBox(height: 12),

@@ -97,61 +97,64 @@ class AppShell extends ConsumerWidget {
         child: ListView(
           children: [
             DrawerHeader(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Brand row (logo + name), replaces "dPOS"
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      if (logoFullUrl != null)
-                    Image.network(
-                      logoFullUrl,
-                      height: 40,
-                      width: 40,
-                      fit: BoxFit.contain,
-                      errorBuilder: (_, __, ___) =>
-                      const Icon(Icons.restaurant, size: 40),
-                    ),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: Text(
-                          brandName,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 16,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 1,
-                        ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Brand row (logo + name), replaces "dPOS"
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        if (logoFullUrl != null)
+                      Image.network(
+                        logoFullUrl,
+                        height: 40,
+                        width: 40,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, __, ___) =>
+                        const Icon(Icons.restaurant, size: 40),
                       ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 8),
-
-                  Text(
-                    'User: ${me?.name ?? ''}',
-                    style: const TextStyle(fontSize: 13),
-                  ),
-
-                  // NEW: show branch NAME instead of ID
-                  buildBranchLine(),
-
-                  const SizedBox(height: 8),
-
-                  OutlinedButton.icon(
-                    icon: const Icon(Icons.store),
-                    label: const Text(
-                      'Change Branch',
-                      style: TextStyle(fontSize: 12),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            brandName,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 16,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                        ),
+                      ],
                     ),
-                    onPressed: () {
-                      Navigator.pop(context); // close drawer
-                      context.push('/branch/select');
-                    },
-                  ),
-                ],
+
+                    const SizedBox(height: 8),
+
+                    Text(
+                      'User: ${me?.name ?? ''}',
+                      style: const TextStyle(fontSize: 13),
+                    ),
+
+                    // NEW: show branch NAME instead of ID
+                    buildBranchLine(),
+
+                    const SizedBox(height: 8),
+
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.store),
+                      label: const Text(
+                        'Change Branch',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                      onPressed: () {
+                        Navigator.pop(context); // close drawer
+                        context.push('/branch/select');
+                      },
+                    ),
+                  ],
+                ),
               ),
             ),
             ListTile(
