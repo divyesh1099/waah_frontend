@@ -1,0 +1,133 @@
+﻿Analyzing waah_frontend...                                      
+
+warning - The member 'state' can only be used within 'package:state_notifier/state_notifier.dart' or a test - lib\app\providers.dart:118:39 - invalid_use_of_visible_for_testing_member
+warning - The member 'state' can only be used within instance members of subclasses of 'StateNotifier' - lib\app\providers.dart:118:39 - invalid_use_of_protected_member
+warning - The member 'state' can only be used within 'package:state_notifier/state_notifier.dart' or a test - lib\app\providers.dart:147:39 - invalid_use_of_visible_for_testing_member
+warning - The member 'state' can only be used within instance members of subclasses of 'StateNotifier' - lib\app\providers.dart:147:39 - invalid_use_of_protected_member
+warning - The operand can't be 'null', so the condition is always 'false' - lib\data\api_client.dart:1083:34 - unnecessary_null_comparison
+   info - Angle brackets will be interpreted as HTML - lib\data\api_client.dart:1384:45 - unintended_html_in_doc_comment
+warning - The operand can't be 'null', so the condition is always 'false' - lib\data\api_client.dart:1677:34 - unnecessary_null_comparison
+   info - 'issueCustomQuery' is deprecated and shouldn't be used. Use customStatement in the database class - lib\data\local\app_db.dart:135:15 - deprecated_member_use
+   info - 'package:drift/web.dart' is deprecated and shouldn't be used. This variant of web support has downsides compared to `package:drift/wasm.dart` and is in a deprecated bugfix-only mode. Please consider migrating to the new web APIS: https://drift.simonbinder.eu/web - lib\data\local\connection.dart:6:1 - deprecated_member_use
+warning - The declaration '_jsonMap' isn't referenced - lib\data\models.dart:40:22 - unused_element
+   info - The constant name 'DINE_IN' isn't a lowerCamelCase identifier - lib\data\models.dart:51:21 - constant_identifier_names
+   info - The constant name 'TAKEAWAY' isn't a lowerCamelCase identifier - lib\data\models.dart:51:30 - constant_identifier_names
+   info - The constant name 'DELIVERY' isn't a lowerCamelCase identifier - lib\data\models.dart:51:40 - constant_identifier_names
+   info - The constant name 'ONLINE' isn't a lowerCamelCase identifier - lib\data\models.dart:51:50 - constant_identifier_names
+   info - The constant name 'OPEN' isn't a lowerCamelCase identifier - lib\data\models.dart:52:20 - constant_identifier_names
+   info - The constant name 'KITCHEN' isn't a lowerCamelCase identifier - lib\data\models.dart:52:26 - constant_identifier_names
+   info - The constant name 'READY' isn't a lowerCamelCase identifier - lib\data\models.dart:52:35 - constant_identifier_names
+   info - The constant name 'SERVED' isn't a lowerCamelCase identifier - lib\data\models.dart:52:42 - constant_identifier_names
+   info - The constant name 'CLOSED' isn't a lowerCamelCase identifier - lib\data\models.dart:52:50 - constant_identifier_names
+   info - The constant name 'VOID' isn't a lowerCamelCase identifier - lib\data\models.dart:52:58 - constant_identifier_names
+   info - The constant name 'CASH' isn't a lowerCamelCase identifier - lib\data\models.dart:53:16 - constant_identifier_names
+   info - The constant name 'CARD' isn't a lowerCamelCase identifier - lib\data\models.dart:53:22 - constant_identifier_names
+   info - The constant name 'UPI' isn't a lowerCamelCase identifier - lib\data\models.dart:53:28 - constant_identifier_names
+   info - The constant name 'WALLET' isn't a lowerCamelCase identifier - lib\data\models.dart:53:33 - constant_identifier_names
+   info - The constant name 'COUPON' isn't a lowerCamelCase identifier - lib\data\models.dart:53:41 - constant_identifier_names
+   info - The constant name 'BILLING' isn't a lowerCamelCase identifier - lib\data\models.dart:54:20 - constant_identifier_names
+   info - The constant name 'KITCHEN' isn't a lowerCamelCase identifier - lib\data\models.dart:54:29 - constant_identifier_names
+   info - The constant name 'NONE' isn't a lowerCamelCase identifier - lib\data\models.dart:55:19 - constant_identifier_names
+   info - The constant name 'PERCENT' isn't a lowerCamelCase identifier - lib\data\models.dart:55:25 - constant_identifier_names
+   info - The constant name 'FLAT' isn't a lowerCamelCase identifier - lib\data\models.dart:55:34 - constant_identifier_names
+   info - The constant name 'NEW' isn't a lowerCamelCase identifier - lib\data\models.dart:56:18 - constant_identifier_names
+   info - The constant name 'IN_PROGRESS' isn't a lowerCamelCase identifier - lib\data\models.dart:56:23 - constant_identifier_names
+   info - The constant name 'READY' isn't a lowerCamelCase identifier - lib\data\models.dart:56:36 - constant_identifier_names
+   info - The constant name 'DONE' isn't a lowerCamelCase identifier - lib\data\models.dart:56:43 - constant_identifier_names
+   info - The constant name 'CANCELLED' isn't a lowerCamelCase identifier - lib\data\models.dart:56:49 - constant_identifier_names
+   info - The constant name 'PURCHASE' isn't a lowerCamelCase identifier - lib\data\models.dart:57:22 - constant_identifier_names
+   info - The constant name 'SALE' isn't a lowerCamelCase identifier - lib\data\models.dart:57:32 - constant_identifier_names
+   info - The constant name 'ADJUST' isn't a lowerCamelCase identifier - lib\data\models.dart:57:38 - constant_identifier_names
+   info - The constant name 'WASTAGE' isn't a lowerCamelCase identifier - lib\data\models.dart:57:46 - constant_identifier_names
+   info - The constant name 'ZOMATO' isn't a lowerCamelCase identifier - lib\data\models.dart:58:23 - constant_identifier_names
+   info - The constant name 'SWIGGY' isn't a lowerCamelCase identifier - lib\data\models.dart:58:31 - constant_identifier_names
+   info - The constant name 'CUSTOM' isn't a lowerCamelCase identifier - lib\data\models.dart:58:39 - constant_identifier_names
+   info - The constant name 'NONE' isn't a lowerCamelCase identifier - lib\data\models.dart:59:23 - constant_identifier_names
+   info - The constant name 'S3' isn't a lowerCamelCase identifier - lib\data\models.dart:59:29 - constant_identifier_names
+   info - The constant name 'GDRIVE' isn't a lowerCamelCase identifier - lib\data\models.dart:59:33 - constant_identifier_names
+   info - The constant name 'AZURE' isn't a lowerCamelCase identifier - lib\data\models.dart:59:41 - constant_identifier_names
+   info - Angle brackets will be interpreted as HTML - lib\data\models.dart:1200:19 - unintended_html_in_doc_comment
+warning - The left operand can't be null, so the right operand is never executed - lib\data\models.dart:1234:21 - dead_null_aware_expression
+warning - The left operand can't be null, so the right operand is never executed - lib\data\models.dart:1235:19 - dead_null_aware_expression
+warning - The declaration '_mapVariant' isn't referenced - lib\data\repo\catalog_repo.dart:118:19 - unused_element
+warning - The value of the local variable 'out' isn't used - lib\data\repo\catalog_repo.dart:472:11 - unused_local_variable
+   info - The local variable '_s' starts with an underscore - lib\data\repo\settings_repo.dart:458:12 - no_leading_underscores_for_local_identifiers
+   info - The local variable '_b' starts with an underscore - lib\data\repo\settings_repo.dart:459:10 - no_leading_underscores_for_local_identifiers
+   info - The local variable '_d' starts with an underscore - lib\data\repo\settings_repo.dart:465:12 - no_leading_underscores_for_local_identifiers
+warning - The value of the local variable 'seemsOffline' isn't used - lib\features\auth\auth_controller.dart:192:11 - unused_local_variable
+   info - Don't use 'BuildContext's across async gaps - lib\features\debug\queue_diag.dart:106:26 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps - lib\features\debug\queue_diag.dart:108:26 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps - lib\features\debug\queue_diag.dart:339:22 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps - lib\features\debug\queue_diag.dart:341:22 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps - lib\features\inventory\inventory_page.dart:142:17 - use_build_context_synchronously
+warning - The declaration '_kOnlineFirst' isn't referenced - lib\features\kot\kot_page.dart:31:12 - unused_element
+warning - Unnecessary type check; the result is always 'true' - lib\features\kot\kot_page.dart:488:17 - unnecessary_type_check
+warning - The left operand can't be null, so the right operand is never executed - lib\features\kot\kot_page.dart:510:59 - dead_null_aware_expression
+warning - The declaration '_enqueueKotOp' isn't referenced - lib\features\kot\kot_page.dart:660:14 - unused_element
+   info - Don't use 'BuildContext's across async gaps - lib\features\kot\kot_page.dart:1621:23 - use_build_context_synchronously
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\kot\kot_page.dart:1706:29 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\kot\kot_page.dart:1731:29 - deprecated_member_use
+warning - Unused import: 'package:waah_frontend/data/repo/catalog_repo.dart' - lib\features\menu\menu_csv_import_page.dart:9:8 - unused_import
+   info - The private field _done could be 'final' - lib\features\menu\menu_csv_import_page.dart:24:7 - prefer_final_fields
+   info - The private field _total could be 'final' - lib\features\menu\menu_csv_import_page.dart:25:7 - prefer_final_fields
+warning - The declaration '_truthy' isn't referenced - lib\features\menu\menu_csv_import_page.dart:116:8 - unused_element
+warning - The declaration '_toDouble' isn't referenced - lib\features\menu\menu_csv_import_page.dart:123:10 - unused_element
+   info - 'background' is deprecated and shouldn't be used. Use surface instead. This feature was deprecated after v3.18.0-0.1.pre - lib\features\onboarding\onboarding_page.dart:337:7 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:367:33 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:379:35 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:381:41 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:383:41 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:387:35 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:394:35 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:485:38 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:534:38 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:624:33 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:627:35 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:635:35 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:659:40 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:686:33 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:689:35 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:727:35 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:932:37 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:1050:37 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:1104:39 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:1106:58 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:1118:88 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:1120:84 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:1172:33 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:1175:35 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:1203:41 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\onboarding\onboarding_page.dart:1217:35 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\online\online_page.dart:74:16 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\online\online_page.dart:113:16 - deprecated_member_use
+warning - The declaration '_TotalRow' isn't referenced - lib\features\orders\orders_page.dart:591:7 - unused_element
+warning - A value for optional parameter 'isBold' isn't ever given - lib\features\orders\orders_page.dart:595:10 - unused_element_parameter
+warning - A value for optional parameter 'highlight' isn't ever given - lib\features\orders\orders_page.dart:596:10 - unused_element_parameter
+warning - The declaration '_kAutoPrintKOT' isn't referenced - lib\features\pos\pos_page.dart:45:12 - unused_element
+warning - The declaration '_kAutoPrintInvoice' isn't referenced - lib\features\pos\pos_page.dart:46:12 - unused_element
+warning - The value of the local variable 'activeName' isn't used - lib\features\pos\pos_page.dart:150:15 - unused_local_variable
+warning - The member 'state' can only be used within 'package:state_notifier/state_notifier.dart' or a test - lib\features\pos\pos_page.dart:172:55 - invalid_use_of_visible_for_testing_member
+warning - The member 'state' can only be used within instance members of subclasses of 'StateNotifier' - lib\features\pos\pos_page.dart:172:55 - invalid_use_of_protected_member
+  error - Undefined name 'catalogRepoProvider' - lib\features\pos\pos_page.dart:197:26 - undefined_identifier
+  error - Undefined name 'catalogRepoProvider' - lib\features\pos\pos_page.dart:211:26 - undefined_identifier
+  error - Undefined name 'catalogRepoProvider' - lib\features\pos\pos_page.dart:675:20 - undefined_identifier
+   info - 'groupValue' is deprecated and shouldn't be used. Use a RadioGroup ancestor to manage group value instead. This feature was deprecated after v3.32.0-0.0.pre - lib\features\pos\pos_page.dart:1354:27 - deprecated_member_use
+   info - 'onChanged' is deprecated and shouldn't be used. Use RadioGroup to handle value change instead. This feature was deprecated after v3.32.0-0.0.pre - lib\features\pos\pos_page.dart:1355:27 - deprecated_member_use
+warning - The declaration '_queuedCount' isn't referenced - lib\features\pos\pos_page.dart:1568:13 - unused_element
+warning - This 'onError' handler must return a value assignable to 'Map<String, dynamic>', but ends without returning a value - lib\features\pos\pos_page.dart:1762:27 - body_might_complete_normally_catch_error
+warning - The declaration '_runPostCheckoutTasks' isn't referenced - lib\features\pos\pos_page.dart:1951:16 - unused_element
+warning - A value of type 'Map<String, dynamic>' can't be returned by the 'onError' handler because it must be assignable to 'FutureOr<void>' - lib\features\pos\pos_page.dart:1967:14 - invalid_return_type_for_catch_error
+warning - A value of type 'Map<String, dynamic>' can't be returned by the 'onError' handler because it must be assignable to 'FutureOr<void>' - lib\features\pos\pos_page.dart:1979:14 - invalid_return_type_for_catch_error
+   info - Don't use 'BuildContext's across async gaps - lib\features\pos\pos_page.dart:2059:30 - use_build_context_synchronously
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\shift\shift_page.dart:92:68 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\shift\shift_page.dart:97:51 - deprecated_member_use
+   info - Don't use 'BuildContext's across async gaps - lib\features\sync\sync_action.dart:22:32 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps - lib\features\sync\sync_action.dart:26:32 - use_build_context_synchronously
+   info - Don't invoke 'print' in production code - lib\features\sync\sync_controller.dart:90:13 - avoid_print
+   info - Don't invoke 'print' in production code - lib\features\sync\sync_controller.dart:222:7 - avoid_print
+   info - Don't invoke 'print' in production code - lib\features\sync\sync_controller.dart:223:7 - avoid_print
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\users\roles_page.dart:97:26 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\users\users_page.dart:145:57 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\features\users\users_page.dart:161:14 - deprecated_member_use
+  error - The name 'MyApp' isn't a class - test\widget_test.dart:16:35 - creation_with_non_type
+

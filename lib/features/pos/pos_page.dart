@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 // UPDATED: No longer hiding ordersFutureProvider
 import 'package:waah_frontend/app/providers.dart';
 import 'package:waah_frontend/data/models.dart';
+import 'package:waah_frontend/data/repo/catalog_repo.dart';
 import 'package:waah_frontend/widgets/menu_media.dart';
 import 'dart:convert' as convert;
 import 'dart:math';
@@ -22,6 +23,24 @@ typedef Read = T Function<T>(ProviderListenable<T> provider);
 // --- FAST CACHES for variants & modifiers (cleared on app restart) ---
 final Map<String, List<ItemVariant>> _variantsCache = {};
 final Map<String, List<_ItemModifierGroupData>> _modsCache = {};
+
+String _cacheKeyForItem(String tenantId, String branchId, String itemId) =>
+    '$tenantId::$branchId::$itemId';
+
+void _clearPosCaches() {
+  _variantsCache.clear();
+  _modsCache.clear();
+}
+
+// Clear POS caches when tenant/branch changes or on logout.
+final _posCacheInvalidator = Provider<void>((ref) {
+  ref.listen<String>(activeTenantIdProvider, (prev, next) {
+    if ((prev ?? '') != next) _clearPosCaches();
+  });
+  ref.listen<String>(activeBranchIdProvider, (prev, next) {
+    if ((prev ?? '') != next) _clearPosCaches();
+  });
+});
 
 // ---------------- SPEED CONFIG ----------------
 const bool _kAutoPrintKOT = true;
@@ -61,24 +80,34 @@ final printerSnapshotProvider = FutureProvider<_PrinterSnapshot>((ref) async {
   return _PrinterSnapshot(kitchenPrinterIds: kitchen, billPrinterIds: bill);
 });
 
-Future<List<ItemVariant>> _getVariantsCached(WidgetRef ref, String itemId) async {
-  final hit = _variantsCache[itemId];
+Future<List<ItemVariant>> _getVariantsCached({
+  required ApiClient client,
+  required String tenantId,
+  required String branchId,
+  required String itemId,
+}) async {
+  final key = _cacheKeyForItem(tenantId, branchId, itemId);
+  final hit = _variantsCache[key];
   if (hit != null) return hit;
-  final client = ref.read(apiClientProvider);
   final res = await client.fetchVariants(itemId);
-  _variantsCache[itemId] = res;
+  _variantsCache[key] = res;
   return res;
 }
 
-Future<List<_ItemModifierGroupData>> _getModsCached(WidgetRef ref, String itemId) async {
-  final hit = _modsCache[itemId];
+Future<List<_ItemModifierGroupData>> _getModsCached({
+  required ApiClient client,
+  required String tenantId,
+  required String branchId,
+  required String itemId,
+}) async {
+  final key = _cacheKeyForItem(tenantId, branchId, itemId);
+  final hit = _modsCache[key];
   if (hit != null) return hit;
-  final client = ref.read(apiClientProvider);
   final raw = await client.fetchItemModifierGroups(itemId);
   final parsed = raw.map<_ItemModifierGroupData>(
         (g) => _ItemModifierGroupData.fromRaw(Map<String, dynamic>.from(g)),
   ).toList();
-  _modsCache[itemId] = parsed;
+  _modsCache[key] = parsed;
   return parsed;
 }
 
@@ -164,45 +193,41 @@ final selectedCategoryIdProvider = StateProvider<String?>((ref) => null);
 final posSearchQueryProvider = StateProvider<String>((ref) => '');
 final posFastViewProvider = StateProvider<bool>((ref) => false);
 
-/// Load menu categories for the ACTIVE tenant/branch.
-final posCategoriesProvider =
-FutureProvider<List<MenuCategory>>((ref) async {
-  final client = ref.watch(apiClientProvider);
+/// Load menu categories for the ACTIVE tenant/branch (Offline First).
+final posCategoriesProvider = StreamProvider<List<MenuCategory>>((ref) {
+  final repo = ref.watch(catalogRepoProvider);
   final tenantId = ref.watch(activeTenantIdProvider);
   final branchId = ref.watch(activeBranchIdProvider);
-  if (tenantId.isEmpty || branchId.isEmpty) return <MenuCategory>[];
-
-  final cats = await client.fetchCategories(tenantId: tenantId, branchId: branchId);
-  cats.sort((a, b) => (a.position).compareTo(b.position));
-  return cats;
+  
+  if (tenantId.isEmpty || branchId.isEmpty) return Stream.value([]);
+  
+  // We can filter by branch if local DB supports multiple branches?
+  // CatalogRepo.watchCategoriesAsApi returns ALL categories in DB.
+  // The local sync logic clears DB on branch switch.
+  // So whatever is in DB is for current branch.
+  return repo.watchCategoriesAsApi();
 });
 
-final posItemsProvider = FutureProvider<List<MenuItem>>((ref) async {
-  final client   = ref.watch(apiClientProvider);
-  final tenantId = ref.watch(activeTenantIdProvider);
-  final branchId = ref.watch(activeBranchIdProvider); // NEW
-  final catId    = ref.watch(selectedCategoryIdProvider);
-  final search   = ref.watch(posSearchQueryProvider).toLowerCase().trim();
+final posItemsProvider = StreamProvider<List<MenuItem>>((ref) {
+  final repo = ref.watch(catalogRepoProvider);
+  final catId = ref.watch(selectedCategoryIdProvider); // remote ID
+  final search = ref.watch(posSearchQueryProvider).toLowerCase().trim();
 
-  if (tenantId.isEmpty) return <MenuItem>[];
-
-  final items = await client.fetchItems(
-    categoryId: (catId == null || catId.trim().isEmpty) ? null : catId, // FIXED
-    tenantId: tenantId,
-    branchId: branchId.isEmpty ? null : branchId,                        // NEW
-  );
-
-  final filtered = items
-      .where((i) => i.isActive && !i.stockOut)
-      .toList()
-    ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-
-  if (search.isEmpty) return filtered;
-  return filtered.where((i) {
-    final n = i.name.toLowerCase();
-    final d = (i.description ?? '').toLowerCase();
-    return n.contains(search) || d.contains(search);
-  }).toList();
+  // Stream items from local DB
+  return repo.watchItemsAsApi(categoryId: catId).map((items) {
+    // Filter active & stock-out & search
+    final filtered = items.where((i) {
+      if (!i.isActive) return false;
+      if (i.stockOut) return false;
+      
+      if (search.isEmpty) return true;
+      final n = i.name.toLowerCase();
+      final d = (i.description ?? '').toLowerCase();
+      return n.contains(search) || d.contains(search);
+    }).toList();
+    
+    return filtered;
+  });
 });
 
 /// Load dining tables for ACTIVE branch.
@@ -533,12 +558,15 @@ class PosPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     ref.watch(_queueAutoSyncProvider);
+    ref.watch(_posCacheInvalidator);
+    ref.watch(tenantBranchBootstrapperProvider);
     final tenantId = ref.watch(activeTenantIdProvider);
     final branchId = ref.watch(activeBranchIdProvider);
+    final apiClient = ref.watch(apiClientProvider);
     final isFastView = ref.watch(posFastViewProvider);
 
     // Guard: require active tenant/branch
-    if (tenantId.isEmpty || branchId.isEmpty) {
+    if (tenantId.isEmpty) {
       return Scaffold(
         appBar: AppBar(title: const Text('POS')),
         body: const Center(
@@ -548,6 +576,68 @@ class PosPage extends ConsumerWidget {
               'Please select a Tenant and Branch in the app first.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 16),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (branchId.isEmpty) {
+      final branchesAsync = ref.watch(branchesProvider);
+      return Scaffold(
+        appBar: AppBar(title: const Text('POS')),
+        body: branchesAsync.when(
+          data: (branches) {
+            if (branches.isEmpty) {
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'No branches found for this tenant. Please create one in Settings.',
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              );
+            }
+
+            if (branches.length == 1) {
+              // Auto-pick the only branch to unblock POS.
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                ref.read(activeBranchIdProvider.notifier).set(branches.first.id);
+              });
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            return ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: branches.length,
+              itemBuilder: (_, i) {
+                final b = branches[i];
+                return Card(
+                  child: ListTile(
+                    title: Text(b.name),
+                    subtitle: b.address == null ? null : Text(b.address!),
+                    onTap: () => ref.read(activeBranchIdProvider.notifier).set(b.id),
+                  ),
+                );
+              },
+            );
+          },
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => Center(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('Failed to load branches: $e'),
+                  const SizedBox(height: 8),
+                  FilledButton(
+                    onPressed: () => ref.invalidate(branchesProvider),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -577,8 +667,13 @@ class PosPage extends ConsumerWidget {
         tooltip: 'Refresh menu',
         icon: const Icon(Icons.refresh),
         onPressed: () {
-          ref.invalidate(posCategoriesProvider);
-          ref.invalidate(posItemsProvider);
+          // Trigger a full sync from server to update local DB
+          ScaffoldMessenger.of(context).showSnackBar(
+             const SnackBar(content: Text('Syncing menu...')),
+          );
+          final tenantId = ref.read(activeTenantIdProvider);
+          final branchId = ref.read(activeBranchIdProvider);
+          ref.read(catalogRepoProvider).syncDownMenu(tenantId, branchId);
         },
       ),
       IconButton(
@@ -670,8 +765,22 @@ class PosPage extends ConsumerWidget {
               for (final it in items.take(24)) {
                 final id = it.id;
                 if (id != null && id.isNotEmpty) {
-                  unawaited(_prefetchGate.withPermit(() => _getVariantsCached(ref, id)));
-                  unawaited(_prefetchGate.withPermit(() => _getModsCached(ref, id)));
+                  unawaited(_prefetchGate.withPermit(
+                    () => _getVariantsCached(
+                      client: apiClient,
+                      tenantId: tenantId,
+                      branchId: branchId,
+                      itemId: id,
+                    ),
+                  ));
+                  unawaited(_prefetchGate.withPermit(
+                    () => _getModsCached(
+                      client: apiClient,
+                      tenantId: tenantId,
+                      branchId: branchId,
+                      itemId: id,
+                    ),
+                  ));
                 }
               }
 
@@ -679,8 +788,18 @@ class PosPage extends ConsumerWidget {
                 if ((item.id ?? '').isEmpty) return;
 
                 final results = await Future.wait([
-                  _getVariantsCached(ref, item.id!),
-                  _getModsCached(ref, item.id!),
+                  _getVariantsCached(
+                    client: apiClient,
+                    tenantId: tenantId,
+                    branchId: branchId,
+                    itemId: item.id!,
+                  ),
+                  _getModsCached(
+                    client: apiClient,
+                    tenantId: tenantId,
+                    branchId: branchId,
+                    itemId: item.id!,
+                  ),
                 ]);
                 final variants = results[0] as List<ItemVariant>;
                 final modifierGroups = results[1] as List<_ItemModifierGroupData>;

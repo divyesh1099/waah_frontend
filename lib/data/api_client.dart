@@ -612,6 +612,37 @@ class ApiClient {
     );
   }
 
+  Future<Map<String, dynamic>> uploadMenuCsv({
+    required PlatformFile file,
+    String? branchId,
+  }) async {
+    final uri = Uri.parse('$baseUrl/menu/upload-csv');
+    final req = http.MultipartRequest('POST', uri);
+
+    req.headers.addAll(_headers());
+    if (branchId != null) req.fields['branch_id'] = branchId;
+
+    if (file.bytes != null) {
+      req.files.add(http.MultipartFile.fromBytes(
+        'file',
+        file.bytes!,
+        filename: file.name,
+      ));
+    } else if (file.path != null) {
+      req.files.add(await http.MultipartFile.fromPath(
+        'file',
+        file.path!,
+      ));
+    } else {
+      throw Exception('No file data available');
+    }
+
+    final streamed = await req.send();
+    final r = await http.Response.fromStream(streamed);
+    final data = _decodeOrThrow(r);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
   // GET /menu/items/{item_id}/modifiers_full
   Future<List<dynamic>> fetchItemModifierGroups(String itemId) async {
     // build URL like: /menu/items/<id>/modifiers_full

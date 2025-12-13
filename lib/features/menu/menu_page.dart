@@ -72,6 +72,16 @@ class MenuPage extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Menu Categories'),
         actions: [
+          // Bulk Import
+          IconButton(
+            icon: const Icon(Icons.upload_file),
+            tooltip: 'Import CSV',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const MenuCsvImportPage()),
+              );
+            },
+          ),
           // Add a manual sync button
           IconButton(
             icon: const Icon(Icons.sync),

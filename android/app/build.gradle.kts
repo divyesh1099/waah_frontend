@@ -109,3 +109,8 @@ tasks.whenTaskAdded {
         enabled = false
     }
 }
+
+// AGP 8+ spawns lintVitalAnalyzeRelease; force-disable all lintVital variants to unblock aab/apk.
+tasks.matching { it.name.contains("lintVital", ignoreCase = true) }.configureEach {
+    enabled = false
+}

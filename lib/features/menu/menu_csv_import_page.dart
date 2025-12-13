@@ -77,18 +77,21 @@ Main Course,Butter Chicken,,5,true,true,Full,420,,BCH-001,2106,https://picsum.ph
         }
       }
 
-      final rows = <Map<String, String>>[];
+      final parsedRows = <Map<String, String>>[];
       for (var i = 1; i < csv.length; i++) {
         final row = csv[i];
         if (row.isEmpty) continue;
-        String val(String name) {
+        final val = (String name) {
           final idx = col(name);
           if (idx < 0 || idx >= row.length) return '';
           final v = row[idx];
           return (v == null) ? '' : v.toString().trim();
-        }
+        };
 
-        rows.add({
+        // Skip empty rows
+        if (val('name').isEmpty && val('category').isEmpty) continue;
+
+        parsedRows.add({
           'category': val('category'),
           'name': val('name'),
           'description': val('description'),
@@ -106,7 +109,9 @@ Main Course,Butter Chicken,,5,true,true,Full,420,,BCH-001,2106,https://picsum.ph
 
       setState(() {
         _csvFile = f;
-        _rows = rows.where((r) => (r['category'] ?? '').isNotEmpty && (r['name'] ?? '').isNotEmpty).toList();
+        _rows = parsedRows
+            .where((r) => (r['category'] ?? '').isNotEmpty && (r['name'] ?? '').isNotEmpty)
+            .toList();
       });
     } catch (e) {
       setState(() => _parseError = 'CSV parse failed: $e');
@@ -127,118 +132,41 @@ Main Course,Butter Chicken,,5,true,true,Full,420,,BCH-001,2106,https://picsum.ph
   }
 
   Future<void> _import() async {
-    if (_rows.isEmpty || _importing) return;
+    if (_csvFile == null || _importing) return;
 
-    final repo = ref.read(catalogRepoProvider);
-    final me = ref.read(authControllerProvider).me;
-    final tenantId = me?.tenantId ?? '';
     final branchId = ref.read(activeBranchIdProvider);
-
-    if (tenantId.isEmpty || branchId.isEmpty) {
+    if (branchId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Select a branch and login first')),
+        const SnackBar(content: Text('Select a branch first')),
       );
       return;
     }
 
     setState(() {
       _importing = true;
-      _done = 0;
-      _total = _rows.length;
+      _parseError = null;
     });
 
-    // Group rows by (category,name) so we create item once and add variants
-    final groups = <String, List<Map<String, String>>>{};
-    for (final r in _rows) {
-      final key = '${r['category']!.toLowerCase()}||${r['name']!.toLowerCase()}';
-      (groups[key] ??= []).add(r);
-    }
-
-    int createdCats = 0, createdItems = 0, createdVars = 0, attachedImgs = 0;
-    final errors = <String>[];
-
     try {
-      for (final entry in groups.entries) {
-        final rows = entry.value;
-        final first = rows.first;
+      final api = ref.read(apiClientProvider);
+      
+      final res = await api.uploadMenuCsv(
+        file: _csvFile!,
+        branchId: branchId,
+      );
 
-        final catName = first['category']!.trim();
-        final itemName = first['name']!.trim();
-        final description = (first['description'] ?? '').trim().isEmpty ? null : first['description']!.trim();
-        final sku = (first['sku'] ?? '').trim().isEmpty ? null : first['sku']!.trim();
-        final hsn = (first['hsn'] ?? '').trim().isEmpty ? null : first['hsn']!.trim();
-        final gstRate = _toDouble(first['gst_rate'], 5.0);
-        final taxInc = _truthy(first['tax_inclusive'], defaultValue: true);
-        final isActive = _truthy(first['is_active'], defaultValue: true);
-        final imageUrl = (first['image_url'] ?? '').trim();
-
-        try {
-          // Category
-          final (localCatId, remoteCatId) = await repo.ensureCategoryByName(
-            name: catName,
-            tenantId: tenantId,
-            branchId: branchId,
-          );
-          if (localCatId == 0 || remoteCatId.isEmpty) throw StateError('category create failed');
-          createdCats++; // this counts attempts; OK if duplicates
-
-          // Item
-          final remoteItemId = await repo.ensureItemByName(
-            itemName: itemName,
-            remoteCategoryId: remoteCatId,
-            tenantId: tenantId,
-            description: description,
-            isActive: isActive,
-            taxInclusive: taxInc,
-            gstRate: gstRate,
-            sku: sku,
-            hsn: hsn,
-          );
-          if (remoteItemId.isEmpty) throw StateError('item create failed');
-          createdItems++;
-
-          // Variants – each row is one variant
-          for (final r in rows) {
-            final label = (r['variant_label'] ?? '').trim().isEmpty ? 'Default' : r['variant_label']!.trim();
-            final price = _toDouble(r['price'], 0.0);
-            final mrp = (r['mrp'] ?? '').trim().isEmpty ? null : _toDouble(r['mrp'], price);
-
-            await repo.ensureVariantByLabel(
-              remoteItemId: remoteItemId,
-              label: label,
-              basePrice: price,
-              mrp: mrp,
-              isDefault: label.toLowerCase() == 'default' || label.toLowerCase() == 'regular',
-            );
-            createdVars++;
-          }
-
-          // Image once per (category,item) if provided
-          if (imageUrl.isNotEmpty &&
-              (imageUrl.startsWith('http://') || imageUrl.startsWith('https://'))) {
-            await repo.uploadItemImageFromHttpUrl(itemId: remoteItemId, imageUrl: imageUrl);
-            attachedImgs++;
-          }
-        } catch (e) {
-          errors.add('[$catName > $itemName] $e');
-        }
-
-        setState(() => _done += rows.length);
-      }
-
-      // Pull everything so UI updates
+      // Trigger sync to pull changes
       await ref.read(syncControllerProvider.notifier).syncNow();
 
       if (!mounted) return;
-      final msg = 'Import finished • Cats:$createdCats Items:$createdItems Variants:$createdVars Images:$attachedImgs'
-          '${errors.isEmpty ? '' : '\nErrors: ${errors.length} (see console)'}';
-      for (final e in errors) {
-        // log to console
-        // ignore: avoid_print
-        print('CSV-IMPORT error: $e');
-      }
+      
+      final msg = res['message'] ?? 'Import successful';
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
       Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _parseError = 'Upload failed: $e');
+      }
     } finally {
       if (mounted) setState(() => _importing = false);
     }

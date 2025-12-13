@@ -129,6 +129,13 @@ StateNotifierProvider<IdNotifier, String>((ref) {
   final stored = prefs.getString('active_branch_id') ?? '';
   final n = IdNotifier(prefs, 'active_branch_id', stored);
 
+  // If tenant changes, drop the branch to avoid cross-tenant leakage.
+  ref.listen<String>(activeTenantIdProvider, (prev, next) {
+    if ((prev ?? '') != next) {
+      n.clear();
+    }
+  });
+
   // Clear on logout; adopt branch from /auth/me on login if empty
   ref.listen<AuthState>(authControllerProvider, (prev, next) {
     final prevToken = prev?.token ?? '';
@@ -174,6 +181,41 @@ FutureProvider.autoDispose<List<BranchInfo>>((ref) async {
   final tenantId = ref.watch(activeTenantIdProvider);
   if (tenantId.isEmpty) return <BranchInfo>[];
   return api.fetchBranches(tenantId: tenantId);
+});
+
+/// Ensure tenant/branch are populated after login, especially on fresh devices.
+final tenantBranchBootstrapperProvider = FutureProvider<void>((ref) async {
+  final auth = ref.watch(authControllerProvider);
+  final me = auth.me;
+  final api = ref.read(apiClientProvider);
+
+  var tenantId = ref.read(activeTenantIdProvider);
+  var branchId = ref.read(activeBranchIdProvider);
+
+  // Adopt tenant from /auth/me if missing.
+  if (tenantId.isEmpty && me?.tenantId.isNotEmpty == true) {
+    tenantId = me!.tenantId;
+    setActiveTenant(ref, tenantId);
+  }
+
+  // Adopt branch from /auth/me if missing.
+  if (branchId.isEmpty && me?.branchId?.isNotEmpty == true) {
+    branchId = me!.branchId!;
+    setActiveBranch(ref, branchId);
+    return;
+  }
+
+  // If still missing branch, fetch and pick the first one.
+  if (branchId.isEmpty && tenantId.isNotEmpty) {
+    try {
+      final branches = await api.fetchBranches(tenantId: tenantId);
+      if (branches.isNotEmpty) {
+        setActiveBranch(ref, branches.first.id);
+      }
+    } catch (_) {
+      // ignore; UI will still allow manual selection
+    }
+  }
 });
 
 // ==============================
@@ -517,4 +559,3 @@ class QueuePusher {
     pending.reconcileLooseWithServer(live, skew: const Duration(minutes: 3));
   }
 }
-

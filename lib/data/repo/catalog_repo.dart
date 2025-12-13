@@ -1,36 +1,36 @@
 // lib/data/repo/catalog_repo.dart
 import 'dart:io' as io;
 
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:waah_frontend/app/providers.dart';
 import 'package:waah_frontend/data/api_client.dart';
-import 'package:waah_frontend/data/local/app_db.dart';
+import 'package:waah_frontend/data/local/app_db.dart' as db;
 import 'package:waah_frontend/data/models.dart' as api;
 import 'package:dio/dio.dart' as dio;
 
 class CatalogRepo {
   CatalogRepo(this._client, this._db);
   final ApiClient _client;
-  final AppDatabase _db;
+  final db.AppDatabase _db;
 
   // ------------------ Streams (UI reads) ------------------
 
-  Stream<List<MenuCategory>> watchCategories() => _db.watchCategories();
+  Stream<List<db.MenuCategory>> watchCategories() => _db.watchCategories();
 
-  Stream<List<MenuItem>> watchItems(int localCategoryId) =>
+  Stream<List<db.MenuItem>> watchItems(int localCategoryId) =>
       _db.watchItemsInCategory(localCategoryId);
 
-  Stream<List<ItemVariant>> watchVariants(int localItemId) =>
+  Stream<List<db.ItemVariant>> watchVariants(int localItemId) =>
       _db.watchVariantsForItem(localItemId);
 
   // ------------------ Helpers: map API -> local ------------------
 
   Future<void> _upsertLocalCategoryFromApi(api.MenuCategory c) async {
     final rid = (c.id ?? '').trim();
-    await _db.upsertCategory(MenuCategoriesCompanion(
+    await _db.upsertCategory(db.MenuCategoriesCompanion(
       // only set remoteId if non-empty; otherwise leave absent
       remoteId: rid.isEmpty ? const Value.absent() : Value(rid),
       name: Value(c.name),
@@ -48,7 +48,7 @@ class CatalogRepo {
     final localCatId = await _db.localCategoryIdForRid(remoteCatId);
     if (localCatId == null) return;
 
-    await _db.upsertMenuItem(MenuItemsCompanion(
+    await _db.upsertMenuItem(db.MenuItemsCompanion(
       remoteId: Value(rid),
       categoryId: Value(localCatId),
       name: Value(it.name),
@@ -72,7 +72,7 @@ class CatalogRepo {
     final localItemId = await _db.localItemIdForRid(v.itemId);
     if (localItemId == null) return;
 
-    await _db.upsertItemVariant(ItemVariantsCompanion(
+    await _db.upsertItemVariant(db.ItemVariantsCompanion(
       remoteId: Value(rid),
       itemId: Value(localItemId),
       label: Value(v.label),
@@ -81,6 +81,82 @@ class CatalogRepo {
       isDefault: Value(v.isDefault),
       imageUrl: Value(v.imageUrl),
     ));
+  }
+
+  // ------------------ Converters: Local -> API ------------------
+
+  api.MenuCategory _mapCat(db.MenuCategory r) {
+    return api.MenuCategory(
+      id: r.remoteId ?? '',
+      tenantId: '', // not stored in local row
+      branchId: '', // not stored
+      name: r.name,
+      position: r.position,
+      createdAt: null,
+      updatedAt: null,
+    );
+  }
+
+  api.MenuItem _mapItem(db.MenuItem r) {
+    return api.MenuItem(
+      id: r.remoteId ?? '',
+      tenantId: '',
+      categoryId: '', // resolved below or ignored
+      name: r.name,
+      description: r.description,
+      sku: r.sku,
+      hsn: r.hsn,
+      isActive: r.isActive,
+      stockOut: r.stockOut,
+      taxInclusive: r.taxInclusive,
+      gstRate: r.gstRate,
+      kitchenStationId: r.kitchenStationId,
+      imageUrl: r.imageUrl,
+    );
+  }
+
+  api.ItemVariant _mapVariant(db.ItemVariant r) {
+    return api.ItemVariant(
+      id: r.remoteId ?? '',
+      itemId: '', // resolved below
+      label: r.label,
+      mrp: r.mrp,
+      basePrice: r.basePrice,
+      isDefault: r.isDefault,
+      imageUrl: r.imageUrl,
+    );
+  }
+
+  // ------------------ Streams for POS (API Models) ------------------
+
+  Stream<List<api.MenuCategory>> watchCategoriesAsApi() {
+    return _db.watchCategories().map((rows) => rows.map(_mapCat).toList());
+  }
+
+  Stream<List<api.MenuItem>> watchItemsAsApi({String? categoryId}) { // remoteId
+    final q = _db.select(_db.menuItems);
+    
+    // Sort name ASC
+    q.orderBy([(t) => OrderingTerm(expression: t.name, mode: OrderingMode.asc)]);
+
+    if (categoryId != null && categoryId.isNotEmpty) {
+      // Filter by joining category on remote ID
+      return _db.customSelect(
+        'SELECT i.* FROM menu_items i '
+        'JOIN menu_categories c ON i.category_id = c.id '
+        'WHERE c.rid = ? '
+        'ORDER BY i.name ASC',
+        variables: [Variable.withString(categoryId)],
+        readsFrom: {_db.menuItems, _db.menuCategories},
+      ).watch().map((rows) {
+        return rows.map((row) {
+          return _mapItem(_db.menuItems.map(row.data, tablePrefix: 'i'));
+        }).toList();
+      });
+    }
+
+    // All items
+    return q.watch().map((rows) => rows.map(_mapItem).toList());
   }
 
   // ------------------ Categories (instant writes) ------------------
@@ -167,7 +243,7 @@ class CatalogRepo {
     // reflect locally if we have the row
     final localId = await _db.localItemIdForRid(itemId);
     if (localId != null) {
-      await _db.upsertMenuItem(MenuItemsCompanion(
+      await _db.upsertMenuItem(db.MenuItemsCompanion(
         id: Value(localId),
         gstRate: Value(gstRate),
         taxInclusive: Value(taxInclusive),
@@ -271,7 +347,7 @@ class CatalogRepo {
         final localCatId = catRidToLocal[remoteCat];
         if (localCatId == null) continue;
 
-        await _db.upsertMenuItem(MenuItemsCompanion(
+        await _db.upsertMenuItem(db.MenuItemsCompanion(
           remoteId: Value(it.id ?? ''),
           categoryId: Value(localCatId),
           name: Value(it.name),
@@ -300,7 +376,7 @@ class CatalogRepo {
         if (localItemId == null) continue;
 
         for (final v in entry.value) {
-          await _db.upsertItemVariant(ItemVariantsCompanion(
+          await _db.upsertItemVariant(db.ItemVariantsCompanion(
             remoteId: Value(v.id ?? ''),
             itemId: Value(localItemId),
             label: Value(v.label),
@@ -321,7 +397,7 @@ class CatalogRepo {
       );
       if (rsMap.isNotEmpty) {
         final rs = api.RestaurantSettings.fromJson(rsMap);
-        await _db.upsertSettings(RestaurantSettingsCompanion(
+        await _db.upsertSettings(db.RestaurantSettingsCompanion(
           id: const Value(1),
           remoteId: Value(rs.id ?? ''),
           tenantId: Value(rs.tenantId),
@@ -347,7 +423,7 @@ class CatalogRepo {
 
   // --------- CSV Import helpers (idempotent “find-or-create”) ---------
 
-  Future<MenuCategory?> _findLocalCategoryByNameCI(String name) async {
+  Future<db.MenuCategory?> _findLocalCategoryByNameCI(String name) async {
     final rows = await _db.select(_db.menuCategories).get();
     final n = name.trim().toLowerCase();
     for (final r in rows) {
@@ -356,7 +432,7 @@ class CatalogRepo {
     return null;
   }
 
-  Future<MenuItem?> _findLocalItemByNameCI(int localCategoryId, String name) async {
+  Future<db.MenuItem?> _findLocalItemByNameCI(int localCategoryId, String name) async {
     final rows = await (_db.select(_db.menuItems)
       ..where((t) => t.categoryId.equals(localCategoryId)))
         .get();
@@ -367,7 +443,7 @@ class CatalogRepo {
     return null;
   }
 
-  Future<ItemVariant?> _findLocalVariantByLabelCI(int localItemId, String label) async {
+  Future<db.ItemVariant?> _findLocalVariantByLabelCI(int localItemId, String label) async {
     final rows = await (_db.select(_db.itemVariants)
       ..where((t) => t.itemId.equals(localItemId)))
         .get();
