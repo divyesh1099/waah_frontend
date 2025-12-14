@@ -1,13 +1,10 @@
-import 'dart:convert';
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:file_picker/file_picker.dart';
 
 import 'package:waah_frontend/data/models.dart';
 import 'package:waah_frontend/data/repo/inventory_repo.dart';
 import 'package:waah_frontend/app/providers.dart';
+import 'inventory_import_page.dart';
 
 /// Provider to load all ingredients (with qty_on_hand + min_level).
 final ingredientsProvider =
@@ -29,70 +26,7 @@ FutureProvider.autoDispose<List<Ingredient>>((ref) async {
 class InventoryPage extends ConsumerWidget {
   const InventoryPage({super.key});
 
-  Future<String?> _pickCsvText() async {
-    final res = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['csv'],
-      withData: true,
-    );
-    if (res == null || res.files.isEmpty) return null;
-    final f = res.files.first;
-    if (f.bytes != null) {
-      return utf8.decode(f.bytes!);
-    }
-    if (f.path != null) {
-      return File(f.path!).readAsString();
-    }
-    return null;
-  }
 
-  Future<void> _importIngredientsCsv(BuildContext context, WidgetRef ref) async {
-    final csvText = await _pickCsvText();
-    if (csvText == null) return;
-    final repo = ref.read(inventoryRepoProvider);
-    final branchId = ref.read(activeBranchIdProvider);
-    try {
-      final res = await repo.importIngredientsCsv(csvText, branchId: branchId);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Imported: ${res['created']} new, ${res['updated']} updated')),
-        );
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Import failed: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _exportIngredientsCsv(BuildContext context, WidgetRef ref) async {
-    final repo = ref.read(inventoryRepoProvider);
-    final branchId = ref.read(activeBranchIdProvider);
-    try {
-      final csvText = await repo.exportIngredientsCsv(branchId: branchId);
-      final savePath = await FilePicker.platform.saveFile(
-        fileName: 'ingredients.csv',
-        type: FileType.custom,
-        allowedExtensions: ['csv'],
-      );
-      if (savePath != null) {
-        await File(savePath).writeAsString(csvText);
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Ingredients CSV saved')),
-          );
-        }
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Export failed: $e')),
-        );
-      }
-    }
-  }
 
   // Cash import/export removed from Inventory; see Shift & Cash page.
 
@@ -104,29 +38,16 @@ class InventoryPage extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Inventory'),
         actions: [
-          PopupMenuButton<_InventoryAction>(
-            onSelected: (act) async {
-              switch (act) {
-                case _InventoryAction.importIngredients:
-                  await _importIngredientsCsv(context, ref);
-                  ref.invalidate(ingredientsProvider);
-                  break;
-                case _InventoryAction.exportIngredients:
-                  await _exportIngredientsCsv(context, ref);
-                  break;
-              }
+          IconButton(
+            tooltip: 'Import CSV',
+            icon: const Icon(Icons.upload_file),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const InventoryImportPage()),
+              );
             },
-            itemBuilder: (_) => const [
-              PopupMenuItem(
-                value: _InventoryAction.importIngredients,
-                child: Text('Import Ingredients CSV'),
-              ),
-              PopupMenuItem(
-                value: _InventoryAction.exportIngredients,
-                child: Text('Export Ingredients CSV'),
-              ),
-            ],
           ),
+
           IconButton(
             tooltip: 'Record Purchase',
             icon: const Icon(Icons.shopping_cart_checkout),
@@ -185,7 +106,7 @@ class InventoryPage extends ConsumerWidget {
           if (ings.isEmpty) {
             return const Center(
               child: Text(
-                'No ingredients yet.\nTap "Ingredient" to add.\n\nImport CSV format:\nname, unit, opening_qty, min_level, cost_price, hsn (optional), tax_rate (optional), sku (optional)',
+                'No ingredients yet.\nTap "Ingredient" to add.',
                 textAlign: TextAlign.center,
               ),
             );
@@ -352,10 +273,7 @@ class _AddIngredientDialogState
   }
 }
 
-enum _InventoryAction {
-  importIngredients,
-  exportIngredients,
-}
+
 
 /// Edit minimum level dialog
 class _MinLevelDialog extends ConsumerStatefulWidget {

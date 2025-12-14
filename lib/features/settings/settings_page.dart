@@ -109,6 +109,13 @@ class SettingsPage extends ConsumerWidget {
                 icon: Icons.pin,
                 onTap: () => context.push('/settings/pin'),
               ),
+              if (canEdit)
+                _Card(
+                  title: 'Danger zone',
+                  subtitleStream: Stream.value('Delete menu / debug tools'),
+                  icon: Icons.warning_amber,
+                  onTap: () => context.push('/settings/danger'),
+                ),
             ],
           ),
           const SizedBox(height: 24),

@@ -29,6 +29,26 @@ final prefsProvider = Provider<SharedPreferences>((ref) {
   throw UnimplementedError('prefsProvider overridden in main()');
 });
 
+// ---- Debug toggles ----
+const _kMenuDebugKey = 'menu_debug_enabled';
+
+class _MenuDebugNotifier extends StateNotifier<bool> {
+  _MenuDebugNotifier(this._prefs)
+      : super(_prefs.getBool(_kMenuDebugKey) ?? false);
+  final SharedPreferences _prefs;
+
+  void setEnabled(bool v) {
+    state = v;
+    _prefs.setBool(_kMenuDebugKey, v);
+  }
+}
+
+final menuDebugEnabledProvider =
+    StateNotifierProvider<_MenuDebugNotifier, bool>((ref) {
+  final prefs = ref.watch(prefsProvider);
+  return _MenuDebugNotifier(prefs);
+});
+
 // ---- Dio base options ----
 BaseOptions _dioBase(String? token) => BaseOptions(
   baseUrl: kBaseUrl,

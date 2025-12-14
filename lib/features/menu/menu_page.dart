@@ -57,6 +57,57 @@ final itemVariantsProvider = StreamProvider.family
   return repo.watchVariants(localItemId);
 });
 
+/// Track bootstrap / manual sync notes for quick debugging in the UI.
+final _menuBootstrapLogProvider =
+    StateProvider.autoDispose<String?>((_) => null);
+
+/// One-shot bootstrap: if local menu is empty, pull a fresh copy for the
+/// active tenant/branch so the page is not blank on first launch.
+final _menuBootstrapperProvider = FutureProvider.autoDispose<void>((ref) async {
+  final tenantId = ref.watch(activeTenantIdProvider);
+  final branchId = ref.watch(activeBranchIdProvider);
+  if (tenantId.isEmpty || branchId.isEmpty) return;
+
+  final db = ref.read(localDatabaseProvider);
+  final hasAny = await (db.select(db.menuCategories)..limit(1)).get();
+  if (hasAny.isNotEmpty) return;
+
+  final log = ref.read(_menuBootstrapLogProvider.notifier);
+  log.state = 'Cold-start sync: downloading menu...';
+  try {
+    await ref.read(catalogRepoProvider).syncDownMenu(tenantId, branchId);
+    final catCount = (await db.select(db.menuCategories).get()).length;
+    log.state = 'Cold-start sync finished ($catCount categories)';
+  } catch (e) {
+    log.state = 'Cold-start sync failed: $e';
+    rethrow;
+  }
+});
+
+/// Quick local stats for debugging (counts only, no heavy data).
+class _MenuStats {
+  final int cats;
+  final int items;
+  final int variants;
+  _MenuStats({required this.cats, required this.items, required this.variants});
+}
+
+final _menuStatsProvider = FutureProvider.autoDispose<_MenuStats>((ref) async {
+  Future<int> _count(AppDatabase db, String table) async {
+    final row = await db.customSelect('SELECT COUNT(*) AS c FROM $table').getSingle();
+    final val = row.data['c'];
+    if (val is int) return val;
+    if (val is num) return val.toInt();
+    return int.tryParse(val.toString()) ?? 0;
+  }
+
+  final db = ref.read(localDatabaseProvider);
+  final cats = await _count(db, 'menu_categories');
+  final items = await _count(db, 'menu_items');
+  final vars = await _count(db, 'item_variants');
+  return _MenuStats(cats: cats, items: items, variants: vars);
+});
+
 /// ---------------------------------------------------------------------------
 /// MAIN PAGE
 /// ---------------------------------------------------------------------------
@@ -66,6 +117,9 @@ class MenuPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Fire-and-forget bootstrap to populate menu if this device is empty.
+    ref.watch(_menuBootstrapperProvider);
+    final debugEnabled = ref.watch(menuDebugEnabledProvider);
     final catsAsync = ref.watch(menuCategoriesProvider);
 
     return Scaffold(
@@ -87,28 +141,36 @@ class MenuPage extends ConsumerWidget {
             icon: const Icon(Icons.sync),
             tooltip: 'Sync Menu',
             onPressed: () async {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Syncing...')),
-              );
-              await ref.read(syncControllerProvider.notifier).syncNow();
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+              final tenantId = ref.read(activeTenantIdProvider);
+              final branchId = ref.read(activeBranchIdProvider);
+              if (tenantId.isEmpty || branchId.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Sync complete!'), duration: Duration(seconds: 1)),
+                  const SnackBar(content: Text('Select a branch first')),
+                );
+                return;
+              }
+
+              final messenger = ScaffoldMessenger.of(context);
+              messenger.showSnackBar(
+                const SnackBar(content: Text('Syncing menu from server...')),
+              );
+              try {
+                await ref.read(catalogRepoProvider).syncDownMenu(tenantId, branchId);
+                if (context.mounted) {
+                  messenger.hideCurrentSnackBar();
+                  messenger.showSnackBar(
+                    const SnackBar(content: Text('Menu synced'), duration: Duration(seconds: 1)),
+                  );
+                }
+              } catch (e) {
+                if (!context.mounted) return;
+                messenger.hideCurrentSnackBar();
+                messenger.showSnackBar(
+                  SnackBar(content: Text('Menu sync failed: $e')),
                 );
               }
             },
           ),
-          IconButton(
-            icon: const Icon(Icons.upload_file),
-            tooltip: 'Import CSV',
-            onPressed: () async {
-              await Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const MenuCsvImportPage()),
-              );
-            },
-          ),
-
         ],
       ),
       floatingActionButton: FloatingActionButton(
@@ -125,11 +187,33 @@ class MenuPage extends ConsumerWidget {
       body: catsAsync.when(
         data: (cats) {
           if (cats.isEmpty) {
-            return Center(
-              child: Text(
-                'No categories yet.\nTap + to add one, or tap Sync.',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyLarge,
+            return Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (debugEnabled) const _MenuDebugBanner(),
+                  const SizedBox(height: 16),
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'No categories yet.',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Tap + to add one, or tap Sync to download from server.',
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
             );
           }
@@ -137,17 +221,21 @@ class MenuPage extends ConsumerWidget {
           // Sort local data
           cats.sort((a, b) => a.position.compareTo(b.position));
 
-          return ListView.builder(
-            itemCount: cats.length,
-            itemBuilder: (context, i) {
-              final cat = cats[i];
-              final catId = cat.id; // Use the local int ID
+          return Column(
+            children: [
+              if (debugEnabled) const _MenuDebugBanner(),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: cats.length,
+                  itemBuilder: (context, i) {
+                    final cat = cats[i];
+                    final catId = cat.id; // Use the local int ID
 
-              final itemsAsync = ref.watch(categoryItemsProvider(catId));
+                    final itemsAsync = ref.watch(categoryItemsProvider(catId));
 
-              return Card(
-                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                child: ExpansionTile(
+                    return Card(
+                      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      child: ExpansionTile(
                   tilePadding:
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   childrenPadding:
@@ -388,7 +476,10 @@ class MenuPage extends ConsumerWidget {
                 ),
               );
             },
-          );
+          ),
+        ),
+      ],
+    );
         },
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, st) => Padding(
@@ -397,6 +488,123 @@ class MenuPage extends ConsumerWidget {
             'Failed to load categories:\n$e',
             style: const TextStyle(color: Colors.red),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MenuDebugBanner extends ConsumerStatefulWidget {
+  const _MenuDebugBanner();
+
+  @override
+  ConsumerState<_MenuDebugBanner> createState() => _MenuDebugBannerState();
+}
+
+class _MenuDebugBannerState extends ConsumerState<_MenuDebugBanner> {
+  bool _syncing = false;
+
+  Future<void> _fullDownload(BuildContext context) async {
+    if (_syncing) return;
+    final tenantId = ref.read(activeTenantIdProvider);
+    final branchId = ref.read(activeBranchIdProvider);
+    if (tenantId.isEmpty || branchId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select a branch first')),
+      );
+      return;
+    }
+
+    setState(() => _syncing = true);
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Downloading menu from server...')),
+    );
+    final log = ref.read(_menuBootstrapLogProvider.notifier);
+
+    try {
+      await ref.read(catalogRepoProvider).syncDownMenu(tenantId, branchId);
+      log.state = 'Manual sync OK';
+      if (context.mounted) {
+        messenger.hideCurrentSnackBar();
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Menu downloaded'), duration: Duration(seconds: 1)),
+        );
+      }
+      // refresh stats provider
+      ref.invalidate(_menuStatsProvider);
+    } catch (e) {
+      log.state = 'Manual sync failed: $e';
+      if (context.mounted) {
+        messenger.hideCurrentSnackBar();
+        messenger.showSnackBar(
+          SnackBar(content: Text('Menu download failed: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _syncing = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tenantId = ref.watch(activeTenantIdProvider);
+    final branchId = ref.watch(activeBranchIdProvider);
+    final lastSeq = ref.watch(syncControllerProvider.select((s) => s.lastSeq));
+    final bootstrapLog = ref.watch(_menuBootstrapLogProvider);
+    final statsAsync = ref.watch(_menuStatsProvider);
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(
+                  'Menu debug',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const Spacer(),
+                OutlinedButton.icon(
+                  onPressed: _syncing ? null : () => _fullDownload(context),
+                  icon: _syncing
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.download),
+                  label: const Text('Force full download'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 12,
+              runSpacing: 4,
+              children: [
+                Text('Tenant: ${tenantId.isEmpty ? "(none)" : tenantId}'),
+                Text('Branch: ${branchId.isEmpty ? "(none)" : branchId}'),
+                Text('Last seq: $lastSeq'),
+              ],
+            ),
+            const SizedBox(height: 6),
+            statsAsync.when(
+              data: (s) => Text('Local cache: ${s.cats} categories  ${s.items} items  ${s.variants} variants'),
+              loading: () => const Text('Local cache: ...'),
+              error: (e, _) => Text('Local cache: error $e'),
+            ),
+            if (bootstrapLog != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                bootstrapLog,
+                style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+              ),
+            ],
+          ],
         ),
       ),
     );
@@ -430,7 +638,8 @@ Future<bool?> _confirmYesNo(BuildContext context, String msg) {
 String _variantSummary(ItemVariant v) {
   final price = v.basePrice.toStringAsFixed(2);
   final lbl = v.label.isEmpty ? 'Default' : v.label;
-  return v.isDefault ? '$lbl • ₹$price (default)' : '$lbl • ₹$price';
+  final txt = '$lbl Rs $price';
+  return v.isDefault ? '$txt (default)' : txt;
 }
 
 /// ---------------------------------------------------------------------------
@@ -927,7 +1136,7 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
               keyboardType:
               const TextInputType.numberWithOptions(decimal: true),
               decoration:
-              const InputDecoration(labelText: 'Base price (₹) *'),
+              const InputDecoration(labelText: 'Base price (Rs) *'),
             ),
           ],
         ),
@@ -1102,7 +1311,7 @@ class _ManageVariantsSheetState
                       keyboardType:
                       const TextInputType.numberWithOptions(decimal: true),
                       decoration:
-                      const InputDecoration(labelText: 'Base price (₹)'),
+                      const InputDecoration(labelText: 'Base price (Rs)'),
                     ),
                     const SizedBox(height: 12),
                     TextField(
@@ -1226,8 +1435,8 @@ class _ManageVariantsSheetState
                       final price = v.basePrice.toStringAsFixed(2);
                       final mrp = v.mrp?.toStringAsFixed(2);
                       final txt = v.isDefault
-                          ? '₹$price (default)'
-                          : '₹$price${mrp != null ? ' MRP ₹$mrp' : ''}';
+                          ? 'Rs$price (default)'
+                          : 'Rs$price${mrp != null ? ' MRP Rs$mrp' : ''}';
                       return ListTile(
                         dense: true,
                         contentPadding: EdgeInsets.zero,
@@ -1290,7 +1499,7 @@ class _ManageVariantsSheetState
                 controller: _priceCtl,
                 keyboardType:
                 const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'Base price (₹)'),
+                decoration: const InputDecoration(labelText: 'Base price (Rs)'),
               ),
               const SizedBox(height: 12),
               TextField(

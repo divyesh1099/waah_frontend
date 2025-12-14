@@ -588,6 +588,30 @@ class ApiClient {
     );
   }
 
+  Future<Map<String, dynamic>> clearMenuDanger({
+    required String tenantId,
+    required String branchId,
+    String? password,
+    String? pin,
+  }) async {
+    final r = await _post(
+      '/menu/danger/clear-menu',
+      body: {
+        if (password != null && password.isNotEmpty) 'password': password,
+        if (pin != null && pin.isNotEmpty) 'pin': pin,
+        'branch_id': branchId,
+      },
+    );
+    return Map<String, dynamic>.from(r as Map);
+  }
+
+  Future<void> verifyPassword({String? password, String? pin}) async {
+    await _post('/auth/verify-password', body: {
+      if (password != null && password.isNotEmpty) 'password': password,
+      if (pin != null && pin.isNotEmpty) 'pin': pin,
+    });
+  }
+
   Future<MenuItem> createItem(MenuItem data) =>
       createOne<MenuItem>(
         path: '/menu/items',

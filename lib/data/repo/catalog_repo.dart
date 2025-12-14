@@ -1,5 +1,6 @@
 // lib/data/repo/catalog_repo.dart
 import 'dart:io' as io;
+import 'package:csv/csv.dart';
 
 import 'package:drift/drift.dart';
 import 'package:file_picker/file_picker.dart';
@@ -134,7 +135,8 @@ class CatalogRepo {
   }
 
   Stream<List<api.MenuItem>> watchItemsAsApi({String? categoryId}) { // remoteId
-    final q = _db.select(_db.menuItems);
+    final q = _db.select(_db.menuItems)
+      ..where((t) => t.categoryId.isNotNull());
     
     // Sort name ASC
     q.orderBy([(t) => OrderingTerm(expression: t.name, mode: OrderingMode.asc)]);
@@ -144,13 +146,13 @@ class CatalogRepo {
       return _db.customSelect(
         'SELECT i.* FROM menu_items i '
         'JOIN menu_categories c ON i.category_id = c.id '
-        'WHERE c.rid = ? '
+        'WHERE c.rid = ? AND i.category_id IS NOT NULL '
         'ORDER BY i.name ASC',
         variables: [Variable.withString(categoryId)],
         readsFrom: {_db.menuItems, _db.menuCategories},
       ).watch().map((rows) {
         return rows.map((row) {
-          return _mapItem(_db.menuItems.map(row.data, tablePrefix: 'i'));
+          return _mapItem(_db.menuItems.map(row.data));
         }).toList();
       });
     }
@@ -600,6 +602,57 @@ class CatalogRepo {
     } catch (_) {}
   }
 
+  // ------------------ Export ------------------
+
+  Future<String> exportMenuCsv() async {
+    final cats = await _db.menuCategories.select().get();
+    final items = await _db.menuItems.select().get();
+    final variants = await _db.itemVariants.select().get();
+
+    final header = [
+      'category',
+      'name',
+      'description',
+      'gst_rate',
+      'tax_inclusive',
+      'is_active',
+      'variant_label',
+      'price',
+      'mrp',
+      'sku',
+      'hsn',
+      'image_url'
+    ];
+
+    final rows = <List<dynamic>>[header];
+
+    final catMap = {for (final c in cats) c.id: c.name};
+    final itemMap = {for (final i in items) i.id: i};
+
+    for (final v in variants) {
+      final item = itemMap[v.itemId];
+      if (item == null) continue;
+
+      final catName = catMap[item.categoryId] ?? '';
+
+      rows.add([
+        catName,
+        item.name,
+        item.description ?? '',
+        item.gstRate ?? 0.0,
+        item.taxInclusive ?? false,
+        item.isActive,
+        v.label,
+        v.basePrice,
+        v.mrp ?? '',
+        item.sku ?? '',
+        item.hsn ?? '',
+        v.imageUrl ?? item.imageUrl ?? '',
+      ]);
+    }
+
+    return const ListToCsvConverter().convert(rows);
+  }
 }
 
 final catalogRepoProvider = Provider<CatalogRepo>((ref) {

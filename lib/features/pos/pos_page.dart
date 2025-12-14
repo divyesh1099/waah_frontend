@@ -213,21 +213,30 @@ final posItemsProvider = StreamProvider<List<MenuItem>>((ref) {
   final catId = ref.watch(selectedCategoryIdProvider); // remote ID
   final search = ref.watch(posSearchQueryProvider).toLowerCase().trim();
 
-  // Stream items from local DB
-  return repo.watchItemsAsApi(categoryId: catId).map((items) {
+  // Stream items from local DB; on any error emit an empty list instead of hanging.
+  final baseStream = repo.watchItemsAsApi(categoryId: catId).map((items) {
     // Filter active & stock-out & search
     final filtered = items.where((i) {
       if (!i.isActive) return false;
       if (i.stockOut) return false;
-      
+
       if (search.isEmpty) return true;
       final n = i.name.toLowerCase();
       final d = (i.description ?? '').toLowerCase();
       return n.contains(search) || d.contains(search);
     }).toList();
-    
+
     return filtered;
   });
+
+  return baseStream.transform(
+    StreamTransformer.fromHandlers(
+      handleError: (error, stack, sink) {
+        debugPrint('posItemsProvider stream error: $error\n$stack');
+        sink.add(<MenuItem>[]);
+      },
+    ),
+  );
 });
 
 /// Load dining tables for ACTIVE branch.
@@ -560,6 +569,7 @@ class PosPage extends ConsumerWidget {
     ref.watch(_queueAutoSyncProvider);
     ref.watch(_posCacheInvalidator);
     ref.watch(tenantBranchBootstrapperProvider);
+    final debugEnabled = ref.watch(menuDebugEnabledProvider);
     final tenantId = ref.watch(activeTenantIdProvider);
     final branchId = ref.watch(activeBranchIdProvider);
     final apiClient = ref.watch(apiClientProvider);
@@ -676,17 +686,18 @@ class PosPage extends ConsumerWidget {
           ref.read(catalogRepoProvider).syncDownMenu(tenantId, branchId);
         },
       ),
-      IconButton(
-        tooltip: 'Diagnostics',
-        icon: const Icon(Icons.bug_report),
-        onPressed: () {
-          showModalBottomSheet(
-            context: context,
-            isScrollControlled: true,
-            builder: (_) => const QueueDiagnosticsSheet(),
-          );
-        },
-      ),
+      if (debugEnabled)
+        IconButton(
+          tooltip: 'Diagnostics',
+          icon: const Icon(Icons.bug_report),
+          onPressed: () {
+            showModalBottomSheet(
+              context: context,
+              isScrollControlled: true,
+              builder: (_) => const QueueDiagnosticsSheet(),
+            );
+          },
+        ),
     ];
 
     // Build the Menu view (for mobile tab and tablet layout)

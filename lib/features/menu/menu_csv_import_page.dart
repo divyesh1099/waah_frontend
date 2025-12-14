@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:convert';
 import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
@@ -172,12 +173,43 @@ Main Course,Butter Chicken,,5,true,true,Full,420,,BCH-001,2106,https://picsum.ph
     }
   }
 
+  Future<void> _export() async {
+    if (_importing) return;
+
+    try {
+      final repo = ref.read(catalogRepoProvider);
+      final csvText = await repo.exportMenuCsv();
+      
+      final savePath = await FilePicker.platform.saveFile(
+        fileName: 'menu.csv',
+        type: FileType.custom,
+        allowedExtensions: ['csv'],
+      );
+
+      if (savePath != null) {
+        await File(savePath).writeAsString(csvText);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Menu CSV exported')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Export failed: $e')),
+        );
+      }
+    }
+  }
+
+
   @override
   Widget build(BuildContext context) {
     final hasCsv = _csvFile != null;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Import Menu from CSV')),
+      appBar: AppBar(title: const Text('Import / Export Menu')),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: ListView(
@@ -245,6 +277,19 @@ Main Course,Butter Chicken,,5,true,true,Full,420,,BCH-001,2106,https://picsum.ph
                 label: Text(_importing ? 'Importing…' : 'Import / Append'),
               ),
             ],
+            const SizedBox(height: 24),
+            const Divider(),
+            const SizedBox(height: 16),
+            const Text(
+              'Export',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _importing ? null : _export,
+              icon: const Icon(Icons.download),
+              label: const Text('Export Menu CSV'),
+            ),
           ],
         ),
       ),
