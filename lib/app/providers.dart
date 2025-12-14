@@ -11,6 +11,7 @@ import 'package:waah_frontend/data/api_client.dart';
 import 'package:waah_frontend/data/local/app_db.dart'; // Drift DB
 import 'package:waah_frontend/features/auth/auth_controller.dart';
 import '../data/models.dart';
+import '../data/repo/catalog_repo.dart';
 import '../data/repo/orders_repo.dart';
 import '../data/repo/settings_repo.dart';
 import '../features/orders/pending_orders.dart'; // NOTE: SettingsRepo class only (no provider inside this file)
@@ -234,6 +235,23 @@ final tenantBranchBootstrapperProvider = FutureProvider<void>((ref) async {
       }
     } catch (_) {
       // ignore; UI will still allow manual selection
+    }
+  }
+
+  // Ensure a first-time menu exists on this device by force-refreshing when empty.
+  if (tenantId.isNotEmpty && branchId.isNotEmpty) {
+    final db = ref.read(localDatabaseProvider);
+    final hasMenu = await (db.select(db.menuCategories)..limit(1)).get();
+    if (hasMenu.isEmpty) {
+      try {
+        await ref.read(catalogRepoProvider).refreshMenuFromServer(
+          tenantId: tenantId,
+          branchId: branchId,
+          clearLocalFirst: true,
+        );
+      } catch (_) {
+        // Allow app to continue; manual sync UI will show errors if needed.
+      }
     }
   }
 });

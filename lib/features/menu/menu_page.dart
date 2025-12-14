@@ -75,7 +75,9 @@ final _menuBootstrapperProvider = FutureProvider.autoDispose<void>((ref) async {
   final log = ref.read(_menuBootstrapLogProvider.notifier);
   log.state = 'Cold-start sync: downloading menu...';
   try {
-    await ref.read(catalogRepoProvider).syncDownMenu(tenantId, branchId);
+    await ref
+        .read(catalogRepoProvider)
+        .refreshMenuFromServer(tenantId: tenantId, branchId: branchId, clearLocalFirst: true);
     final catCount = (await db.select(db.menuCategories).get()).length;
     log.state = 'Cold-start sync finished ($catCount categories)';
   } catch (e) {
@@ -139,7 +141,7 @@ class MenuPage extends ConsumerWidget {
           // Add a manual sync button
           IconButton(
             icon: const Icon(Icons.sync),
-            tooltip: 'Sync Menu',
+            tooltip: 'Force sync menu',
             onPressed: () async {
               final tenantId = ref.read(activeTenantIdProvider);
               final branchId = ref.read(activeBranchIdProvider);
@@ -152,14 +154,18 @@ class MenuPage extends ConsumerWidget {
 
               final messenger = ScaffoldMessenger.of(context);
               messenger.showSnackBar(
-                const SnackBar(content: Text('Syncing menu from server...')),
+                const SnackBar(content: Text('Wiping local menu and downloading fresh...')),
               );
               try {
-                await ref.read(catalogRepoProvider).syncDownMenu(tenantId, branchId);
+                await ref.read(catalogRepoProvider).refreshMenuFromServer(
+                  tenantId: tenantId,
+                  branchId: branchId,
+                  clearLocalFirst: true,
+                );
                 if (context.mounted) {
                   messenger.hideCurrentSnackBar();
                   messenger.showSnackBar(
-                    const SnackBar(content: Text('Menu synced'), duration: Duration(seconds: 1)),
+                    const SnackBar(content: Text('Menu refreshed'), duration: Duration(seconds: 1)),
                   );
                 }
               } catch (e) {
@@ -523,7 +529,11 @@ class _MenuDebugBannerState extends ConsumerState<_MenuDebugBanner> {
     final log = ref.read(_menuBootstrapLogProvider.notifier);
 
     try {
-      await ref.read(catalogRepoProvider).syncDownMenu(tenantId, branchId);
+      await ref.read(catalogRepoProvider).refreshMenuFromServer(
+        tenantId: tenantId,
+        branchId: branchId,
+        clearLocalFirst: true,
+      );
       log.state = 'Manual sync OK';
       if (context.mounted) {
         messenger.hideCurrentSnackBar();

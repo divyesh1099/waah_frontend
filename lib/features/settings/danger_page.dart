@@ -100,7 +100,11 @@ class _DangerSettingsPageState extends ConsumerState<DangerSettingsPage> {
       // Clear local cache too.
       await ref.read(localDatabaseProvider).clearMenu();
       // Pull fresh (empty) state
-      await ref.read(catalogRepoProvider).syncDownMenu(tenantId, branchId);
+      await ref.read(catalogRepoProvider).refreshMenuFromServer(
+        tenantId: tenantId,
+        branchId: branchId,
+        clearLocalFirst: true,
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

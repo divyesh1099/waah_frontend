@@ -106,7 +106,11 @@ class BranchSelectPage extends ConsumerWidget {
                   final tenantId = ref.read(activeTenantIdProvider);
                   try {
                     if (tenantId.isNotEmpty && b.id.isNotEmpty) {
-                      await ref.read(catalogRepoProvider).syncDownMenu(tenantId, b.id);
+                      await ref.read(catalogRepoProvider).refreshMenuFromServer(
+                        tenantId: tenantId,
+                        branchId: b.id,
+                        clearLocalFirst: true,
+                      );
                     }
                     if (context.mounted) {
                       messenger.hideCurrentSnackBar();

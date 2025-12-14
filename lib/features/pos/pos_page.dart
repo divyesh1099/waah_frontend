@@ -676,14 +676,39 @@ class PosPage extends ConsumerWidget {
       IconButton(
         tooltip: 'Refresh menu',
         icon: const Icon(Icons.refresh),
-        onPressed: () {
-          // Trigger a full sync from server to update local DB
-          ScaffoldMessenger.of(context).showSnackBar(
-             const SnackBar(content: Text('Syncing menu...')),
-          );
+        onPressed: () async {
           final tenantId = ref.read(activeTenantIdProvider);
           final branchId = ref.read(activeBranchIdProvider);
-          ref.read(catalogRepoProvider).syncDownMenu(tenantId, branchId);
+          if (tenantId.isEmpty || branchId.isEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Select a branch first')),
+            );
+            return;
+          }
+
+          final messenger = ScaffoldMessenger.of(context);
+          messenger.showSnackBar(
+            const SnackBar(content: Text('Wiping menu cache and downloading...')),
+          );
+          try {
+            await ref.read(catalogRepoProvider).refreshMenuFromServer(
+              tenantId: tenantId,
+              branchId: branchId,
+              clearLocalFirst: true,
+            );
+            if (context.mounted) {
+              messenger.hideCurrentSnackBar();
+              messenger.showSnackBar(
+                const SnackBar(content: Text('Menu refreshed'), duration: Duration(seconds: 1)),
+              );
+            }
+          } catch (e) {
+            if (!context.mounted) return;
+            messenger.hideCurrentSnackBar();
+            messenger.showSnackBar(
+              SnackBar(content: Text('Menu refresh failed: $e')),
+            );
+          }
         },
       ),
       if (debugEnabled)

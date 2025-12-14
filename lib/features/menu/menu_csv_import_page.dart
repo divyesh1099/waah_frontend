@@ -135,8 +135,9 @@ Main Course,Butter Chicken,,5,true,true,Full,420,,BCH-001,2106,https://picsum.ph
   Future<void> _import() async {
     if (_csvFile == null || _importing) return;
 
+    final tenantId = ref.read(activeTenantIdProvider);
     final branchId = ref.read(activeBranchIdProvider);
-    if (branchId.isEmpty) {
+    if (tenantId.isEmpty || branchId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Select a branch first')),
       );
@@ -156,8 +157,12 @@ Main Course,Butter Chicken,,5,true,true,Full,420,,BCH-001,2106,https://picsum.ph
         branchId: branchId,
       );
 
-      // Trigger sync to pull changes
-      await ref.read(syncControllerProvider.notifier).syncNow();
+      // Force-refresh menu so devices always reflect server data after import
+      await ref.read(catalogRepoProvider).refreshMenuFromServer(
+        tenantId: tenantId,
+        branchId: branchId,
+        clearLocalFirst: true,
+      );
 
       if (!mounted) return;
       

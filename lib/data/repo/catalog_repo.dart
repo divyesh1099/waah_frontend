@@ -316,10 +316,8 @@ class CatalogRepo {
 
   // ------------------ Full pull (on cold start / branch change) ------------------
 
-  Future<void> syncDownMenu(String tenantId, String branchId) async {
-    final cats = await _client.fetchCategories(tenantId: tenantId, branchId: branchId);
-    final items = await _client.fetchItems(tenantId: tenantId);
-
+  Future<Map<String, List<api.ItemVariant>>> _variantsForItems(
+      List<api.MenuItem> items) async {
     final byItem = <String, List<api.ItemVariant>>{};
     for (final it in items) {
       final rid = it.id;
@@ -327,6 +325,24 @@ class CatalogRepo {
         byItem[rid] = await _client.fetchVariants(rid);
       }
     }
+    return byItem;
+  }
+
+  /// Force-refresh the local menu by wiping existing rows and pulling fresh copies.
+  /// If [clearLocalFirst] is true, the wipe happens immediately before the
+  /// network call so a manual sync always starts from an empty cache.
+  Future<void> refreshMenuFromServer({
+    required String tenantId,
+    required String branchId,
+    bool clearLocalFirst = false,
+  }) async {
+    if (clearLocalFirst) {
+      await _db.clearMenu();
+    }
+
+    final cats = await _client.fetchCategories(tenantId: tenantId, branchId: branchId);
+    final items = await _client.fetchItems(tenantId: tenantId);
+    final byItem = await _variantsForItems(items);
 
     await _db.transaction(() async {
       await _db.clearMenu();
@@ -422,6 +438,9 @@ class CatalogRepo {
       }
     } catch (_) {}
   }
+
+  Future<void> syncDownMenu(String tenantId, String branchId) =>
+      refreshMenuFromServer(tenantId: tenantId, branchId: branchId);
 
   // --------- CSV Import helpers (idempotent “find-or-create”) ---------
 
