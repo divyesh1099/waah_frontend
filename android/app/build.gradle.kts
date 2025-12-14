@@ -11,19 +11,20 @@ plugins {
 // --- load keystore props from android/key.properties ---
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
+var hasReleaseKeystore = false
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
-    // ✅ final package / Play app id
+    // final package / Play app id
     namespace = "com.dpos.app"
 
     // Keep these sourced from Flutter toolchain
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
-    // ✅ Modern toolchains (Flutter 3.22+ prefers Java 17 / AGP 8+)
+    // Modern toolchains (Flutter 3.22+ prefers Java 17 / AGP 8+)
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -33,10 +34,10 @@ android {
     }
 
     defaultConfig {
-        // ✅ immutable on Play after first upload
+        // immutable on Play after first upload
         applicationId = "com.dpos.app"
 
-        // from Flutter (pubspec.yaml → version: x.y.z+code)
+        // from Flutter (pubspec.yaml version: x.y.z+code)
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode.toInt()
@@ -48,7 +49,7 @@ android {
         // default debug keystore
         getByName("debug")
 
-        // release uses android/key.properties
+        // release uses android/key.properties; fallback handled in buildTypes.release
         create("release") {
             val keyAliasProp = keystoreProperties["keyAlias"] as String?
             val keyPasswordProp = keystoreProperties["keyPassword"] as String?
@@ -66,8 +67,9 @@ android {
                 storeFile = file(storeFileProp)
                 storePassword = storePasswordProp
                 storeType = "jks"
+                hasReleaseKeystore = true
             } else {
-                println("⚠️ key.properties missing/incomplete → release signing not configured.")
+                println("key.properties missing/incomplete -> release signing not configured.")
             }
         }
     }
@@ -77,10 +79,16 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
         getByName("release") {
-            // ✅ shrink + optimize for Play
+            // shrink + optimize for Play
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                // Fallback lets CI produce an artifact even when secrets aren't provided
+                println("Warning: release keystore not present; using debug signing for release build.")
+                signingConfigs.getByName("debug")
+            }
 
             // Use default Flutter proguard unless you have custom rules:
             // proguardFiles(
