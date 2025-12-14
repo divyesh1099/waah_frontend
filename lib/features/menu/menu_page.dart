@@ -74,14 +74,20 @@ final _menuBootstrapperProvider = FutureProvider.autoDispose<void>((ref) async {
 
   final log = ref.read(_menuBootstrapLogProvider.notifier);
   log.state = 'Cold-start sync: downloading menu...';
+  debugPrint('[menu-bootstrap] Empty local menu. Triggering forced download.');
   try {
-    await ref
-        .read(catalogRepoProvider)
-        .refreshMenuFromServer(tenantId: tenantId, branchId: branchId, clearLocalFirst: true);
+    await ref.read(catalogRepoProvider).refreshMenuFromServer(
+          tenantId: tenantId,
+          branchId: branchId,
+          clearLocalFirst: true,
+          log: (m) => debugPrint('[menu-bootstrap] $m'),
+        );
     final catCount = (await db.select(db.menuCategories).get()).length;
     log.state = 'Cold-start sync finished ($catCount categories)';
+    debugPrint('[menu-bootstrap] Done. Categories count=$catCount');
   } catch (e) {
     log.state = 'Cold-start sync failed: $e';
+    debugPrint('[menu-bootstrap] FAILED: $e');
     rethrow;
   }
 });
@@ -161,6 +167,7 @@ class MenuPage extends ConsumerWidget {
                   tenantId: tenantId,
                   branchId: branchId,
                   clearLocalFirst: true,
+                  log: (m) => debugPrint('[menu-sync-button] $m'),
                 );
                 if (context.mounted) {
                   messenger.hideCurrentSnackBar();
@@ -211,9 +218,11 @@ class MenuPage extends ConsumerWidget {
                             style: Theme.of(context).textTheme.titleMedium,
                           ),
                           const SizedBox(height: 8),
-                          const Text(
-                            'Tap + to add one, or tap Sync to download from server.',
+                          Text(
+                            'Tap Sync to force-download the menu from the server.\n'
+                            'Tenant=${ref.read(activeTenantIdProvider)} Branch=${ref.read(activeBranchIdProvider)}',
                             textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.bodyMedium,
                           ),
                         ],
                       ),
@@ -509,6 +518,7 @@ class _MenuDebugBanner extends ConsumerStatefulWidget {
 
 class _MenuDebugBannerState extends ConsumerState<_MenuDebugBanner> {
   bool _syncing = false;
+  String? _progress;
 
   Future<void> _fullDownload(BuildContext context) async {
     if (_syncing) return;
@@ -533,26 +543,32 @@ class _MenuDebugBannerState extends ConsumerState<_MenuDebugBanner> {
         tenantId: tenantId,
         branchId: branchId,
         clearLocalFirst: true,
+        log: (m) {
+          debugPrint('[menu-debug-sheet] $m');
+          if (!mounted) return;
+          setState(() => _progress = m);
+        },
       );
+      if (!mounted) return;
       log.state = 'Manual sync OK';
-      if (context.mounted) {
-        messenger.hideCurrentSnackBar();
-        messenger.showSnackBar(
-          const SnackBar(content: Text('Menu downloaded'), duration: Duration(seconds: 1)),
-        );
-      }
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Menu downloaded'), duration: Duration(seconds: 1)),
+      );
       // refresh stats provider
       ref.invalidate(_menuStatsProvider);
     } catch (e) {
+      if (!mounted) return;
       log.state = 'Manual sync failed: $e';
-      if (context.mounted) {
-        messenger.hideCurrentSnackBar();
-        messenger.showSnackBar(
-          SnackBar(content: Text('Menu download failed: $e')),
-        );
-      }
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(content: Text('Menu download failed: $e')),
+      );
     } finally {
-      if (mounted) setState(() => _syncing = false);
+      if (mounted) setState(() {
+        _syncing = false;
+        _progress = null;
+      });
     }
   }
 
@@ -607,6 +623,25 @@ class _MenuDebugBannerState extends ConsumerState<_MenuDebugBanner> {
               loading: () => const Text('Local cache: ...'),
               error: (e, _) => Text('Local cache: error $e'),
             ),
+            if (_syncing && _progress != null) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _progress!,
+                      style: TextStyle(color: Colors.brown.shade700, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             if (bootstrapLog != null) ...[
               const SizedBox(height: 4),
               Text(

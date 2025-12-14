@@ -57,9 +57,20 @@ class HomeGate extends ConsumerWidget {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!context.mounted) return;
 
+      debugPrint('[home-gate] authed=$authed tenant=${ref.read(activeTenantIdProvider)} branch=${ref.read(activeBranchIdProvider)} me=${me?.id ?? 'null'}');
+
       // 1) Ensure /auth/me on cold start or immediately after login
       if (authed && me == null) {
         ref.read(authControllerProvider.notifier).refreshMe();
+        debugPrint('[home-gate] refreshing /auth/me');
+      }
+
+      // 1b) adopt tenant from /auth/me if missing
+      final tenantNow = ref.read(activeTenantIdProvider).trim();
+      final meTenant = ref.read(authControllerProvider).me?.tenantId ?? '';
+      if (authed && tenantNow.isEmpty && meTenant.isNotEmpty) {
+        ref.read(activeTenantIdProvider.notifier).set(meTenant);
+        debugPrint('[home-gate] adopted tenant from /auth/me: $meTenant');
       }
 
       // 2) If no active branch chosen yet, adopt branch from /auth/me
@@ -67,6 +78,7 @@ class HomeGate extends ConsumerWidget {
       final meBranch  = ref.read(authControllerProvider).me?.branchId ?? '';
       if (authed && branchNow.isEmpty && meBranch.isNotEmpty) {
         ref.read(activeBranchIdProvider.notifier).set(meBranch);
+        debugPrint('[home-gate] adopted branch from /auth/me: $meBranch');
       }
 
       // 3) Navigate after the above adjustments
@@ -83,7 +95,16 @@ class HomeGate extends ConsumerWidget {
         // Wrap in try-catch to handle expired token gracefully
         // If token expired, onUnauthorized callback will handle logout
         unawaited(
-          ref.read(catalogRepoProvider).syncDownMenu(tenantId, branchId).catchError((_) {
+          ref
+              .read(catalogRepoProvider)
+              .refreshMenuFromServer(
+                tenantId: tenantId,
+                branchId: branchId,
+                clearLocalFirst: false,
+                log: (m) => debugPrint('[home-gate] $m'),
+              )
+              .catchError((e) {
+            debugPrint('[home-gate] menu refresh failed: $e');
             // Silently ignore sync errors; user will be redirected to login if token expired
           }),
         );

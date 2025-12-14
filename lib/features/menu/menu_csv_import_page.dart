@@ -162,6 +162,7 @@ Main Course,Butter Chicken,,5,true,true,Full,420,,BCH-001,2106,https://picsum.ph
         tenantId: tenantId,
         branchId: branchId,
         clearLocalFirst: true,
+        log: (m) => debugPrint('[menu-csv-import] $m'),
       );
 
       if (!mounted) return;

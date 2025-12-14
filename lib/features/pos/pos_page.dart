@@ -695,6 +695,7 @@ class PosPage extends ConsumerWidget {
               tenantId: tenantId,
               branchId: branchId,
               clearLocalFirst: true,
+              log: (m) => debugPrint('[pos-menu-refresh] $m'),
             );
             if (context.mounted) {
               messenger.hideCurrentSnackBar();

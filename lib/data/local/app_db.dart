@@ -262,12 +262,18 @@ class AppDatabase extends _$AppDatabase {
   Future<void> clearPendingOps(List<int> ids) =>
       (delete(opsJournal)..where((t) => t.id.isIn(ids))).go();
 
-  Future<void> clearMenu() async {
-    await transaction(() async {
+  Future<void> clearMenu({bool useTransaction = true}) async {
+    Future<void> doClear() async {
       await delete(itemVariants).go();
       await delete(menuItems).go();
       await delete(menuCategories).go();
-    });
+    }
+
+    if (useTransaction) {
+      await transaction(() async => doClear());
+    } else {
+      await doClear();
+    }
   }
 
   Future<MenuCategory?> findCategoryByRid(String rid) =>

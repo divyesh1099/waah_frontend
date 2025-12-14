@@ -3,6 +3,7 @@
 // ==============================
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:dio/dio.dart';
@@ -111,6 +112,7 @@ class IdNotifier extends StateNotifier<String> {
   IdNotifier(this._prefs, this._key, String initial) : super(initial);
   final SharedPreferences _prefs;
   final String _key;
+  bool get isEmpty => state.isEmpty;
   void set(String v) {
     state = v.trim();
     _prefs.setString(_key, state);
@@ -136,7 +138,7 @@ StateNotifierProvider<IdNotifier, String>((ref) {
 
     final prevTenant = prev?.me?.tenantId ?? '';
     final nextTenant = next.me?.tenantId ?? '';
-    if (prevTenant != nextTenant && n.state.isEmpty && nextTenant.isNotEmpty) {
+    if (prevTenant != nextTenant && n.isEmpty && nextTenant.isNotEmpty) {
       n.set(nextTenant);
     }
   });
@@ -165,7 +167,7 @@ StateNotifierProvider<IdNotifier, String>((ref) {
 
     final prevBranch = prev?.me?.branchId ?? '';
     final nextBranch = next.me?.branchId ?? '';
-    if (prevBranch != nextBranch && n.state.isEmpty && nextBranch.isNotEmpty) {
+    if (prevBranch != nextBranch && n.isEmpty && nextBranch.isNotEmpty) {
       n.set(nextBranch);
     }
   });
@@ -247,7 +249,8 @@ final tenantBranchBootstrapperProvider = FutureProvider<void>((ref) async {
         await ref.read(catalogRepoProvider).refreshMenuFromServer(
           tenantId: tenantId,
           branchId: branchId,
-          clearLocalFirst: true,
+          clearLocalFirst: false,
+          log: (m) => debugPrint('[tenant-branch-bootstrap] $m'),
         );
       } catch (_) {
         // Allow app to continue; manual sync UI will show errors if needed.

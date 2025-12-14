@@ -16,6 +16,8 @@ class CatalogRepo {
   CatalogRepo(this._client, this._db);
   final ApiClient _client;
   final db.AppDatabase _db;
+  bool _refreshing = false;
+  Future<void>? _inFlightRefresh;
 
   // ------------------ Streams (UI reads) ------------------
 
@@ -317,13 +319,28 @@ class CatalogRepo {
   // ------------------ Full pull (on cold start / branch change) ------------------
 
   Future<Map<String, List<api.ItemVariant>>> _variantsForItems(
-      List<api.MenuItem> items) async {
+      List<api.MenuItem> items, void Function(String)? log) async {
     final byItem = <String, List<api.ItemVariant>>{};
-    for (final it in items) {
-      final rid = it.id;
-      if (rid != null && rid.isNotEmpty) {
-        byItem[rid] = await _client.fetchVariants(rid);
-      }
+    const batchSize = 12; // throttle concurrent HTTP calls
+    final total = items.length;
+    var processed = 0;
+    if (total == 0) return byItem;
+    log?.call('Fetching variants for $total items (batch $batchSize)...');
+
+    for (var i = 0; i < items.length; i += batchSize) {
+      final slice = items.skip(i).take(batchSize);
+      await Future.wait(slice.map((it) async {
+        final rid = it.id;
+        if (rid == null || rid.isEmpty) return;
+        try {
+          byItem[rid] = await _client.fetchVariants(rid);
+        } catch (e) {
+          log?.call('Variants fetch failed for $rid: $e');
+        }
+        processed++;
+        log?.call('Variants $processed/$total');
+      }));
+      log?.call('Fetched variants for ${byItem.length} items so far');
     }
     return byItem;
   }
@@ -335,21 +352,45 @@ class CatalogRepo {
     required String tenantId,
     required String branchId,
     bool clearLocalFirst = false,
+    void Function(String message)? log,
   }) async {
+    void logIt(String msg) => (log ?? print)('[menu-sync] $msg');
+
+    // Avoid overlapping refreshes; share the in-flight future.
+    if (_refreshing && _inFlightRefresh != null) {
+      logIt('Refresh already running; joining existing future');
+      return _inFlightRefresh!;
+    }
+
+    _refreshing = true;
+    _inFlightRefresh = () async {
+    logIt('Starting refresh (tenant=$tenantId branch=$branchId) clearFirst=$clearLocalFirst');
+
     if (clearLocalFirst) {
       await _db.clearMenu();
+      logIt('Local menu cleared before download');
     }
 
     final cats = await _client.fetchCategories(tenantId: tenantId, branchId: branchId);
+    logIt('Fetched ${cats.length} categories');
     final items = await _client.fetchItems(tenantId: tenantId);
-    final byItem = await _variantsForItems(items);
+    logIt('Fetched ${items.length} items');
+    final byItem = await _variantsForItems(items, log);
+    logIt('Fetched variants for ${byItem.length} items (batched)');
 
     await _db.transaction(() async {
-      await _db.clearMenu();
+      // Avoid nested transactions by clearing without wrapping when already inside a transaction.
+      await _db.clearMenu(useTransaction: false);
+      logIt('Local menu cleared inside transaction');
 
-      for (final c in cats) {
+      for (var idx = 0; idx < cats.length; idx++) {
+        final c = cats[idx];
         await _upsertLocalCategoryFromApi(c);
+        if ((idx + 1) % 10 == 0 || idx + 1 == cats.length) {
+          logIt('Saved categories ${idx + 1}/${cats.length}');
+        }
       }
+      logIt('Upserted categories locally: ${cats.length}');
 
       // Build category rid -> local id map
       final catRows = await _db.select(_db.menuCategories).get();
@@ -359,7 +400,8 @@ class CatalogRepo {
         if (rid != null && rid.isNotEmpty) catRidToLocal[rid] = r.id;
       }
 
-      for (final it in items) {
+      for (var idx = 0; idx < items.length; idx++) {
+        final it = items[idx];
         final remoteCat = it.categoryId;
         if (remoteCat == null || remoteCat.isEmpty) continue;
         final localCatId = catRidToLocal[remoteCat];
@@ -379,7 +421,11 @@ class CatalogRepo {
           kitchenStationId: Value(it.kitchenStationId),
           imageUrl: Value(it.imageUrl),
         ));
+        if ((idx + 1) % 25 == 0 || idx + 1 == items.length) {
+          logIt('Saved items ${idx + 1}/${items.length}');
+        }
       }
+      logIt('Upserted items locally: ${items.length}');
 
       final itemRows = await _db.select(_db.menuItems).get();
       final itemRidToLocal = <String, int>{};
@@ -388,6 +434,7 @@ class CatalogRepo {
         if (rid != null && rid.isNotEmpty) itemRidToLocal[rid] = r.id;
       }
 
+      var variantCount = 0;
       for (final entry in byItem.entries) {
         final remoteItemId = entry.key;
         final localItemId = itemRidToLocal[remoteItemId];
@@ -403,8 +450,13 @@ class CatalogRepo {
             isDefault: Value(v.isDefault),
             imageUrl: Value(v.imageUrl),
           ));
+          variantCount++;
+          if (variantCount % 100 == 0) {
+            logIt('Saved variants $variantCount');
+          }
         }
       }
+      logIt('Upserted variants locally: $variantCount');
     });
 
     // settings (non-fatal)
@@ -435,8 +487,26 @@ class CatalogRepo {
           billingPrinterId: Value(rs.billingPrinterId),
           invoiceFooter: Value(rs.invoiceFooter),
         ));
+        logIt('Restaurant settings saved');
+      } else {
+        logIt('Restaurant settings empty');
       }
-    } catch (_) {}
+    } catch (e) {
+      logIt('Restaurant settings fetch failed: $e');
+    }
+
+    final catCount = await _db.customSelect('SELECT COUNT(*) c FROM menu_categories').getSingle();
+    final itemCount = await _db.customSelect('SELECT COUNT(*) c FROM menu_items').getSingle();
+    final varCount = await _db.customSelect('SELECT COUNT(*) c FROM item_variants').getSingle();
+    logIt('Local counts => cats=${catCount.data['c']} items=${itemCount.data['c']} variants=${varCount.data['c']}');
+    }();
+
+    try {
+      await _inFlightRefresh;
+    } finally {
+      _refreshing = false;
+      _inFlightRefresh = null;
+    }
   }
 
   Future<void> syncDownMenu(String tenantId, String branchId) =>

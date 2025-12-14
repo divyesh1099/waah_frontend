@@ -104,6 +104,7 @@ class _DangerSettingsPageState extends ConsumerState<DangerSettingsPage> {
         tenantId: tenantId,
         branchId: branchId,
         clearLocalFirst: true,
+        log: (m) => debugPrint('[danger-delete-menu] $m'),
       );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

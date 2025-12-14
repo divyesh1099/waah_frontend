@@ -110,6 +110,7 @@ class BranchSelectPage extends ConsumerWidget {
                         tenantId: tenantId,
                         branchId: b.id,
                         clearLocalFirst: true,
+                        log: (m) => debugPrint('[branch-switch] $m'),
                       );
                     }
                     if (context.mounted) {
